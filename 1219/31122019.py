@@ -13,7 +13,7 @@ def rot(year):
     p = plt.xlim(-161,161)
     p = plt.ylim(-161,161)
     if year==2020:
-        plt.text(-10,25, int(year), fontsize=28,color='red')
+        plt.text(-15,25, int(year), fontsize=28,color='red')
     else:
         plt.text(-10,25, int(year), fontsize=18,color='white')
     #Tierra****************
