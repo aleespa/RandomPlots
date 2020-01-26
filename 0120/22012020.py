@@ -6,7 +6,7 @@ from math import cos, sin,log,tan,gamma,pi,exp,sqrt
 
 colors = [plt.cm.Spectral(np.random.uniform(0,1)) for j in range(60)]
 def loc(z):
-    p = plt.figure(figsize=(10,10),facecolor='black')
+    p = plt.figure(figsize=(14,14),facecolor='black')
     p = plt.axis('off')
     p=plt.xlim(-1.1,1.1)
     p=plt.ylim(-1.1,1.1)
