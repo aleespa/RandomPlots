@@ -5,7 +5,7 @@ from scipy.stats import norm
 import seaborn as sns
 from math import cos, sin,log,tan,gamma,pi,exp,sqrt,cosh,sinh
 
-for l,i in zip(np.linspace(0,1.5,360),range(360)):
+for l,i in zip(np.linspace(0,3,690),range(690)):
     p = plt.figure(figsize=(14,14),facecolor='black',dpi=100)
     p = plt.axis('off')
     p = plt.xlim(-40,40)
