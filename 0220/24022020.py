@@ -18,5 +18,5 @@ for c in np.linspace(0,0.5):
     plt.plot(c*X+c*abs(min(X)),color='white',lw=0.5,zorder=50)
 for c in np.linspace(0,0.5):
     plt.plot(-(c*X+c*abs(min(X))),color='red',lw=0.5)
-
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/24022020.png',facecolor='black')
+plt.show()
+# plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/24022020.png',facecolor='black')
