@@ -5,7 +5,7 @@ from matplotlib import cm
 from scipy.stats import norm
 import seaborn as sns
 from math import cos, sin,log,tan,gamma,pi,exp,sqrt,cosh,sinh,tanh
-for k,u in zip(range(900),np.linspace(2,6,900)):
+for k,u in zip(range(900),np.linspace(3,5,900)):
     p = plt.figure(figsize=(13,13),facecolor='black')
     p = plt.axis('off')
     p = plt.xlim(-200,200)
