@@ -17,5 +17,4 @@ for k in np.linspace(0,30,90):
              alpha=0.8,
              lw=np.random.uniform(0.8,3),
              color=plt.cm.Spectral(((k+25)/50)))
-p = plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/27'
-                f'042020.PNG',facecolor='black')
+p = plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/27'       f'042020.PNG',facecolor='black')
