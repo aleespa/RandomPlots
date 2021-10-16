@@ -16,19 +16,19 @@ Z0 = xx + yy*1j
 
 plt.figure(figsize=(14,14),facecolor='k',dpi=200)
 plt.axis('off')
-plt.scatter(Z0.real,Z0.imag,s=30,c = np.abs(P(Z0))**0.7 ,cmap = plt.cm.brg)
+plt.scatter(Z0.real,Z0.imag,s=30,c = np.abs(P(Z0))**0.7 ,cmap = plt.cm.jet )
 plt.xlim(-1.25,0.4)
 plt.ylim(-1.5,1.5)
-plt.savefig(route + f'plot{0}.PNG',facecolor='k',bbox_inches='tight')
+plt.savefig(route + f'plot_{101}.PNG',facecolor='k',bbox_inches='tight')
 
 Z = Z0
 
-for j in range(200):
-    Z = Z - 0.02*(P(Z) / Pp(Z))
+for j in range(100):
+    Z = Z - (0.02*j**0.2)*(P(Z) / Pp(Z))
     plt.figure(figsize=(14,14),facecolor='k',dpi=200)
     plt.axis('off')
-    plt.scatter(Z.real,Z.imag,s=30,c = np.abs(P(Z0))**0.7 ,cmap = plt.cm.brg)
+    plt.scatter(Z.real,Z.imag,s=30,c = np.abs(P(Z0))**0.7 ,cmap = plt.cm.jet )
     plt.xlim(-1.25,0.4)
     plt.ylim(-1.5,1.5)
-    plt.savefig(route + f'plot{j+1}.PNG',facecolor='k',bbox_inches='tight')
+    plt.savefig(route + f'plot_{101+j+1}.PNG',facecolor='k',bbox_inches='tight')
     plt.close()
