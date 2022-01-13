@@ -3,8 +3,6 @@ import numpy as np
 from matplotlib.colors import LinearSegmentedColormap 
 path = '/mnt/c/Users/Alejandro Lopez/Pictures/RandomPlots/'
 
-
-
 ending_color = ['#6ad29e','#ffeead','#ff6f69','#ffcc5c','#4fb09f']
 t = np.linspace(0,2*np.pi,1000)
 cmap = LinearSegmentedColormap.from_list("",ending_color,1000)
