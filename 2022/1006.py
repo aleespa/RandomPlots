@@ -11,7 +11,6 @@ import itertools
 
 filename = os.path.basename(sys.argv[0])[:-3]
 
-
 def ikeda_map(x0, y0, u):
     tn = 0.4 - 6 / (1 + x0 ** 2 + y0 ** 2)
     x1 = 1 + u * (x0 * cos(tn) - y0 * sin(tn))
