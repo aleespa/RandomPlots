@@ -10,7 +10,7 @@ def run_script(year, month_day):
     script_module = importlib.import_module(module_path)
 
     # Assume each script has a function named `generate_plot`
-    script_module.generate_plot()
+    script_module.generate()
 
 
 if __name__ == "__main__":
