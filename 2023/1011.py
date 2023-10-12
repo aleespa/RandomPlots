@@ -1,38 +1,61 @@
+import os
 import sys
+import time
+from datetime import datetime
 
 import numpy as np
 from matplotlib import pyplot as plt
 
 
-def calculate_random_points(sample_size):
-    # Sample 2n random angles from 0 to 2*pi (2 for each pair)
-    thetas = np.random.uniform(0, 2 * np.pi, size=2 * sample_size)
+def vectorized_sample_complex_pairs(num_points=100):
+    """
+    Generate a meshgrid of points in the interval (a, b) x (c, d).
 
-    r = np.random.choice(np.linspace(0, 1, 200)[1:], size=2 * sample_size )
+    Parameters:
+    - a, b, c, d: The boundaries of the interval.
+    - num_points: The number of points along each axis.
 
-    # Compute complex numbers
-    zs = np.exp(1j * thetas) * r
+    Returns:
+    - X, Y: Meshgrid of x and y coordinates.
+    """
+    # x = np.linspace(a, b, num_points)
+    # y = np.linspace(c, d, num_points)
+    r = np.random.normal(0,15, size=(num_points, 2)).clip(-20,20) * 1j
+    return r
 
-    # Reshape to get n pairs
-    pairs = zs.reshape(sample_size, 2)
 
-    return pairs
+def calculate_matrix(t):
+    return np.array([[1, t[0], 1j, 0, -1j],
+                     [-1j, 0.5, 1j, 1j, 0],
+                     [t[1], 1, 0, 1j, 0],
+                     [-1j, 0, 1j, 0.5, -1j],
+                     [0.5, 1, -1j, 0, -1j]])
+    # return np.array([[t[0], 1j],
+    #                  [-0.5, t[1]]])
 
 
-def generate_plot(x, y, filename):
-    fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
+def calculate_eigenvalues(x: np.array):
+    return np.linalg.eigvals(x)
+
+
+def generate_plot(x, y, directory):
+    current_time = datetime.now()
+    time_string = current_time.strftime('%Y-%m-%d_%H-%M-%S')
+    fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
     ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
-    ax.scatter(x, y, s=30, color='k', lw=0, alpha=0.9)
-    ax.set_xlim(-0.25, 0.25)
-    ax.set_ylim(-0.25, 0.25)
-    fig.savefig(f'outputs/{filename}.png', facecolor='k')
+    ax.scatter(x, y, s=1, color='k', lw=0, alpha=0.9)
+    if not os.path.exists(f"outputs/{directory}"):
+        os.makedirs(f"outputs/{directory}")
+    fig.savefig(f'outputs/{directory}/{time_string}.png', facecolor='k')
     plt.close()
 
 
 def generate():
-    filename = sys.argv[1]
-    sample_size = 20000
-    Z = calculate_random_points(sample_size)
+    directory = sys.argv[1]
+    sample_size = 50000
+    sample = vectorized_sample_complex_pairs(sample_size)
+    Z = np.array([calculate_eigenvalues(calculate_matrix(t)) for t in sample]).ravel()
     x = Z.real
     y = Z.imag
-    generate_plot(x, y, filename)
+    generate_plot(x, y, directory)
+    print(x.shape)
