@@ -1,10 +1,16 @@
 import os
 import sys
 import cv2
+import gc
 from datetime import datetime
 
 import numpy as np
+
+import matplotlib
+
 from matplotlib import pyplot as plt
+
+matplotlib.use('Agg')
 
 
 def vectorized_sample_complex_pairs(sample_size: int):
@@ -38,15 +44,16 @@ def calculate_eigenvalues(x: np.array):
 def generate_plot(x, y, directory):
     current_time = datetime.now()
     time_string = current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')
-    fig, _ = plt.subplots(figsize=(12, 12), dpi=100)
+    fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
     ax.scatter(x, y, color='k', s=5, lw=0)
     ax.set_xlim(-2, 3)
-    ax.set_ylim(-3, 2)
+    ax.set_ylim(-3 - 5 * (9 / 16) / 2, 2 + 5 * (9 / 16) / 2)
     if not os.path.exists(f"outputs/{directory}"):
         os.makedirs(f"outputs/{directory}")
     fig.savefig(f'outputs/{directory}/{time_string}.png', facecolor='k')
     plt.close()
+    del x, y
 
 
 def images_to_video(image_folder, video_name, fps):
@@ -81,8 +88,8 @@ def generate():
     filename = sys.argv[1]
     sample_size = 5000
     sample = vectorized_sample_complex_pairs(sample_size)
-    for i, r in enumerate(np.linspace(0, 6, 600)):
-        if i> 365:
-            Z = np.array([calculate_eigenvalues(calculate_matrix(t)) for t in sample * r]).ravel()
-            generate_plot(Z.real, Z.imag, filename)
+    for i, r in enumerate(np.linspace(0, 10, 600)):
+        Z = np.array([calculate_eigenvalues(calculate_matrix(t)) for t in sample * r]).ravel()
+        generate_plot(Z.real, Z.imag, filename)
+        gc.collect()
     images_to_video(f"outputs/{filename}", f'{filename}.mp4', 20)
