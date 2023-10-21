@@ -94,7 +94,7 @@ def generate():
     filename = sys.argv[1]
     sample_size = 5000
     sample = vectorized_sample_complex_pairs(sample_size)
-    for i, r in enumerate(np.linspace(0, 5, 280)):
+    for i, r in enumerate(np.linspace(0, 4.8, 360)):
         Z1 = np.array([calculate_eigenvalues(calculate_matrix_v1(t)) for t in sample * r]).ravel()
         Z2 = np.array([calculate_eigenvalues(calculate_matrix_v2(t)) for t in sample * r]).ravel()
         generate_plot([Z1.real, Z2.real],[Z1.imag, Z2.imag], filename, ['#cc0000', '#000033'])
