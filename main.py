@@ -2,9 +2,9 @@ import argparse
 import importlib
 
 
-def run_script(year, month_day):
+def run_script(y, m):
     # Construct the module path dynamically
-    module_path = f"{year}.{month_day}"
+    module_path = f"{y}.{m}"
 
     # Dynamically import the module
     script_module = importlib.import_module(module_path)
