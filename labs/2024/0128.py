@@ -1,11 +1,7 @@
 import sys
-import gc
-from datetime import datetime
-from typing import List
 
 import numpy as np
-from numpy import pi, cos, sin
-from scipy.spatial import ConvexHull, convex_hull_plot_2d
+from scipy.spatial import ConvexHull
 import matplotlib
 
 from matplotlib import pyplot as plt

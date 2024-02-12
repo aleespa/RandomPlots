@@ -4,7 +4,7 @@ import importlib
 
 def run_script(y, m):
     # Construct the module path dynamically
-    module_path = f"{y}.{m}"
+    module_path = f"labs.{y}.{m}"
 
     # Dynamically import the module
     script_module = importlib.import_module(module_path)
