@@ -47,8 +47,13 @@ def generate_plot(x, y, directory):
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
     ax.scatter(x, y, color='k', s=5, lw=0)
-    ax.set_xlim(-2, 3)
-    ax.set_ylim(-3 - 5 * (9 / 16) / 2, 2 + 5 * (9 / 16) / 2)
+    y1, y2 = -1, 1
+    x1, x2 = -1, 1
+    w = x2 - x1
+    h = y2 - y1
+    z = (16 / 18) * w - (1 / 2) * h
+    ax.set_xlim(x1, x2)
+    ax.set_ylim(y1 - z, y2 + z)
     if not os.path.exists(f"outputs/{directory}"):
         os.makedirs(f"outputs/{directory}")
     fig.savefig(f'outputs/{directory}/{time_string}.png', facecolor='k')

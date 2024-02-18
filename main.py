@@ -1,15 +1,14 @@
 import argparse
 import importlib
 
+from loguru import logger
+
+# Configure Loguru to log both to console and file
+logger.add("app_log.log", rotation="10 MB", level="INFO")
 
 def run_script(y, m):
-    # Construct the module path dynamically
-    module_path = f"labs.{y}.{m}"
-
-    # Dynamically import the module
+    module_path = f"lab.{y}.{m}"
     script_module = importlib.import_module(module_path)
-
-    # Assume each script has a function named `generate_plot`
     script_module.generate()
 
 
