@@ -1,17 +1,7 @@
-import gc
 import os
-import sys
-import time
-from datetime import datetime
 
 import numpy as np
-from loguru import logger
 from matplotlib import pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
-from numba import njit
-
-from tools.simulation import gaussian_random_walk
-from tools.technology import images_to_video
 
 openh264_dir = r'C:\Users\Alejandro Lopez\Documents\codec'
 os.add_dll_directory(openh264_dir)
