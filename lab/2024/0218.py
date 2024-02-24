@@ -10,7 +10,6 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from numba import njit
 
-from tools.simulation import gaussian_random_walk
 from tools.technology import images_to_video
 
 openh264_dir = r'C:\Users\Alejandro Lopez\Documents\codec'
