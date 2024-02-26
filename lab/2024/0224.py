@@ -17,12 +17,15 @@ os.add_dll_directory(r'C:\Users\Alejandro Lopez\Documents\codec')
 def generate():
     def generate_plot(angle: float):
         ax.clear()  # Clear previous plot data
-        for k in range(10):
-            circle = plt.Circle((np.sin(k * angle), np.cos(3 * k * angle)), 0.15, color='k')
+        for k in range(15):
+            circle = plt.Circle((
+                k * np.sin(angle * k) * np.sin(angle) * np.cos(angle),
+                k * np.cos(angle) * np.sin(angle)
+                                 ) , 0.35, color='k')
             ax.add_patch(circle)
 
-        y1, y2 = -2, 2
-        x1, x2 = -2, 2
+        y1, y2 = -8, 8
+        x1, x2 = -8, 8
         w = x2 - x1
         h = y2 - y1
         z = (16 / 18) * w - (1 / 2) * h

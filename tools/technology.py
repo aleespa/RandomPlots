@@ -29,3 +29,23 @@ def images_to_video(image_folder, video_name, fps):
         out.write(img)
 
     out.release()
+
+def clear_folder(folder_path):
+    # List all files and directories inside the folder
+    for file_name in os.listdir(folder_path):
+        # Construct the full path for each file/directory
+        file_path = os.path.join(folder_path, file_name)
+
+        # Check if it's a file
+        if os.path.isfile(file_path):
+            # If it's a file, delete it
+            os.remove(file_path)
+        elif os.path.isdir(file_path):
+            # If it's a directory, call the function recursively to clear it
+            clear_folder(file_path)
+            # After clearing the subdirectory, remove the directory itself
+            os.rmdir(file_path)
+
+def create_directory(directory_path):
+    if not os.path.exists(directory_path):
+        os.makedirs(directory_path)
