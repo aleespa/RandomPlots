@@ -21,7 +21,9 @@ def images_to_video(image_folder, video_name, fps):
     size = (w, h)
 
     # Create a video writer object
-    out = cv2.VideoWriter("outputs/" + video_name, cv2.VideoWriter_fourcc(*'avc1'), fps, size)
+    out = cv2.VideoWriter("outputs/" + video_name,
+                          cv2.VideoWriter_fourcc(*'avc1'),
+                          fps, size)
 
     for image in images:
         img_path = os.path.join(image_folder, image)
