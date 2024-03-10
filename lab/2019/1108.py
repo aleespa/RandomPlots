@@ -11,6 +11,6 @@ def pol(n):
     for j in range(n):
         for i in range(n):
             plt.plot([cos(U[j]), cos(U[i])],
-                     [sin(U[j]), sin(U[i])],lw=0.7)
+                     [sin(U[j]), sin(U[i])], lw=0.7)
     plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/08112019/pole{n}.PNG',facecolor='black')
 pol(40)

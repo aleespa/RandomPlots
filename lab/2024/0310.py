@@ -28,7 +28,7 @@ def generate():
         t1 = time.time()
         x_1 = (1 - y ** theta) ** (1 / theta)
         for j in range(n_grid - 15, n_grid + 5):
-            for k in range(n_grid+1):
+            for k in range(n_grid + 1):
                 ax.plot((1 / n_grid) * x_1 + (k / n_grid),
                         (1 / n_grid) * y + (j / n_grid),
                         color='k', lw=2.5)
