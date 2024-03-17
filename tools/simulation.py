@@ -13,10 +13,12 @@ def gaussian_random_walk(
 
 def brownian_bridge(n_steps: int,
                     random_seed: Union[int, None] = None) -> np.array:
-    t = np.linspace(0, 1, n_steps)
-    ii = np.arange(1, n_steps + 1)
+    t = np.linspace(0, 1, n_steps - 2)
+    ii = np.arange(1, n_steps - 1)
     np.random.seed(random_seed)
-    xi = np.random.randn(n_steps) / (ii * np.pi)
+    xi = np.random.randn(n_steps - 2) / (ii * np.pi)
     ui = np.sin(np.outer(ii, np.pi * t))
-    B = np.sum(xi * ui, axis=1)
+    B = np.concatenate([np.zeros(1),
+                        np.sum(xi * ui, axis=1),
+                        np.zeros(1)])
     return np.sqrt(2) * B
