@@ -1,9 +1,8 @@
-import argparse
+import toml
 import importlib
 
 from loguru import logger
 
-# Configure Loguru to log both to console and file
 logger.add("app_log.log", rotation="10 MB", level="INFO")
 
 def run_script(y, m):
@@ -13,12 +12,10 @@ def run_script(y, m):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Run the script for a specific date.')
-    parser.add_argument('date', type=str, help='Date in the format YYYYMMDD')
+    config = toml.load('config.toml')
+    file_to_run = config['file_to_run']
 
-    args = parser.parse_args()
-
-    year = args.date[:4]
-    month_day = args.date[4:]
+    year = file_to_run[:4]
+    month_day = file_to_run[4:]
 
     run_script(year, month_day)
