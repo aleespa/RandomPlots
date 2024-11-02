@@ -1,16 +1,28 @@
+import random, string
 import matplotlib.pylab as plt
 import numpy as np
-from math import sqrt , cos , sin , log , exp, pi
+from math import cos, sin, pi
+
+import toml
+
+from tools.technology import create_directory
+
 
 def pol(n):
-    U = np.linspace(0,2*pi,n)
-    plt.figure(figsize=(15,15),dpi=400)
-    plt.xlim(-1.05,1.05)
-    plt.ylim(-1.05,1.05)
-    plt.axis('off')
+    config = toml.load('config.toml')
+    filename = config['file_to_run']
+    create_directory(f"outputs/{filename}")
+    u = np.linspace(0,2*pi,n)
+    fig, ax = plt.subplots(1,1, figsize=(14,14),dpi=200)
+    ax = fig.add_axes([0, 0, 1, 1], facecolor='k')
+    ax.set_xlim(-1.05,1.05)
+    ax.set_ylim(-1.05,1.05)
     for j in range(n):
         for i in range(n):
-            plt.plot([cos(U[j]), cos(U[i])],
-                     [sin(U[j]), sin(U[i])], lw=0.7)
-    plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/08112019/pole{n}.PNG',facecolor='black')
-pol(40)
+            ax.plot([cos(u[j]), cos(u[i])],
+                     [sin(u[j]), sin(u[i])], lw=0.7)
+    name = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    fig.savefig(f'outputs/{filename}/{name}.png', facecolor='k')
+
+def generate():
+    pol(40)
