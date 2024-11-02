@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 import numpy as np
+import toml
 from loguru import logger
 from matplotlib import pyplot as plt
 
@@ -12,7 +13,8 @@ from tools.technology import create_directory, clear_folder, images_to_video
 
 
 def generate():
-    filename = sys.argv[1]
+    config = toml.load('config.toml')
+    filename = config['file_to_run']
     n_frames = 600
     create_directory(f"outputs/{filename}")
     clear_folder(f"outputs/{filename}")

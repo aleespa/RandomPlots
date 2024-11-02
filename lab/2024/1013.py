@@ -2,8 +2,9 @@ import gc
 import sys
 
 import numpy as np
+import toml
 from loguru import logger
-from matplotlib import pyplot as plt
+import matplotlib.pylab as plt
 import matplotlib.colors
 import random, string
 
@@ -26,7 +27,8 @@ colors = [
 cmap = matplotlib.colors.ListedColormap(colors)
 
 def generate():
-    filename = sys.argv[1]
+    config = toml.load('config.toml')
+    filename = config['file_to_run']
     create_directory(f"outputs/{filename}")
 
     t = np.linspace(0, 2 * np.pi, 10000)
