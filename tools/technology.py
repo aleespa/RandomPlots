@@ -12,7 +12,8 @@ def images_to_video(image_folder, video_name, fps):
     - video_name: Name of the output video file (including .mp4 extension).
     - fps: Frames per second for the output video.
     """
-    images = [img for img in os.listdir(image_folder) if img.endswith(".png")]
+    images = [img for img in os.listdir(image_folder)
+              if img.endswith(".PNG") or img.endswith(".png")]
     images.sort()  # Make sure the images are in the correct order
 
     # Get the size of the images
