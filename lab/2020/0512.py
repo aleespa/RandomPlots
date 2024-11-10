@@ -1,33 +1,43 @@
+import random
+import string
 
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from matplotlib import cm
-from scipy.stats import norm,chi2,binom,gamma
-import seaborn as sns
-from math import cos, sin,log,tan,pi,exp,sqrt,cosh,sinh,tanh,atan,atan2,e
+import toml
+from loguru import logger
 
-m = 4000
-n = 4000
+from tools.technology import create_directory
 
-s = 2200  # Scale.
-x = np.linspace(-m / s, m / s, num=m).reshape((1, m))
-y = np.linspace(-n / s, n / s, num=n).reshape((n, 1))
-Z = np.tile(x, (n, 1)) + 1j * np.tile(y, (1, m))
 
-C = np.full((n, m), -0.4 + 0.6j)
-M = np.full((n, m), True, dtype=bool)
-N = np.zeros((n, m))
-for i in range(256):
-    Z[M] = Z[M] * Z[M] + C[M]
-    M[np.abs(Z) > 2] = False
-    N[M] = i
+def generate():
+    config = toml.load('config.toml')
+    filename = config['file_to_run']
+    create_directory(f"outputs/{filename}")
+    m = 4000
+    n = 4000
 
-fig, ax = plt.subplots(figsize=(14,14),facecolor='black',dpi=400)
-p = plt.axis('off')
-ax = fig.add_axes([0, 0, 1, 1], frameon=False, aspect=1)
-ax.set_xticks([])
-ax.set_yticks([])
-plt.imshow(np.flipud(N), cmap='gist_earth')
+    s = 2200
+    x = np.linspace(-m / s, m / s, num=m).reshape((1, m))
+    y = np.linspace(-n / s, n / s, num=n).reshape((n, 1))
+    z = np.tile(x, (n, 1)) + 1j * np.tile(y, (1, m))
 
-p = plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/12052020.PNG',facecolor='black')
+    c =  -0.4 + 0.6j
+    index = np.full((n, m), True, dtype=bool)
+    number_iterations = np.zeros((n, m))
+
+    logger.info(f"Starting calculation")
+    for i in range(256):
+        z[index] = z[index] ** 2 + c
+        index[np.abs(z) > 2] = False
+        number_iterations[index] = i
+
+    fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
+    ax = fig.add_axes((0, 0, 1, 1), facecolor='black')
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.imshow(np.flipud(number_iterations), cmap='gist_earth')
+
+    name = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+    logger.info(f"{name}.png Saved")
+    fig.savefig(f'outputs/{filename}/{name}.png', facecolor='k')
+    logger.info(f"Finished")
