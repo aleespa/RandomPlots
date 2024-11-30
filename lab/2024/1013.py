@@ -26,6 +26,7 @@ colors = [
 ]
 cmap = matplotlib.colors.ListedColormap(colors)
 
+
 def generate():
     config = toml.load('config.toml')
     filename = config['file_to_run']
@@ -54,6 +55,7 @@ def spiro(t: np.array,
           l: float = 0.5):
     return ((1 - k) * np.exp(1j * t)
             + k * l * np.exp(- 1j * t * (1 - k) / k))
+
 
 def plot_spiro(t, k, l, ax):
     s = spiro(100 * t, k, l)

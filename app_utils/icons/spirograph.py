@@ -4,10 +4,10 @@ from matplotlib import pyplot as plt
 
 def generate_plot():
     t = np.linspace(0, 2 * np.pi, 2000)
-    fig, ax = plt.subplots(figsize=(1, 1), dpi=50, tight_layout=True)
+    fig, ax = plt.subplots(figsize=(2, 2), dpi=50, tight_layout=True)
     fig.patch.set_facecolor('#f4f0e7')
 
-    for x in [0.4,0.6]:
+    for x in [0.4, 0.6]:
         k, l = (x, 0.3)
         plot_spiro(t, k, l, ax)
     ax.set_xlim(-1, 1)
