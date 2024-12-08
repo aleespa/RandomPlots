@@ -30,6 +30,8 @@ if not file_exists:
 
 # Start benchmarking
 for script in scripts:
+    if script != 'exponential_sum':
+        continue
     try:
         module = importlib.import_module(f"figures.{script}")
         logger.info(f"Benchmarking script: {script}")

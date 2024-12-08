@@ -2,6 +2,7 @@ import os
 import importlib.util
 import base64
 
+import numpy as np
 from loguru import logger
 
 # Paths for scripts and outputs
@@ -55,12 +56,26 @@ for script_file in os.listdir(FIGURES_DIR):
     # Run the function 100 times and save the outputs
     for i in range(RUNS_PER_SCRIPT):
         try:
-            base64_str = create_image()
+            base64_str = create_image(np.random.randint(0, 1000000), True, (0, 13/255, 30/255))
             if not isinstance(base64_str, str):
                 logger.info(f"Error: `create_image` in {script_file} did not return a Base64 string. Skipping this run.")
                 continue
 
             output_path = os.path.join(script_output_dir, f"image_{i + 1:03d}.jpg")
+            save_image(base64_str, output_path)
+        except Exception as e:
+            logger.info(f"Error running `create_image` in {script_file}: {e}")
+            continue
+
+    for i in range(RUNS_PER_SCRIPT):
+        try:
+            base64_str = create_image(np.random.randint(0, 1000000), False, (244/255, 240/255, 231/255))
+            if not isinstance(base64_str, str):
+                logger.info(
+                    f"Error: `create_image` in {script_file} did not return a Base64 string. Skipping this run.")
+                continue
+
+            output_path = os.path.join(script_output_dir, f"image_light_{i + 1:03d}.jpg")
             save_image(base64_str, output_path)
         except Exception as e:
             logger.info(f"Error running `create_image` in {script_file}: {e}")

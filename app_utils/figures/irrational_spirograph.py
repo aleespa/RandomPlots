@@ -29,7 +29,7 @@ def generate_plot(seed, dark=True, bg_color=(0, 0, 0)) -> io.BytesIO:
 
     t = np.linspace(0, 2 * np.pi, 10000)
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
-
+    fig.patch.set_facecolor(bg_color)
     for _ in range(4):
         k, l = rng.uniform(0.01, 0.99, 2)
         if dark:

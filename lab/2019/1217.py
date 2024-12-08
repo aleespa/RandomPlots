@@ -6,6 +6,7 @@ from mpl_toolkits.mplot3d import Axes3D
 
 
 for n in range(4,8):
+    n=6
     p = plt.figure(figsize=(12,12),facecolor='black',dpi=500)
     p = plt.axis('off')
     p = plt.xlim(-2,2)
