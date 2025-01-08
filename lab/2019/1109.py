@@ -1,5 +1,3 @@
-from __future__ import division
-
 import gc
 import random
 import string
@@ -21,6 +19,7 @@ def browninan_bridge(n):
         B = B + xi * np.array([sin((i + 1) * pi * t) for t in T])
     return B
 
+
 def generate():
     config = toml.load('config.toml')
     filename = config['file_to_run']
@@ -33,16 +32,22 @@ def generate():
     n = 500
     for k in range(35):
         X = browninan_bridge(n)
-        ax.plot(np.linspace(0, 1, n),
-                     [X[i] + k * i / n - k for i in range(n)],
-                     color=np.random.choice(color1),
-                     lw=2, alpha=0.8)
+        ax.plot(
+            np.linspace(0, 1, n),
+            [X[i] + k * i / n - k for i in range(n)],
+            color=np.random.choice(color1),
+            lw=2,
+            alpha=0.8,
+        )
     for k in range(35):
         X = browninan_bridge(n)
-        ax.plot(np.linspace(0, 1, n),
-                     [X[i] + (k - 34) * i / n - k for i in range(n)],
-                     color=np.random.choice(color2),
-                     lw=2, alpha=0.8)
+        ax.plot(
+            np.linspace(0, 1, n),
+            [X[i] + (k - 34) * i / n - k for i in range(n)],
+            color=np.random.choice(color2),
+            lw=2,
+            alpha=0.8,
+        )
     name = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
     logger.info(f"{name}.png Saved")
     fig.savefig(f'outputs/{filename}/{name}.png', facecolor='k')

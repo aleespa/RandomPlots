@@ -1,7 +1,7 @@
 import matplotlib.pylab as plt
 import numpy as np
 import pandas as pd
-from math import cos, sin,log,tan,gamma,pi,exp,sqrt
+from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -30,10 +30,11 @@ def koch_snowflake(order, scale=10):
     x, y = points.real, points.imag
     return x, y
 
-p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
+
+p = plt.figure(figsize=(14, 14), facecolor='black', dpi=400)
 p = plt.axis('off')
 p = plt.axis('equal')
-for z in np.linspace(1,10,35)[::-1]:
-    x, y = koch_snowflake(order=7,scale=z)
-    plt.fill(x, y,color=plt.cm.Blues(z/10-0.25))
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/23122019.png',facecolor='black')
+for z in np.linspace(1, 10, 35)[::-1]:
+    x, y = koch_snowflake(order=7, scale=z)
+    plt.fill(x, y, color=plt.cm.Blues(z / 10 - 0.25))
+plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/23122019.png', facecolor='black')
