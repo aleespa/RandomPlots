@@ -3,22 +3,17 @@ from math import pi
 
 import matplotlib.pylab as plt
 import numpy as np
-import toml
 from loguru import logger
 
-from tools.technology import create_directory, images_to_video, clear_folder
+from tools.settings import Settings
+from tools.technology import images_to_video
 
 colors = ['#e26000', '#228B46', '#5092B8', '#ff9b9b', '#c9d06c', '#22ba5a', '#58c0e7']
 
 
-def generate():
-    config = toml.load('config.toml')
-    filename = config['file_to_run']
-    create_directory(f"outputs/{filename}")
-    clear_folder(f"outputs/{filename}")
-
+def generate(settings=Settings()):
     fig, _ = plt.subplots(figsize=(12, 12), dpi=150)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
 
     y1, y2 = -260, 260
     x1, x2 = -260, 260
@@ -46,6 +41,6 @@ def generate():
         )
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         logger.info(f"{time_string}.png Saved")
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
+        fig.savefig(f'outputs/{settings.filename}/{time_string}.png', facecolor='k')
 
-    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 60)
+    images_to_video(f'outputs/{settings.filename}', f'{settings.filename}.mp4', 60)

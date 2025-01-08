@@ -11,7 +11,7 @@ T = np.linspace(0, 2 * pi, 2000)
 for n, epsilon in enumerate(np.linspace(0, 2 * pi, 750)):
     if n % 3 == 2:
         fig, _ = plt.subplots(figsize=(12, 12), dpi=100)
-        ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+        ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
         for k in range(20):
             T_sector = T[k * 100 : (k + 1) * 100 + 1] + epsilon
             T_0 = T_sector + epsilon + epsilon

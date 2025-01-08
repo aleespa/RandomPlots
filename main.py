@@ -1,9 +1,10 @@
-import toml
 import importlib
 
+import toml
 from loguru import logger
 
 logger.add("app_log.log", rotation="10 MB", level="INFO")
+
 
 def run_script(y, m):
     module_path = f"lab.{y}.{m}"
@@ -18,4 +19,5 @@ if __name__ == "__main__":
     year = file_to_run[:4]
     month_day = file_to_run[4:]
 
+    logger.info(f"Running script: {year}{month_day}")
     run_script(year, month_day)

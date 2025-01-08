@@ -18,7 +18,7 @@ def generate():
     T = np.linspace(0, pi / 4, 200)
 
     fig, ax = plt.subplots(1, 1, figsize=(14, 14), facecolor='black', dpi=400)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='k')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     ax.set_xlim(-10, 10)
     ax.set_ylim(-10, 10)
     for k in np.linspace(0, 10, 50):

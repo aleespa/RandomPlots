@@ -28,7 +28,7 @@ def generate():
     color1 = ['#96ceb4', '#ffeead', '#ff6f69', '#ffcc5c', '#88d8b0']
     color2 = ['#f7f4a3', '#7fccec', '#6a81d9', '#a479c9', '#dfdfdf']
     fig, _ = plt.subplots(figsize=(12, 12), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='k')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     n = 500
     for k in range(35):
         X = browninan_bridge(n)

@@ -45,7 +45,7 @@ def generate_plot(x, y, directory):
     current_time = datetime.now()
     time_string = current_time.strftime('%Y-%m-%d_%H-%M-%S')
     fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     ax.scatter(x, y, s=1, color='k', lw=0, alpha=0.9)
     if not os.path.exists(f"outputs/{directory}"):
         os.makedirs(f"outputs/{directory}")

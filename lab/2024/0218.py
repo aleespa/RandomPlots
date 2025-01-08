@@ -72,7 +72,7 @@ def generate_plot(
     h, _, _ = np.histogram2d(l_cx, l_cy, bins=4000, range=area)
     figure_aspect_ratio = 9 / 16
     fig, _ = plt.subplots(figsize=(9, 16), dpi=200)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     extent = [-1, 1, -1, 1]
     ax.imshow(np.log(h + 1), vmin=0, vmax=5, cmap=cmap, extent=extent)
     y1, y2 = -1, 1

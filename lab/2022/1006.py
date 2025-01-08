@@ -48,7 +48,7 @@ def plot_1():
 
     for frame in range(233, n_frames):
         fig = plt.figure(figsize=(12, 12), dpi=200)
-        ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+        ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
 
         for j in range(m):
             plt.scatter(
@@ -83,7 +83,7 @@ def plot_2():
     n_frames = 300
     ppf = int(n_points / n_frames)
     fig = plt.figure(figsize=(12, 12), dpi=400)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
     newcmp = LinearSegmentedColormap.from_list(
         "", ["#ffd47f", "#ffe9f8", "#60c0f0", "#ff9a9a", "#ff0303"]
     )

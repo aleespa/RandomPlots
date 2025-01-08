@@ -30,7 +30,7 @@ def plots(s):
     config = toml.load('config.toml')
     filename = config['file_to_run']
     fig, _ = plt.subplots(figsize=(12, 12), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='k')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     ax.set_xlim(-10, 10)
     ax.set_ylim(-10, 10)
     for m in range(1, 10):

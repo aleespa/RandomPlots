@@ -24,7 +24,7 @@ cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors, N=1000)
 
 def generate():
     settings = Settings()
-    filename = settings.file_to_run
+    filename = settings.filename
     create_directory(f"outputs/{filename}")
     clear_folder(f"outputs/{filename}")
     logger.info(f"Starting calculation")

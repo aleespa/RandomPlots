@@ -15,7 +15,7 @@ def rotation_matrix(angle):
 colors = ['b', 'r', 'g']
 for i in range(3):
     fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
     for _ in range(35):
         initialX, initialY = np.random.uniform(-2e2, 2e2), np.random.uniform(-2e2, 2e2)
         intersections = np.random.randint(2, 15)

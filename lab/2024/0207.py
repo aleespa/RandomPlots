@@ -72,7 +72,7 @@ def generate_plot(
     h, _, _ = np.histogram2d(l_cx, l_cy, bins=4000, range=area)
 
     fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     ax.imshow(np.log(h + 1), vmin=0, vmax=5, cmap=cmap)
     plt.xticks([]), plt.yticks([])
     fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')

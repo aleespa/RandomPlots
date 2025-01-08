@@ -32,7 +32,7 @@ def generate():
     clear_folder(f"outputs/{filename}")
 
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     angles = np.linspace(0, 9 * np.pi, 10000)
     for i, (theta) in enumerate(np.linspace(0, 3 * np.pi, n_frames)):
         X, Y = (

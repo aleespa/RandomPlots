@@ -20,7 +20,7 @@ colors = [
 
 n_points = 800
 fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
-ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
 theta = np.linspace(0, 2 * pi, n_points)
 r = (1 - cos(theta)) ** 2 + 5
 X = np.row_stack([r * np.cos(theta), r * np.sin(theta * 6)])

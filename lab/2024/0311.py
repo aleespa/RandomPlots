@@ -19,7 +19,7 @@ def generate():
     n_grid = 10
 
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     y = np.linspace(0, 1, 100)
     t = np.concatenate(
         (

@@ -33,6 +33,7 @@ def images_to_video(image_folder, video_name, fps):
 
     out.release()
 
+
 def clear_folder(folder_path):
     # List all files and directories inside the folder
     for file_name in os.listdir(folder_path):
@@ -48,6 +49,7 @@ def clear_folder(folder_path):
             clear_folder(file_path)
             # After clearing the subdirectory, remove the directory itself
             os.rmdir(file_path)
+
 
 def create_directory(directory_path):
     if not os.path.exists(directory_path):

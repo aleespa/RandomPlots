@@ -17,7 +17,7 @@ def generate():
     clear_folder(f"outputs/{filename}")
 
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     angles = np.linspace(-10, 10, 10000)
     n_waves = 75
     wavelengths = 25

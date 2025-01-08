@@ -18,7 +18,7 @@ def generate():
     filename = config['file_to_run']
     create_directory(f"outputs/{filename}")
     fig, _ = plt.subplots(figsize=(12, 12), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='k')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     for x in range(30):
         for y in range(30):
             p1 = np.array([x, y])
@@ -42,7 +42,7 @@ def generate():
     gc.collect()
 
     fig, _ = plt.subplots(figsize=(12, 12), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='k')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     for x in range(30):
         for y in range(30):
             p1 = np.array([x, y])

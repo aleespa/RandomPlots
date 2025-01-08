@@ -40,7 +40,7 @@ for i, colors in enumerate(
 ):
     cmap = ListedColormap(['k', 'k'] + colors)
     fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
     ax.imshow(closest_idx.reshape(n, n), extent=(-2, 2, -2, 2), cmap=cmap)
     ax.set_xlim(-2, 2)
     ax.set_ylim(-2, 2)

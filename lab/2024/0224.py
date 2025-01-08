@@ -39,7 +39,7 @@ def generate():
     n_frames = 780
 
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     for i, (theta) in enumerate(np.linspace(0, 2 * np.pi, n_frames)):
         t1 = time.time()
         generate_plot(theta)

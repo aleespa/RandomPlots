@@ -29,7 +29,7 @@ def generate_plot(X: List[np.array], Y: List[np.array], directory: str):
     current_time = datetime.now()
     time_string = current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')
     fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     for x, y in zip(X, Y):
         plt.plot(x, y, color='k', lw=1.5)
     fig.savefig(f'outputs/{directory}/{time_string}.png', facecolor='k')

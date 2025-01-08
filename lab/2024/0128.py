@@ -19,7 +19,7 @@ def convex_hull(points):
 def generate_plot(Z: np.array,
                   filename: str):
     fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     # ax.plot(Z[:,0], Z[:,1], color='k', lw=1.5)
     for k in range(10,10000,5):
         hull = ConvexHull(Z[:k,:])

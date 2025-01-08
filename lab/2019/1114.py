@@ -1,32 +1,49 @@
-from math import exp
+import gc
+from datetime import datetime
 
 import matplotlib.pylab as plt
 import numpy as np
 
-U1, U2 = np.random.uniform(0, 1, 200), np.random.uniform(0, 1, 200)
-sizes = np.array([np.random.uniform(80, 550) * t for t in range(1, 201)])
-norm = lambda x, t: exp(-((x - t) ** 2) / 550) * (x < t)
+from tools.settings import Settings
+from tools.technology import images_to_video
+
 colors = (
-    ['#ff6f4b'] * 20
-    + ['#fd4c55'] * 20
-    + ['#e13661'] * 20
-    + ['#c1246b'] * 20
-    + ['#a11477'] * 20
-    + ['#c1246b'] * 20
-    + ['#e13661'] * 20
-    + ['#fd4c55'] * 20
-    + ['#ff6f4b'] * 40
+        ['#ff6f4b'] * 20
+        + ['#fd4c55'] * 20
+        + ['#e13661'] * 20
+        + ['#c1246b'] * 20
+        + ['#a11477'] * 20
+        + ['#c1246b'] * 20
+        + ['#e13661'] * 20
+        + ['#fd4c55'] * 20
+        + ['#ff6f4b'] * 40
 )
 
-for t in range(200):
-    p = plt.figure(figsize=(12, 12), facecolor='black')
-    p = plt.axis('off')
-    p = plt.xlim(0, 1)
-    p = plt.ylim(0, 1)
-    p = plt.scatter(
-        U1, U2, s=[2600 * norm(x, t) for x in range(200)], alpha=0.7, color=colors
-    )
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/14112019/fig{t}.png',
-        facecolor='black',
-    )
+
+def norm(x, t):
+    return np.exp(-((x - t) ** 2) / 550) * (x < t)
+
+
+def generate(settings=Settings()):
+    u1 = np.random.uniform(0, 1, 200)
+    u2 = np.random.uniform(0, 1, 200)
+    for t in range(200):
+        fig, _ = plt.subplots(figsize=(12, 12), dpi=150)
+        ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.scatter(
+            u1, u2, s=[2600 * norm(x, t) for x in range(200)], alpha=0.7, color=colors
+        )
+
+        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
+        plt.savefig(
+            f'outputs/{settings.filename}/{time_string}.png',
+            facecolor='black',
+        )
+        plt.close()
+        gc.collect()
+    images_to_video(f'outputs/{settings.filename}',
+                    f'{settings.filename}.mp4',
+                    30)
+

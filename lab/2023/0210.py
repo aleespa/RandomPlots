@@ -31,7 +31,7 @@ colors = [
 ]
 
 fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
-ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
 for i in range(380):
     r, theta1, theta2 = np.random.uniform(0, 0.9, 3)
     theta = np.linspace(theta1, theta2, 70) * 4 * pi - 2 * pi

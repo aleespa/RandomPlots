@@ -16,7 +16,7 @@ def generate():
     clear_folder(f"outputs/{filename}")
 
     fig, _ = plt.subplots(figsize=(12, 12), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     n_frames = 10
     max_depth = 6
     draw_tree(ax, 0, 0, np.pi / 2, 0, 16, np.pi / 5)

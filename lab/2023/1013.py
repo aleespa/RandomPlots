@@ -41,7 +41,7 @@ def generate_plot(x, y, directory, color):
     current_time = datetime.now()
     time_string = current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     ax.scatter(x[0], y[1], s=5, lw=0, color=color[0])
     ax.scatter(x[1], y[0], s=5, lw=0, color=color[1])
     y1, y2 = -2, 2

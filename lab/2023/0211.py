@@ -10,7 +10,7 @@ colors = ['#FFCDD2', '#B2EBF2', '#C8E6C9', '#FFF9C4', '#BBDEFB', '#E1BEE7', '#D7
 
 n_points = 200
 fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
-ax = fig.add_axes([0, 0, 1, 1], facecolor='black')
+ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='black')
 theta = np.linspace(0, 2 * pi, n_points)
 r = np.linspace(0, 1, n_points)
 X = np.row_stack([r**3 * np.cos(theta), r * np.sin(theta)])

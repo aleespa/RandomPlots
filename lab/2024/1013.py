@@ -35,7 +35,7 @@ def generate():
     t = np.linspace(0, 2 * np.pi, 10000)
     for _ in range(50):
         fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
-        ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
+        ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
         for _ in range(4):
             a, b, c, d = sorted(np.random.randint(1, 24, 4))
             k, l = a / b, c / d

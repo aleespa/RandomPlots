@@ -15,7 +15,7 @@ def pol(n):
     create_directory(f"outputs/{filename}")
     u = np.linspace(0, 2 * pi, n)
     fig, ax = plt.subplots(1, 1, figsize=(14, 14), dpi=200)
-    ax = fig.add_axes([0, 0, 1, 1], facecolor='k')
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     ax.set_xlim(-1.05, 1.05)
     ax.set_ylim(-1.05, 1.05)
     for j in range(n):
