@@ -1,9 +1,7 @@
+from math import pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-import seaborn as sns
-from math import cos, sin,log,tan,gamma,pi,exp,sqrt
-from mpl_toolkits.mplot3d import Axes3D
 
 R = np.random.normal(10,1,10000)
 def lemis1(t1,t2):

@@ -1,8 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
-from mpl_toolkits.mplot3d import Axes3D
 
 n = 0
 for y in np.linspace(-pi, pi, 240):

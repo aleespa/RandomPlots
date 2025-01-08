@@ -1,7 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 n = 0
 for y in np.linspace(0.1, 35, 210):

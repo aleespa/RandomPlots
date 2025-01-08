@@ -1,7 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 m = 0
 lws = np.random.normal(7, 1, 50)

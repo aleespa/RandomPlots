@@ -1,6 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-from math import cos, sin, pi
 
 p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
 p = plt.axis('off')

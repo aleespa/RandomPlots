@@ -8,7 +8,6 @@ from loguru import logger
 from matplotlib import pyplot as plt
 from scipy.integrate import odeint
 
-from tools.simulation import brownian_bridge
 from tools.technology import create_directory, clear_folder, images_to_video
 
 
@@ -34,8 +33,7 @@ def generate():
         ax.clear()
         t1 = time.time()
         for solution in solutions:
-            ax.scatter(solution[i, 0],
-                       solution[i, 1], s=1, color='k')
+            ax.scatter(solution[i, 0], solution[i, 1], s=1, color='k')
         y1, y2 = -10, 10
         x1, x2 = -10, 10
         w = x2 - x1
@@ -47,17 +45,18 @@ def generate():
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
         t2 = time.time()
-        logger.info(f"theta = {mu:.8f} "
-                    f"frame {str(i + 1).zfill(3)}/{n_frames} "
-                    f"time = {t2 - t1:.2f} seconds")
+        logger.info(
+            f"theta = {mu:.8f} "
+            f"frame {str(i + 1).zfill(3)}/{n_frames} "
+            f"time = {t2 - t1:.2f} seconds"
+        )
         gc.collect()
 
-    images_to_video(f'outputs/{filename}',
-                    f'{filename}.mp4', 6)
+    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 6)
 
 
 def system(state, t, mu):
     x, y = state
-    dxdt = mu * x + y - x ** 2
-    dydt = -x + mu * y + 2 * x ** 2
+    dxdt = mu * x + y - x**2
+    dydt = -x + mu * y + 2 * x**2
     return [dxdt, dydt]

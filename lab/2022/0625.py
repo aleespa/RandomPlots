@@ -1,11 +1,9 @@
-import numpy as np
-import matplotlib.pylab as plt
-from math import sqrt, pi
-from scipy.stats import norm
-from scipy.interpolate import interp1d
 import os
 import sys
-import itertools
+from math import pi
+
+import matplotlib.pylab as plt
+import numpy as np
 
 filename = os.path.basename(sys.argv[0])[:-3]
 
@@ -28,11 +26,17 @@ for j in range(n):
             colors = plt.cm.winter(j / n)
         else:
             colors = plt.cm.spring(j / n)
-        plt.plot([points[s % sides][0][j], points[(s + 1) % sides][0][n - j - 1]],
-                 [points[s % sides][1][j], points[(s + 1) % sides][1][n - j - 1]],
-                 color=colors, lw=1)
+        plt.plot(
+            [points[s % sides][0][j], points[(s + 1) % sides][0][n - j - 1]],
+            [points[s % sides][1][j], points[(s + 1) % sides][1][n - j - 1]],
+            color=colors,
+            lw=1,
+        )
 
 plt.xlim(-1, 1)
 plt.ylim(-1, 1)
-plt.savefig(f"./../outputs/{filename}_v1.png", facecolor='black', )
+plt.savefig(
+    f"./../outputs/{filename}_v1.png",
+    facecolor='black',
+)
 plt.close()

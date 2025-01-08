@@ -1,15 +1,12 @@
 import gc
-import os
 import sys
 from datetime import datetime
 
-import cv2
-from matplotlib.colors import LinearSegmentedColormap
-from numba import jit, njit, prange
-import numpy as np
 import matplotlib
-
+import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from numba import njit
 
 from tools.technology import images_to_video
 
@@ -20,6 +17,7 @@ import os
 openh264_dir = r'C:\Users\Alejandro Lopez\Documents\codec'
 os.add_dll_directory(openh264_dir)
 
+
 @njit
 def meshgrid(x, y):
     """
@@ -29,9 +27,10 @@ def meshgrid(x, y):
     yy = np.empty(shape=(x.size, y.size), dtype=y.dtype)
     for j in range(y.size):
         for k in range(x.size):
-            xx[j,k] = k  # change to x[k] if indexing xy
-            yy[j,k] = j  # change to y[j] if indexing xy
+            xx[j, k] = k  # change to x[k] if indexing xy
+            yy[j, k] = j  # change to y[j] if indexing xy
     return xx, yy
+
 
 @njit
 def calc_orbit(n_points, a, b, n_iter):
@@ -45,34 +44,30 @@ def calc_orbit(n_points, a, b, n_iter):
 
     Return: two ndarrays: x and y coordinates of every point of every orbit.
     """
-    area = [[-1,1],[-1,1]]
-    x = np.linspace(area[0][0],area[0][1],n_points)
-    y = np.linspace(area[1][0],area[1][1],n_points)
-    xx,yy = meshgrid(x,y)
-    l_cx,l_cy=np.zeros(n_iter*n_points**2),np.zeros(n_iter*n_points**2)
+    area = [[-1, 1], [-1, 1]]
+    x = np.linspace(area[0][0], area[0][1], n_points)
+    y = np.linspace(area[1][0], area[1][1], n_points)
+    xx, yy = meshgrid(x, y)
+    l_cx, l_cy = np.zeros(n_iter * n_points**2), np.zeros(n_iter * n_points**2)
     for i in range(n_iter):
-        xx_new = np.sin(xx**2-yy**2 + a)
-        yy_new = np.cos(2*xx*yy + b)
+        xx_new = np.sin(xx**2 - yy**2 + a)
+        yy_new = np.cos(2 * xx * yy + b)
         xx = xx_new
         yy = yy_new
-        l_cx[i*n_points**2:(i+1)*n_points**2] = xx.flatten()
-        l_cy[i*n_points**2:(i+1)*n_points**2] = yy.flatten()
+        l_cx[i * n_points**2 : (i + 1) * n_points**2] = xx.flatten()
+        l_cy[i * n_points**2 : (i + 1) * n_points**2] = yy.flatten()
     return l_cx, l_cy
 
 
-
-def generate_plot(l_cx: np.array,
-                  l_cy: np.array,
-                  area:np.array,
-                  filename: str,
-                  name: str):
+def generate_plot(
+    l_cx: np.array, l_cy: np.array, area: np.array, filename: str, name: str
+):
     time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
     start_color = '#f4f0e7'  # Light color you specified
     end_color = '#000000'  # Black
 
     # Create a colormap from the specified colors
     cmap = LinearSegmentedColormap.from_list("custom_cmap", [start_color, end_color])
-
 
     h, _, _ = np.histogram2d(l_cx, l_cy, bins=4000, range=area)
 
@@ -86,16 +81,15 @@ def generate_plot(l_cx: np.array,
     gc.collect()
 
 
-
 def generate():
     filename = sys.argv[1]
     n_points = 600
     n_iter = 150
     # a, b = 5.45, 4.55
-    for a, b in np.random.uniform(0,2*np.pi, (0, 2)):
+    for a, b in np.random.uniform(0, 2 * np.pi, (0, 2)):
         l_cx, l_cy = calc_orbit(n_points, a, b, n_iter)
         area = np.array([[-1, 1], [-1, 1]])
-        generate_plot(l_cx, l_cy ,area, filename,f'{a:.5f}{b:.5f}')
+        generate_plot(l_cx, l_cy, area, filename, f'{a:.5f}{b:.5f}')
 
     # n_points = 600
     # n_iter = 100
@@ -126,5 +120,4 @@ def generate():
     #     del l_cx, l_cy
     #     gc.collect()
 
-    images_to_video(f'outputs/animation2', 'non_linear_final.mp4',30)
-
+    images_to_video(f'outputs/animation2', 'non_linear_final.mp4', 30)

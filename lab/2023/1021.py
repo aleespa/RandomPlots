@@ -1,23 +1,20 @@
-import sys
 import gc
+import sys
 from datetime import datetime
 from typing import List
 
-import numpy as np
-from numpy import pi, cos, sin
-
 import matplotlib
-
+import numpy as np
 from matplotlib import pyplot as plt
+from numpy import pi, cos, sin
 
 matplotlib.use('Agg')
 
 
-def points(n: int,
-           seed: int) -> tuple[np.array, np.array]:
-    t = np.linspace(0, + 2 * pi, n)
+def points(n: int, seed: int) -> tuple[np.array, np.array]:
+    t = np.linspace(0, +2 * pi, n)
     np.random.seed(seed)
-    k_elements =  np.random.randint(1, 30)
+    k_elements = np.random.randint(1, 30)
     speed = np.random.randint(1, 80, k_elements)
     width = np.random.normal(0, 5, k_elements)
     sine_contributions = width * sin(np.outer(t, speed))
@@ -28,9 +25,7 @@ def points(n: int,
     return x, y
 
 
-def generate_plot(X: List[np.array],
-                  Y: List[np.array],
-                  directory: str):
+def generate_plot(X: List[np.array], Y: List[np.array], directory: str):
     current_time = datetime.now()
     time_string = current_time.strftime('%Y-%m-%d_%H-%M-%S-%f')
     fig, _ = plt.subplots(figsize=(12, 12), dpi=200)

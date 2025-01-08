@@ -8,7 +8,7 @@ import toml
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from tools.technology import create_directory, clear_folder
+from tools.technology import create_directory
 
 colors = [
     "#3b3b3b",  # Dark gray
@@ -25,6 +25,7 @@ colors = [
     "#8e44ad",  # Vibrant purple
 ]
 cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
+
 
 def generate():
     config = toml.load('config.toml')
@@ -46,12 +47,10 @@ def generate():
     gc.collect()
 
 
-def epicycloid(
-        t: np.array,
-        k: float = 0.5):
-    return (k + 1) * np.exp(1j * t) - np.exp(1j * (k+1) * t)
+def epicycloid(t: np.array, k: float = 0.5):
+    return (k + 1) * np.exp(1j * t) - np.exp(1j * (k + 1) * t)
+
 
 def plot_epicycloid(t, k, ax):
     s = epicycloid(t, k)
-    ax.plot(s.real, s.imag, lw=3.2, alpha=0.9,
-            color=cmap(np.random.uniform()))
+    ax.plot(s.real, s.imag, lw=3.2, alpha=0.9, color=cmap(np.random.uniform()))

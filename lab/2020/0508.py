@@ -1,11 +1,8 @@
 
+from math import cos, sin, log, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from matplotlib import cm
-from scipy.stats import norm,chi2,binom,gamma
-import seaborn as sns
-from math import cos, sin,log,tan,pi,exp,sqrt,cosh,sinh,tanh,atan,atan2
 
 p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
 p = plt.axis('off')

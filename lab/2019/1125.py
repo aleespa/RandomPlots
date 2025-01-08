@@ -1,9 +1,8 @@
+from math import cos, sin, log, pi
+
+import matplotlib
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib
 
 colors = matplotlib.cm.get_cmap('rainbow')
 X, Y = [log(t) * cos(t * 1.1) for t in np.linspace(10, 60 * pi, 4200)], [

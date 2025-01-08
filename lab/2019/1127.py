@@ -1,9 +1,8 @@
+from math import cos, sin, pi
+
+import matplotlib
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib
 
 colors = matplotlib.cm.get_cmap('viridis')
 n = 0

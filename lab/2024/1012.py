@@ -18,12 +18,19 @@ def generate():
     t1 = np.linspace(0, 2 * np.pi, 250)
     t2 = np.linspace(0, 2 * np.pi, 25)
     for s in np.linspace(0, np.pi, 20):
-        ax.scatter(np.cos(t2) * (1 + s * np.cos(t2)),
-                   np.sin(t2) * (1 + s * np.cos(t2)),
-                   color='k', lw=0, s=30)
-        ax.plot(np.cos(t1) * (1 + s * np.cos(t1)),
-                np.sin(t1) * (1 + s * np.cos(t1)),
-                color='k', lw=0.50)
+        ax.scatter(
+            np.cos(t2) * (1 + s * np.cos(t2)),
+            np.sin(t2) * (1 + s * np.cos(t2)),
+            color='k',
+            lw=0,
+            s=30,
+        )
+        ax.plot(
+            np.cos(t1) * (1 + s * np.cos(t1)),
+            np.sin(t1) * (1 + s * np.cos(t1)),
+            color='k',
+            lw=0.50,
+        )
     ax.set_xlim(-1.5, 4.5)
     ax.set_ylim(-3, 3)
     fig.savefig(f'outputs/{filename}/figure.png', facecolor='k')

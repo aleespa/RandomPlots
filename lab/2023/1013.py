@@ -1,13 +1,11 @@
+import gc
 import os
 import sys
-import cv2
-import gc
 from datetime import datetime
 
-import numpy as np
-
+import cv2
 import matplotlib
-
+import numpy as np
 from matplotlib import pyplot as plt
 
 matplotlib.use('Agg')
@@ -28,13 +26,11 @@ def vectorized_sample_complex_pairs(sample_size: int):
 
 
 def calculate_matrix_v1(t):
-    return np.array([[t[0], 1j],
-                     [0.5, t[1]]])
+    return np.array([[t[0], 1j], [0.5, t[1]]])
 
 
 def calculate_matrix_v2(t):
-    return np.array([[t[0], 1j],
-                     [-0.5, t[1]]])
+    return np.array([[t[0], 1j], [-0.5, t[1]]])
 
 
 def calculate_eigenvalues(x: np.array):
@@ -80,7 +76,9 @@ def images_to_video(image_folder, video_name, fps):
     size = (w, h)
 
     # Create a video writer object
-    out = cv2.VideoWriter("outputs/" + video_name, cv2.VideoWriter_fourcc(*'mp4v'), fps, size)
+    out = cv2.VideoWriter(
+        "outputs/" + video_name, cv2.VideoWriter_fourcc(*'mp4v'), fps, size
+    )
 
     for image in images:
         img_path = os.path.join(image_folder, image)
@@ -95,8 +93,14 @@ def generate():
     sample_size = 5000
     sample = vectorized_sample_complex_pairs(sample_size)
     for i, r in enumerate(np.linspace(0, 4.8, 360)):
-        Z1 = np.array([calculate_eigenvalues(calculate_matrix_v1(t)) for t in sample * r]).ravel()
-        Z2 = np.array([calculate_eigenvalues(calculate_matrix_v2(t)) for t in sample * r]).ravel()
-        generate_plot([Z1.real, Z2.real],[Z1.imag, Z2.imag], filename, ['#cc0000', '#000033'])
+        Z1 = np.array(
+            [calculate_eigenvalues(calculate_matrix_v1(t)) for t in sample * r]
+        ).ravel()
+        Z2 = np.array(
+            [calculate_eigenvalues(calculate_matrix_v2(t)) for t in sample * r]
+        ).ravel()
+        generate_plot(
+            [Z1.real, Z2.real], [Z1.imag, Z2.imag], filename, ['#cc0000', '#000033']
+        )
         gc.collect()
     images_to_video(f"outputs/{filename}", f'{filename}.mp4', 30)

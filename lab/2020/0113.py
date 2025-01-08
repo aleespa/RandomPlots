@@ -1,9 +1,8 @@
+from math import pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-import seaborn as sns
-from math import cos, sin,log,tan,gamma,pi,exp,sqrt
-from mpl_toolkits.mplot3d import Axes3D
+
 
 def helix(R,r,n):
     fig = plt.figure(figsize=(13,13),facecolor='black')

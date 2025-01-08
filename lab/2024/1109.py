@@ -1,9 +1,9 @@
 import gc
 from datetime import datetime
 
+import matplotlib.colors as mcolors
 import matplotlib.pylab as plt
 import numpy as np
-import matplotlib.colors as mcolors
 import toml
 from loguru import logger
 
@@ -17,7 +17,8 @@ colors = [
     "#27ae60",  # Vibrant green
     "#2980b9",  # Vibrant blue
     "#8e44ad",  # Vibrant purple
-    '#000000']  # Red, Green, Blue, Yellow, Cyan
+    '#000000',
+]  # Red, Green, Blue, Yellow, Cyan
 
 cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors, N=1000)
 
@@ -35,15 +36,13 @@ def generate():
     z = 1.01 * np.exp(1j * theta) * ((2 - np.exp(1j * theta)) / 4)
     for i, s in enumerate(np.linspace(1, 1e-10, n)):
 
-        julia_java(z[i], 480, 0, 0, 1.5,
-                   f'outputs/{filename}/temp/{i}.txt')
+        julia_java(z[i], 480, 0, 0, 1.5, f'outputs/{filename}/temp/{i}.txt')
         logger.info(f"Calculation finished for s = {s}")
-        julia_set_v2(z[i], 480, 0, 0, 1.5,
-                   f'outputs/{filename}/temp/{i}_.txt')
+        julia_set_v2(z[i], 480, 0, 0, 1.5, f'outputs/{filename}/temp/{i}_.txt')
     for i in range(n):
         number_iterations = np.loadtxt(
-            f"outputs/{filename}/temp/{i}.txt",
-            delimiter=",", dtype=float)
+            f"outputs/{filename}/temp/{i}.txt", delimiter=",", dtype=float
+        )
         fig, ax = plt.subplots(figsize=(12, 12), dpi=200)
         ax = fig.add_axes((0, 0, 1, 1), facecolor="#f4f0e7")
         ax.set_xticks([])
@@ -57,6 +56,5 @@ def generate():
         fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor="#f4f0e7")
         plt.close()
         gc.collect()
-    images_to_video(f'outputs/{filename}',
-                    f'{filename}.mp4', 30)
+    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 30)
     logger.info(f"Finished")

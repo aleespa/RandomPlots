@@ -1,7 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 colors = ['#9be3f2', '#4d9447', '#16a3f9', '#66a33d', '#73ab38', '#87ae5f', '#AE5F5F']
 p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)

@@ -1,11 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from matplotlib import cm
-from scipy.stats import norm,chi2,binom
-import seaborn as sns
-from math import cos, sin,log,tan,gamma,pi,exp,sqrt,cosh,sinh,tanh
-from cmath import exp as cexp, log as clog
 
 p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
 

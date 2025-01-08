@@ -1,6 +1,5 @@
 import os
 import sys
-import time
 from datetime import datetime
 
 import numpy as np
@@ -25,11 +24,15 @@ def vectorized_sample_complex_pairs(num_points=100):
 
 
 def calculate_matrix(t):
-    return np.array([[-1j, 0, -1j, 0.5, -1j],
-                     [-1j, 1, -1j, 0, 0],
-                     [0, 0, -1j, 0.5, 1],
-                     [1, -1j, 1j, 0.5, 1j],
-                     [0, 1j, t[0], 0, 1]])
+    return np.array(
+        [
+            [-1j, 0, -1j, 0.5, -1j],
+            [-1j, 1, -1j, 0, 0],
+            [0, 0, -1j, 0.5, 1],
+            [1, -1j, 1j, 0.5, 1j],
+            [0, 1j, t[0], 0, 1],
+        ]
+    )
     # return np.array([[t[0], 1j],
     #                  [-0.5, t[1]]])
 

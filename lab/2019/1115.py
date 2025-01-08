@@ -1,6 +1,7 @@
+from math import sqrt
+
 import matplotlib.pylab as plt
 import numpy as np
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 colors = ['#ff9b9b', '#f8ff90', '#a9ff8f', '#22ba5a', '#58c0e7']
 p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)

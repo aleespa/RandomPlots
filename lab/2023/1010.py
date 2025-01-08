@@ -18,11 +18,15 @@ def vectorized_sample_complex_pairs(sample_size: int):
 
 
 def calculate_matrix(t: np.array):
-    return np.array([[1j, -1, 1, 1, 1j],
-                     [-1, 1, 0, 1, 1],
-                     [t[1], 0, -1j, 0, 1j],
-                     [1j, t[0], 1j, 1j, 1j],
-                     [1j,2, -1, -1, 1j]])
+    return np.array(
+        [
+            [1j, -1, 1, 1, 1j],
+            [-1, 1, 0, 1, 1],
+            [t[1], 0, -1j, 0, 1j],
+            [1j, t[0], 1j, 1j, 1j],
+            [1j, 2, -1, -1, 1j],
+        ]
+    )
 
 
 def calculate_eigenvalues(x: np.array):

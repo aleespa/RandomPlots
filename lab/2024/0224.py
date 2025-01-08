@@ -13,15 +13,18 @@ from tools.technology import images_to_video
 os.add_dll_directory(r'C:\Users\Alejandro Lopez\Documents\codec')
 
 
-
 def generate():
     def generate_plot(angle: float):
         ax.clear()  # Clear previous plot data
         for k in range(15):
-            circle = plt.Circle((
-                k * np.sin(angle * k) * np.sin(angle) * np.cos(angle),
-                k * np.cos(angle) * np.sin(angle)
-                                 ) , 0.35, color='k')
+            circle = plt.Circle(
+                (
+                    k * np.sin(angle * k) * np.sin(angle) * np.cos(angle),
+                    k * np.cos(angle) * np.sin(angle),
+                ),
+                0.35,
+                color='k',
+            )
             ax.add_patch(circle)
 
         y1, y2 = -8, 8
@@ -37,13 +40,14 @@ def generate():
 
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
     ax = fig.add_axes([0, 0, 1, 1], facecolor='#f4f0e7')
-    for i, (theta) in enumerate(np.linspace(0, 2*np.pi, n_frames)):
+    for i, (theta) in enumerate(np.linspace(0, 2 * np.pi, n_frames)):
         t1 = time.time()
         generate_plot(theta)
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
         t2 = time.time()
-        logger.info(f"theta = {theta:.8f} frame {str(i + 1).zfill(3)}/{n_frames} time = {t2- t1:.2f} seconds")
+        logger.info(
+            f"theta = {theta:.8f} frame {str(i + 1).zfill(3)}/{n_frames} time = {t2- t1:.2f} seconds"
+        )
         gc.collect()
     images_to_video(f'outputs/{filename}', '20240224.mp4', 60)
-

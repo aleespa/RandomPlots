@@ -1,13 +1,9 @@
-import numpy as np
-import matplotlib.pylab as plt
-from matplotlib.colors import ListedColormap, LinearSegmentedColormap
-from numpy import sqrt, pi, cos, sin
-from scipy import interpolate
-from scipy.stats import norm
-from scipy.interpolate import interp1d
 import os
 import sys
-import itertools
+
+import matplotlib.pylab as plt
+import numpy as np
+from matplotlib.colors import ListedColormap
 
 filename = os.path.basename(sys.argv[0])[:-3]
 
@@ -35,9 +31,13 @@ for _ in range(25):
     distances = np.abs(Z1[..., np.newaxis] - R)
 closest_idx = np.argmin(distances, axis=-1)
 
-for i, colors in enumerate([[plt.cm.Greys(0.999), plt.cm.Greys(0.5)],
-                            [plt.cm.Greys(0.2), plt.cm.Greys(0.2)],
-                            [plt.cm.Greys(0.5), plt.cm.Greys(0.999)]]):
+for i, colors in enumerate(
+    [
+        [plt.cm.Greys(0.999), plt.cm.Greys(0.5)],
+        [plt.cm.Greys(0.2), plt.cm.Greys(0.2)],
+        [plt.cm.Greys(0.5), plt.cm.Greys(0.999)],
+    ]
+):
     cmap = ListedColormap(['k', 'k'] + colors)
     fig, _ = plt.subplots(figsize=(12, 12), dpi=400)
     ax = fig.add_axes([0, 0, 1, 1], facecolor='black')

@@ -1,7 +1,5 @@
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
 p = plt.axis('off')

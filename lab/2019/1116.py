@@ -1,6 +1,7 @@
+from math import cos, sin, pi, sqrt
+
 import matplotlib.pylab as plt
 import numpy as np
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 colors = ['#f12525', '#fe6d57', '#f34126', '#f95312', '#ffe7d3']
 

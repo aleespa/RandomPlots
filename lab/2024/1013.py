@@ -1,14 +1,14 @@
 import gc
-import sys
+import random
+import string
 
+import matplotlib.colors
+import matplotlib.pylab as plt
 import numpy as np
 import toml
 from loguru import logger
-import matplotlib.pylab as plt
-import matplotlib.colors
-import random, string
 
-from tools.technology import create_directory, clear_folder
+from tools.technology import create_directory
 
 colors = [
     "#3b3b3b",  # Dark gray
@@ -50,14 +50,10 @@ def generate():
     logger.info(f"Finished")
 
 
-def spiro(t: np.array,
-          k: float = 0.5,
-          l: float = 0.5):
-    return ((1 - k) * np.exp(1j * t)
-            + k * l * np.exp(- 1j * t * (1 - k) / k))
+def spiro(t: np.array, k: float = 0.5, l: float = 0.5):
+    return (1 - k) * np.exp(1j * t) + k * l * np.exp(-1j * t * (1 - k) / k)
 
 
 def plot_spiro(t, k, l, ax):
     s = spiro(100 * t, k, l)
-    ax.plot(s.real, s.imag, lw=3, alpha=0.9,
-            color=cmap(np.random.uniform()))
+    ax.plot(s.real, s.imag, lw=3, alpha=0.9, color=cmap(np.random.uniform()))

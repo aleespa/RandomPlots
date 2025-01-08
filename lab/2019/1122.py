@@ -1,8 +1,5 @@
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
-from mpl_toolkits.mplot3d import Axes3D
 
 for i in range(360):
     fig = plt.figure(figsize=(12, 12))

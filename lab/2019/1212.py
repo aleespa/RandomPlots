@@ -1,7 +1,5 @@
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 n = 15
 X, Y = np.random.uniform(-1, 1, n), np.random.uniform(-1, 1, n)

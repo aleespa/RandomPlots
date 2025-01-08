@@ -1,6 +1,5 @@
 import matplotlib.pylab as plt
 import numpy as np
-from matplotlib.colors import LinearSegmentedColormap
 
 path = '/mnt/c/Users/Alejandro Lopez/Pictures/RandomPlots/'
 
@@ -30,8 +29,13 @@ for f, i in enumerate(range(1, 2000, 5)):
         x = d[j] * np.cos(s[j] * t[i0:i])
         y = d[j] * np.sin(s[j] * t[i0:i])
         for m in range(len(x)):
-            plt.plot(x[m:m + 2], y[m:m + 2],
-                     zorder=j, color=plt.cm.cubehelix(m / len(x)), lw=3)
+            plt.plot(
+                x[m : m + 2],
+                y[m : m + 2],
+                zorder=j,
+                color=plt.cm.cubehelix(m / len(x)),
+                lw=3,
+            )
 
         plt.scatter(x[-1], y[-1], s=100, color=c[j], zorder=j + 1)
 
@@ -70,7 +74,13 @@ for f, i in enumerate(range(1, 2000, 5)):
             x = r * np.cos(a)
             y = r * np.sin(a)
             for m in range(len(x)):
-                plt.plot(x[m:m + 2], y[m:m + 2], zorder=j, color=plt.cm.gnuplot(m / len(x)), lw=3)
+                plt.plot(
+                    x[m : m + 2],
+                    y[m : m + 2],
+                    zorder=j,
+                    color=plt.cm.gnuplot(m / len(x)),
+                    lw=3,
+                )
 
             plt.scatter(x[-1], y[-1], s=100, color=c[j], zorder=j + 1)
     plt.xlim(-N - j - 5, N + j + 5)

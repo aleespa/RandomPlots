@@ -1,7 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 colors = ['#32886f', '#0b5a42', '#72b7a3', '#bbbbbb', '#aaaaaa'] * 100
 n = 0

@@ -1,14 +1,11 @@
 import gc
 from datetime import datetime
 
+import matplotlib.colors as mcolors
 import matplotlib.pylab as plt
 import numpy as np
-import matplotlib.colors as mcolors
-import toml
-from colorama.ansi import set_title
 from loguru import logger
 
-from tools.fractal import julia_java, julia_set_v2
 from tools.settings import Settings
 from tools.technology import create_directory, images_to_video, clear_folder
 
@@ -19,7 +16,8 @@ colors = [
     "#27ae60",  # Vibrant green
     "#2980b9",  # Vibrant blue
     "#8e44ad",  # Vibrant purple
-    '#001426']  # Red, Green, Blue, Yellow, Cyan
+    '#001426',
+]  # Red, Green, Blue, Yellow, Cyan
 
 cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors, N=1000)
 
@@ -31,7 +29,7 @@ def generate():
     clear_folder(f"outputs/{filename}")
     logger.info(f"Starting calculation")
 
-    n = 50
+    n = 120
     x = np.random.uniform(-1, 1, (n, n)) + np.random.uniform(-1, 1, (n, n)) * 1j
     v1 = np.random.uniform(-1, 1, n) + np.random.uniform(-1, 1, n) * 1j
     v2_ = np.random.uniform(-1, 1, n) + np.random.uniform(-1, 1, n) * 1j
@@ -44,25 +42,36 @@ def generate():
         ax.set_xticks([])
         ax.set_yticks([])
 
-        U = rotation_matrix(v1, v2, theta)
+        U = np.eye(n, dtype=complex)
+
+        U[:2, :2] = np.array(
+            [
+                [np.cos(theta), -1j * np.sin(theta)],
+                [np.cos(-theta), -1j * np.sin(-theta)],
+            ]
+        )
 
         # Rotate the matrix x using the unitary matrix U
         x_rotated = U @ x @ U.conj().T
 
         eigenvalues, eigenvectors = np.linalg.eig(x_rotated)
         norms = np.abs(eigenvalues)
-        ax.scatter(eigenvalues.real, eigenvalues.imag,
-                   color=[cmap(z / max(norms)) for z in norms],
-                   s=420, lw=0, alpha=0.85)
-        ax.set_xlim(-5, 5)
-        ax.set_ylim(-5, 5)
+        ax.scatter(
+            eigenvalues.real,
+            eigenvalues.imag,
+            color=[cmap(z / max(norms)) for z in norms],
+            s=420,
+            lw=0,
+            alpha=0.85,
+        )
+        ax.set_xlim(-7, 7)
+        ax.set_ylim(-7, 7)
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         logger.info(f"{time_string}.png Saved")
         fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor="#f4f0e7")
         plt.close()
         gc.collect()
-    images_to_video(f'outputs/{filename}',
-                    f'{filename}.mp4', 60)
+    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 60)
     logger.info(f"Finished")
 
 

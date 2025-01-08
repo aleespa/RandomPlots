@@ -26,12 +26,13 @@ def generate():
         t1 = time.time()
         ax.clear()
         for k, h in enumerate(np.linspace(-15, 25, n_waves)):
-            X = (h
-                 + 0.4 * sum(speed[i, 1, k] * np.cos(angles * speed[i, 0, k] + theta)
-                             for i in range(wavelengths)) * (
-                         0.5 * np.exp(-(angles + h - 10) ** 2) + 0.5 * np.exp(
-                     -(angles - h + 10) ** 2))
-                 )
+            X = h + 0.4 * sum(
+                speed[i, 1, k] * np.cos(angles * speed[i, 0, k] + theta)
+                for i in range(wavelengths)
+            ) * (
+                0.5 * np.exp(-((angles + h - 10) ** 2))
+                + 0.5 * np.exp(-((angles - h + 10) ** 2))
+            )
             ax.plot(angles, X, color='k', lw=3)
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         y1, y2 = 2, 12
@@ -43,10 +44,10 @@ def generate():
         ax.set_ylim(y1 - z, y2 + z)
         fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
         t2 = time.time()
-        logger.info(f"theta = {theta:.8f} "
-                    f"frame {str(i + 1).zfill(3)}/{n_frames} "
-                    f"time = {t2 - t1:.2f} seconds")
+        logger.info(
+            f"theta = {theta:.8f} "
+            f"frame {str(i + 1).zfill(3)}/{n_frames} "
+            f"time = {t2 - t1:.2f} seconds"
+        )
         gc.collect()
-    images_to_video(f'outputs/{filename}',
-                    f'{filename}.mp4', 60)
-
+    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 60)

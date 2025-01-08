@@ -1,5 +1,4 @@
 import gc
-import sys
 import time
 from datetime import datetime
 
@@ -8,7 +7,6 @@ import toml
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from tools.simulation import brownian_bridge
 from tools.technology import create_directory, clear_folder, images_to_video
 
 
@@ -26,11 +24,14 @@ def generate():
         ax.clear()
         t1 = time.time()
         for s in np.linspace(0, 2 * np.pi, 64):
-            ax.plot([t * np.cos(s),
-                     t * np.cos(t + s - (1 - t / (2 * np.pi)) * (np.pi / 2))],
-                    [t * np.sin(s),
-                     t * np.sin(t + s)],
-                    color='k')
+            ax.plot(
+                [
+                    t * np.cos(s),
+                    t * np.cos(t + s - (1 - t / (2 * np.pi)) * (np.pi / 2)),
+                ],
+                [t * np.sin(s), t * np.sin(t + s)],
+                color='k',
+            )
         y1, y2 = -7, 7
         x1, x2 = -7, 7
         w = x2 - x1
@@ -42,19 +43,21 @@ def generate():
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
         t2 = time.time()
-        logger.info(f"theta = {t:.8f} "
-                    f"frame {str(i + 1).zfill(3)}/{2 * n_frames} "
-                    f"time = {t2 - t1:.2f} seconds")
+        logger.info(
+            f"theta = {t:.8f} "
+            f"frame {str(i + 1).zfill(3)}/{2 * n_frames} "
+            f"time = {t2 - t1:.2f} seconds"
+        )
         gc.collect()
     for i, t in enumerate(angles[::-1]):
         ax.clear()
         t1 = time.time()
         for s in np.linspace(0, 2 * np.pi, 64):
-            ax.plot([t * np.cos(s),
-                     t * np.cos(t + s)],
-                    [t * np.sin(s),
-                     t * np.sin(t + s)],
-                    color='k')
+            ax.plot(
+                [t * np.cos(s), t * np.cos(t + s)],
+                [t * np.sin(s), t * np.sin(t + s)],
+                color='k',
+            )
         y1, y2 = -7, 7
         x1, x2 = -7, 7
         w = x2 - x1
@@ -66,10 +69,11 @@ def generate():
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
         t2 = time.time()
-        logger.info(f"theta = {t:.8f} "
-                    f"frame {str(n_frames + i + 1).zfill(3)}/{2 * n_frames} "
-                    f"time = {t2 - t1:.2f} seconds")
+        logger.info(
+            f"theta = {t:.8f} "
+            f"frame {str(n_frames + i + 1).zfill(3)}/{2 * n_frames} "
+            f"time = {t2 - t1:.2f} seconds"
+        )
         gc.collect()
 
-    images_to_video(f'outputs/{filename}',
-                    f'{filename}.mp4', 60)
+    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 60)

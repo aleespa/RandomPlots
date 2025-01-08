@@ -1,6 +1,5 @@
 import matplotlib.pylab as plt
 import numpy as np
-from math import cos, sin, log, tan, gamma, pi, exp
 
 colors = ['#3a3663', '#414977', '#476589', '#4c7c9a', '#58c0e7']
 p = plt.figure(figsize=(14, 14), facecolor='black', dpi=400)

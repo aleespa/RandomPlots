@@ -1,8 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-import seaborn as sns
-from math import cos, sin,log,tan,gamma,pi,exp,sqrt
 
 lws = np.random.uniform(1,4.5,100)
 colors = np.random.beta(0.5,0.5,100)

@@ -1,8 +1,7 @@
+from math import cos, sin
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
-from mpl_toolkits.mplot3d import Axes3D
 
 X, Y = [x * cos(x) for x in range(30000)], [x * sin(x**1.0001) for x in range(30000)]
 t = np.linspace(3000, 30000, 300)

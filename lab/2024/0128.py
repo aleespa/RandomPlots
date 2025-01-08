@@ -1,10 +1,9 @@
 import sys
 
-import numpy as np
-from scipy.spatial import ConvexHull
 import matplotlib
-
+import numpy as np
 from matplotlib import pyplot as plt
+from scipy.spatial import ConvexHull
 
 matplotlib.use('Agg')
 

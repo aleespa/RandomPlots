@@ -1,7 +1,7 @@
+from math import cos, sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 ran1 = np.random.beta(1.5, 1, 1000) * 40 * pi
 p = plt.figure(figsize=(13, 13), facecolor='black')

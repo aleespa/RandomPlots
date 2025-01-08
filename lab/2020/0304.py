@@ -1,24 +1,27 @@
+from math import sqrt
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from matplotlib import cm
-from scipy.stats import norm
-import seaborn as sns
-from math import cos, sin,log,tan,gamma,pi,exp,sqrt,cosh,sinh,tanh
-from cmath import exp as cexp, log as clog
-from mpl_toolkits.mplot3d import Axes3D
 
-p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
+p = plt.figure(figsize=(14, 14), facecolor='black', dpi=400)
 p = plt.axis('off')
 N = 14000
-X,Y = np.random.uniform(-1,1,N),np.random.uniform(-1,1,N)
-color = [sqrt(X[i]**2+Y[i]**2)*0.9 for i in range(N)]
-plt.scatter(X,Y,color=plt.cm.binary(color),s=8)
+X, Y = np.random.uniform(-1, 1, N), np.random.uniform(-1, 1, N)
+color = [sqrt(X[i] ** 2 + Y[i] ** 2) * 0.9 for i in range(N)]
+plt.scatter(X, Y, color=plt.cm.binary(color), s=8)
 
-for z in np.linspace(0.2,1) :
-    b = [sqrt(X[i]**2+Y[i]**2)<0.8*z and sqrt(X[i]**2+Y[i]**2)>0.74*z for i in range(N) ]
-    plt.scatter(X[b],Y[b],s=10,color=plt.cm.binary(z))
+for z in np.linspace(0.2, 1):
+    b = [
+        sqrt(X[i] ** 2 + Y[i] ** 2) < 0.8 * z and sqrt(X[i] ** 2 + Y[i] ** 2) > 0.74 * z
+        for i in range(N)
+    ]
+    plt.scatter(X[b], Y[b], s=10, color=plt.cm.binary(z))
 
-b = [sqrt(X[i]**2+Y[i]**2)<0.8 and sqrt(X[i]**2+Y[i]**2)>0.75 for i in range(N) ]
-plt.scatter(X[b],Y[b],s=10,color=plt.cm.spring(np.random.uniform(0,1,sum(b))))
-p = plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/04032020.PNG',facecolor='black')
+b = [
+    sqrt(X[i] ** 2 + Y[i] ** 2) < 0.8 and sqrt(X[i] ** 2 + Y[i] ** 2) > 0.75
+    for i in range(N)
+]
+plt.scatter(X[b], Y[b], s=10, color=plt.cm.spring(np.random.uniform(0, 1, sum(b))))
+p = plt.savefig(
+    f'C:/Users/Alejandro/Pictures/RandomPlots/04032020.PNG', facecolor='black'
+)

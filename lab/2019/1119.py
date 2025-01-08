@@ -1,7 +1,7 @@
+from math import sin, pi
+
 import matplotlib.pylab as plt
 import numpy as np
-import pandas as pd
-from math import cos, sin, log, tan, gamma, pi, exp, sqrt
 
 colors = ['#daf8e3', '#97ebdb', '#00c2c7', '#0086ad', '#005582']
 CC = np.random.choice(colors, 60)

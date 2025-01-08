@@ -21,7 +21,7 @@ def generate():
     y = np.linspace(-n / s, n / s, num=n).reshape((n, 1))
     z = np.tile(x, (n, 1)) + 1j * np.tile(y, (1, m))
 
-    c =  -0.4 + 0.6j
+    c = -0.4 + 0.6j
     index = np.full((n, m), True, dtype=bool)
     number_iterations = np.zeros((n, m))
 

@@ -1,9 +1,9 @@
-import numpy as np
-from scipy import integrate
-from matplotlib import pyplot as plt
 import os
 import sys
-import itertools
+
+import numpy as np
+from matplotlib import pyplot as plt
+
 filename = os.path.basename(sys.argv[0])[:-3]
 
 B = -1
@@ -27,7 +27,14 @@ for eloop in range(0, nloops):
         xlast = xnew[loop]
         ylast = ynew[loop]
 
-    plt.scatter(np.real(xnew), np.real(ynew), s=0.3, color=plt.cm.plasma(eloop/nloops), alpha=0.9, lw=0)
+    plt.scatter(
+        np.real(xnew),
+        np.real(ynew),
+        s=0.3,
+        color=plt.cm.plasma(eloop / nloops),
+        alpha=0.9,
+        lw=0,
+    )
     plt.xlim(-1.35, 2.1)
     plt.ylim(-2.1, 1.35)
 

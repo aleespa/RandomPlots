@@ -1,9 +1,8 @@
 from datetime import datetime
+from math import pi
 
 import matplotlib.pylab as plt
 import numpy as np
-from math import cos, sin, log, tan, gamma, pi, exp
-
 import toml
 from loguru import logger
 
