@@ -4,7 +4,7 @@ from math import sin, pi, sqrt
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.settings import Settings
+from tools.image_processing import ImageProcessingSettings
 from tools.technology import images_to_video
 
 
@@ -20,7 +20,7 @@ def brownian_bridge(n):
 colors = ['#daf8e3', '#97ebdb', '#00c2c7', '#0086ad', '#005582']
 
 
-def generate(settings=Settings()):
+def generate(settings=ImageProcessingSettings()):
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200)
     ax = fig.add_axes((0, 0, 1, 1), facecolor="#000000")
 

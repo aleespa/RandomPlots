@@ -5,13 +5,13 @@ import matplotlib.pylab as plt
 import numpy as np
 from loguru import logger
 
-from tools.settings import Settings
+from tools.image_processing import ImageProcessingSettings
 from tools.technology import images_to_video
 
 colors = ['#e26000', '#228B46', '#5092B8', '#ff9b9b', '#c9d06c', '#22ba5a', '#58c0e7']
 
 
-def generate(settings=Settings()):
+def generate(settings=ImageProcessingSettings()):
     fig, _ = plt.subplots(figsize=(12, 12), dpi=150)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
 

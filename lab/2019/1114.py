@@ -4,7 +4,7 @@ from datetime import datetime
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.settings import Settings
+from tools.image_processing import ImageProcessingSettings
 from tools.technology import images_to_video
 
 colors = (
@@ -24,7 +24,7 @@ def norm(x, t):
     return np.exp(-((x - t) ** 2) / 550) * (x < t)
 
 
-def generate(settings=Settings()):
+def generate(settings=ImageProcessingSettings()):
     u1 = np.random.uniform(0, 1, 200)
     u2 = np.random.uniform(0, 1, 200)
     for t in range(200):

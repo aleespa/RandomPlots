@@ -1,12 +1,12 @@
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.settings import Settings
+from tools.image_processing import ImageProcessingSettings
 
 colors = ['#3a3663', '#414977', '#476589', '#4c7c9a', '#58c0e7']
 
 
-def generate(settings=Settings()):
+def generate(settings=ImageProcessingSettings()):
     fig, _ = plt.subplots(figsize=(12, 12), dpi=150)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     for _ in range(100):

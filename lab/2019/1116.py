@@ -3,7 +3,7 @@ from math import cos, sin, pi, sqrt
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.settings import Settings
+from tools.image_processing import ImageProcessingSettings
 
 colors = ['#f12525', '#fe6d57', '#f34126', '#f95312', '#ffe7d3']
 
@@ -20,7 +20,7 @@ def circle(t, r, n, z, ax):
         )
 
 
-def generate(settings=Settings()):
+def generate(settings=ImageProcessingSettings()):
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200)
     ax = fig.add_axes((0, 0, 1, 1), facecolor="#000000")
     ax.set_xlim(-1, 1)

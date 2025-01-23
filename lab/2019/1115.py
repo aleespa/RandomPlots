@@ -3,12 +3,12 @@ from math import sqrt
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.settings import Settings
+from tools.image_processing import ImageProcessingSettings
 
 colors = ['#ff9b9b', '#f8ff90', '#a9ff8f', '#22ba5a', '#58c0e7']
 
 
-def generate(settings=Settings()):
+def generate(settings=ImageProcessingSettings()):
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200)
     ax = fig.add_axes((0, 0, 1, 1), facecolor="#000000")
     ax.set_xlim(-1, 1)

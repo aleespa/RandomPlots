@@ -6,7 +6,7 @@ import matplotlib.pylab as plt
 import numpy as np
 from loguru import logger
 
-from tools.settings import Settings
+from tools.image_processing import ImageProcessingSettings
 from tools.technology import create_directory, images_to_video, clear_folder
 
 colors = [
@@ -23,7 +23,7 @@ cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors, N=1000)
 
 
 def generate():
-    settings = Settings()
+    settings = ImageProcessingSettings()
     filename = settings.filename
     create_directory(f"outputs/{filename}")
     clear_folder(f"outputs/{filename}")
