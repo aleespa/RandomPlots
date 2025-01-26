@@ -1,10 +1,11 @@
-import timeit
-import os
+import csv
 import importlib
+import os
+import timeit
+from datetime import datetime
+
 import numpy as np
 from loguru import logger
-import csv
-from datetime import datetime
 
 # Directory containing the figures modules
 figures_dir = "figures"
@@ -30,7 +31,7 @@ if not file_exists:
 
 # Start benchmarking
 for script in scripts:
-    if script != 'exponential_sum':
+    if script != 'prism':
         continue
     try:
         module = importlib.import_module(f"figures.{script}")

@@ -1,6 +1,6 @@
-import os
-import importlib.util
 import base64
+import importlib.util
+import os
 
 import numpy as np
 from loguru import logger
@@ -36,6 +36,9 @@ def save_image(base64_str, output_path):
 
 # Iterate over all Python scripts in the figures directory
 for script_file in os.listdir(FIGURES_DIR):
+
+    if script_file != 'gem.py':
+        continue
     script_path = os.path.join(FIGURES_DIR, script_file)
 
     # Skip non-Python files

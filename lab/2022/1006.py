@@ -69,7 +69,7 @@ def plot_1():
             )
         ax.set_xlim(-8 + 2 - 0.1, 8 + 2.1)
         ax.set_ylim(-8 + 2 - 0.1, 8 + 2.1)
-        fig.savefig(f'../outputs/{filename}/plot{frame}.png')
+        fig.savefig(f'../../outputs/{filename}/plot{frame}.png')
         plt.close()
         plt.cla()
         plt.clf()
@@ -229,7 +229,7 @@ def plot_3():
         ax.plot([-6, -6, 6, 6, -6], [-6, 6, 6, -6, -6], color='w', lw=20, zorder=5)
         ax.set_xlim(-6, 6)
         ax.set_ylim(-6, 6)
-    fig.savefig(f'../outputs/{filename}_v3.png', facecolor='k')
+    fig.savefig(f'../../outputs/{filename}_v3.png', facecolor='k')
     plt.close()
     plt.cla()
     plt.clf()
@@ -244,5 +244,5 @@ class Frame:
 
 
 if __name__ == '__main__':
-    # plot_1()
-    plot_3()
+    plot_1()
+    # plot_3()
