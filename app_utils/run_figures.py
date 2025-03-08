@@ -1,6 +1,7 @@
 import base64
 import importlib.util
 import os
+import traceback
 
 import numpy as np
 from loguru import logger
@@ -9,7 +10,7 @@ from loguru import logger
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 FIGURES_DIR = os.path.join(ROOT_DIR, "figures")
 OUTPUTS_DIR = os.path.join(ROOT_DIR, "outputs")
-RUNS_PER_SCRIPT = 10
+RUNS_PER_SCRIPT = 100
 
 # Ensure the output directory exists
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
@@ -37,7 +38,7 @@ def save_image(base64_str, output_path):
 # Iterate over all Python scripts in the figures directory
 for script_file in os.listdir(FIGURES_DIR):
 
-    if script_file != 'gem.py':
+    if script_file != 'cubism.py':
         continue
     script_path = os.path.join(FIGURES_DIR, script_file)
 
@@ -81,7 +82,8 @@ for script_file in os.listdir(FIGURES_DIR):
             output_path = os.path.join(script_output_dir, f"image_light_{i + 1:03d}.jpg")
             save_image(base64_str, output_path)
         except Exception as e:
-            logger.info(f"Error running `create_image` in {script_file}: {e}")
+            tb = traceback.format_exc()
+            logger.info(f"Error running `create_image` in {script_file}\n{tb}")
             continue
 
     logger.info(f"Finished processing {script_file}")

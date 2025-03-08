@@ -10,15 +10,21 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     rng = np.random.default_rng(seed)
 
     dark_background_colormaps = [
+         'hsv',
         'Spectral', 'viridis', 'plasma', 'inferno', 'cividis',
         'YlOrRd', 'RdPu', 'spring', 'summer', 'autumn', 'winter',
         'cool', 'Wistia', 'hot', 'afmhot', 'copper', 'gist_heat',
-        'binary', 'gist_yarg', 'gist_gray', 'gray', 'bone', 'pink'
+        'binary', 'gist_yarg', 'gist_gray', 'gray', 'bone', 'pink',
+        'Greys', 'Purples', 'Blues', 'Greens', 'Oranges', 'Reds',
+        'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
+        'GnBu', 'PuBu', 'YlGnBu', 'PuBuGn', 'BuGn', 'YlGn'
     ]
 
     light_background_colormaps = [
         'gist_heat', 'binary', 'gist_yarg', 'gist_gray', 'gray',
-        'bone', 'pink'
+        'bone', 'pink',
+        'YlOrBr', 'YlOrRd', 'OrRd', 'PuRd', 'RdPu', 'BuPu',
+        'GnBu', 'PuBu', 'PuBuGn', 'BuGn', 'YlGn'
     ]
     if dark_mode:
         colormaps = dark_background_colormaps
@@ -26,40 +32,22 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
         colormaps = light_background_colormaps
 
     colormap = rng.choice(colormaps)
-    c = rng.uniform(-0.02, 0.02)
-    s = -0.99
-
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
     fig.patch.set_facecolor(bg_color)
+    n = rng.integers(4, 12)
+    i = rng.integers(4, 8)
+    k = rng.integers(50, 70)
+    theta = np.linspace(0, 2 * np.pi, i)
+    for r in np.linspace(0, 1, n):
+        for t in np.linspace(0, np.pi, k):
+            plt.plot(
+                r * np.cos(theta + t),
+                r * np.sin(theta + t),
+                color=mpl.colormaps[colormap](t / np.pi),
+                alpha=0.8,
+                lw=(r + 0.1),
+            )
 
-    n_loops = 80
-    n_points = 1000
-    r = rng.normal(0, 1, (2, n_loops))
-    x = np.zeros((n_points, n_loops), dtype=np.complex64)
-    y = np.zeros((n_points, n_loops), dtype=np.complex64)
-    x[0, :] = 1 + r[1, :] - c * np.abs(r[0, :])
-    y[0, :] = s * r[0, :]
-
-    for j in range(1, n_points):
-        x[j, :] = 1 + y[j - 1, :] - c * np.abs(x[j - 1, :])
-        y[j, :] = s * x[j - 1, :]
-
-    x_flat = x.flatten()
-    y_flat = y.flatten()
-    colors = np.repeat(mpl.colormaps[colormap](np.linspace(0, 1, n_loops)), n_points, axis=0)
-
-    # Single scatter call
-    ax.scatter(
-        x_flat.real,
-        y_flat.real,
-        s=2.5,
-        color=colors,
-        alpha=0.90,
-        lw=0,
-    )
-
-    ax.set_xlim(-1.4, 2.4)
-    ax.set_ylim(-2.4, 1.4)
     ax.axis('off')
     buffer = io.BytesIO()
     plt.savefig(buffer, format='jpg', bbox_inches='tight', pad_inches=0)
@@ -74,3 +62,9 @@ def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
     plt.close()
     return image_data
 
+
+def brownian_bridge(rng, n):
+    t = np.linspace(0, 1, n)
+    dW = rng.normal(size=n) * np.sqrt(1 / n)
+    W = np.cumsum(dW)
+    return W - t * W[-1]
