@@ -31,7 +31,7 @@ if not file_exists:
 
 # Start benchmarking
 for script in scripts:
-    if script != 'cubism':
+    if script != 'super':
         continue
     try:
         module = importlib.import_module(f"figures.{script}")
