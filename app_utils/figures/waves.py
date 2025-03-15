@@ -1,25 +1,15 @@
-import base64
 import io
 
 import matplotlib as mpl
-import matplotlib.colors as mcolors
 import numpy as np
 from Colors.ColorSelector import ColorSelector
-from matplotlib import colormaps as cmaps
 from matplotlib import pyplot as plt
-
-original1 = mcolors.LinearSegmentedColormap.from_list(
-    'original1',
-    ['#96ceb4', '#ffeead', '#ff6f69', '#ffcc5c', '#88d8b0','#f7f4a3', '#7fccec', '#6a81d9', '#a479c9', '#dfdfdf']
-)
-cmaps.register(cmap=original1)
 
 
 def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     rng = np.random.default_rng(seed)
 
     dark_background_colormaps = [
-        'original1',
         'Spectral', 'viridis', 'plasma', 'inferno', 'cividis',
         'YlOrRd', 'RdPu', 'spring', 'summer', 'autumn', 'winter',
         'cool', 'Wistia', 'hot', 'afmhot', 'copper', 'gist_heat',
@@ -66,16 +56,14 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     return buffer
 
 
-def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
-    buffer = generate_plot(seed, bg_color, dark_mode)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
-    plt.close()
-    return image_data
-
-
 def brownian_bridge(rng, n):
     t = np.linspace(0, 1, n)
-    dW = rng.normal(size=n) * np.sqrt(1/n)
+    dW = rng.normal(size=n) * np.sqrt(1 / n)
     W = np.cumsum(dW)
     return W - t * W[-1]
 
+
+def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
+    buffer = generate_plot(seed, bg_color, dark_mode)
+    plt.close()
+    return buffer.getvalue()

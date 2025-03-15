@@ -1,13 +1,11 @@
-import base64
 import io
 
+import matplotlib as mpl
 import numpy as np
 from matplotlib import pyplot as plt
-import matplotlib as mpl
-import gc
 
 
-def generate_plot(seed, dark_mode, bg_color):
+def generate_plot(seed, bg_color, dark_mode):
     rng = np.random.default_rng(seed)
 
     dark_background_colormaps = [
@@ -49,9 +47,7 @@ def generate_plot(seed, dark_mode, bg_color):
     return buffer
 
 
-def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)) -> str:
-    buffer = generate_plot(seed, dark_mode, bg_color)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
+    buffer = generate_plot(seed, bg_color, dark_mode)
     plt.close()
-    gc.collect()
-    return image_data
+    return buffer.getvalue()

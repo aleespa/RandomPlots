@@ -1,4 +1,3 @@
-import base64
 import importlib.util
 import os
 import traceback
@@ -10,7 +9,7 @@ from loguru import logger
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 FIGURES_DIR = os.path.join(ROOT_DIR, "figures")
 OUTPUTS_DIR = os.path.join(ROOT_DIR, "outputs")
-RUNS_PER_SCRIPT = 100
+RUNS_PER_SCRIPT = 10
 
 # Ensure the output directory exists
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
@@ -28,7 +27,7 @@ def load_create_image_function(script_path):
 def save_image(base64_str, output_path):
     """Decode the Base64 string and save it as a binary image file."""
     try:
-        image_data = base64.b64decode(base64_str)
+        image_data = base64_str
         with open(output_path, "wb") as f:
             f.write(image_data)
     except Exception as e:
@@ -38,8 +37,8 @@ def save_image(base64_str, output_path):
 # Iterate over all Python scripts in the figures directory
 for script_file in os.listdir(FIGURES_DIR):
 
-    if script_file != 'bw.py':
-        continue
+    # if script_file != 'random_eigen.py':
+    #     continue
     script_path = os.path.join(FIGURES_DIR, script_file)
 
     # Skip non-Python files
@@ -61,7 +60,7 @@ for script_file in os.listdir(FIGURES_DIR):
     for i in range(RUNS_PER_SCRIPT):
         try:
             base64_str = create_image(np.random.randint(0, 1000000), True, (0, 13/255, 30/255))
-            if not isinstance(base64_str, str):
+            if not isinstance(base64_str, bytes):
                 logger.info(f"Error: `create_image` in {script_file} did not return a Base64 string. Skipping this run.")
                 continue
 
@@ -74,7 +73,7 @@ for script_file in os.listdir(FIGURES_DIR):
     for i in range(RUNS_PER_SCRIPT):
         try:
             base64_str = create_image(np.random.randint(0, 1000000), False, (244/255, 240/255, 231/255))
-            if not isinstance(base64_str, str):
+            if not isinstance(base64_str, bytes):
                 logger.info(
                     f"Error: `create_image` in {script_file} did not return a Base64 string. Skipping this run.")
                 continue

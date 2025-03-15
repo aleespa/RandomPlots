@@ -1,12 +1,11 @@
-import base64
 import io
 
+import matplotlib as mpl
 import numpy as np
 from matplotlib import pyplot as plt
-import matplotlib as mpl
 
 
-def generate_plot(seed, dark_mode, bg_color):
+def generate_plot(seed, bg_color, dark_mode):
     rng = np.random.default_rng(seed)
 
     dark_background_colormaps = [
@@ -17,8 +16,7 @@ def generate_plot(seed, dark_mode, bg_color):
     ]
 
     light_background_colormaps = [
-        'gist_heat', 'binary', 'gist_yarg', 'gist_gray', 'gray',
-        'bone', 'pink'
+        'gnuplot', 'binary', 'gist_heat', 'rainbow'
     ]
     if dark_mode:
         colormaps = dark_background_colormaps
@@ -33,7 +31,7 @@ def generate_plot(seed, dark_mode, bg_color):
     sides = np.linspace(0, 2 * np.pi, n_sides)
 
     colormap = rng.choice(colormaps)
-    norm, scale = rng.integers(10, 25), rng.integers(30, 60)
+    norm, scale = rng.integers(10, 25), rng.integers(30, 120)
     for k in np.linspace(0, 30, 100):
         ax.plot(k * np.cos(sides) + np.cos(k + 1),
                 k * np.sin(sides) + np.sin(k - 1),
@@ -53,8 +51,7 @@ def generate_plot(seed, dark_mode, bg_color):
     return buffer
 
 
-def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)) -> str:
-    buffer = generate_plot(seed, dark_mode, bg_color)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
+    buffer = generate_plot(seed, bg_color, dark_mode)
     plt.close()
-    return image_data
+    return buffer.getvalue()

@@ -1,8 +1,8 @@
+import io
+
+import matplotlib.colors as mcolors
 import numpy as np
 from matplotlib import pyplot as plt
-import io
-import base64
-import matplotlib.colors as mcolors
 
 colors_dark = [
     "#8488d7",
@@ -23,18 +23,16 @@ colors_light = [
 cmap_light = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors_light, N=250)
 
 
-def generate_plot(seed=0, dark=False, color=(0, 0, 0)):
+def generate_plot(seed, bg_color, dark_mode):
     rng = np.random.default_rng(seed)
     # Generate data
     t = np.linspace(0, 2 * np.pi, 5000)
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
-
-    # Set background color
-    fig.patch.set_facecolor(color)
+    fig.patch.set_facecolor(bg_color)
     n_spirographs = rng.integers(4, 5)
     for _ in range(n_spirographs):
         a, b, c, d = generate_k_l(rng)
-        if dark:
+        if dark_mode:
             line_color = cmap_dark(rng.uniform())
         else:
             line_color = cmap_light(rng.uniform())
@@ -87,9 +85,8 @@ def generate_k_l(rng):
             return a, b, c, d
 
 
-def create_image(seed=0, dark_mode=True, color=(0, 0, 0)):
-    buffer = generate_plot(seed, dark_mode, color)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
+    buffer = generate_plot(seed, bg_color, dark_mode)
     plt.close()
-    return image_data
+    return buffer.getvalue()
 

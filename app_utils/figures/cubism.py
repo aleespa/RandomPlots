@@ -1,4 +1,3 @@
-import base64
 import io
 
 import matplotlib as mpl
@@ -37,10 +36,10 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     colormap = rng.choice(colormaps)
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
     fig.patch.set_facecolor(bg_color)
-    n = rng.integers(10, 60)
+    n = rng.integers(10, 50)
     z = rng.uniform(-1, 1, (6, n))
     cs = ColorSelector(mpl.colormaps[colormap], dark_mode)
-    alpha_value = min(0.85, max(20 / n, 0.5))
+    alpha_value = min(0.65, max(20 / n, 0.2))
     for i in range(n):
         plt.fill_between(
             [z[0, i], z[1, i]],
@@ -62,9 +61,8 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
 
 def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
     buffer = generate_plot(seed, bg_color, dark_mode)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
     plt.close()
-    return image_data
+    return buffer.getvalue()
 
 
 def brownian_bridge(rng, n):

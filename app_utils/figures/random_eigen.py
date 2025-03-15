@@ -1,49 +1,39 @@
 import io
-import base64
 
 import numpy as np
 from matplotlib import pyplot as plt
 
 
 def vectorized_sample_complex_pairs(rng, sample_size: int):
-    # Sample 2n random angles from 0 to 2*pi (2 for each pair)
-    thetas = rng.uniform(0, 2 * np.pi, size=3 * sample_size)
-
-    # Compute complex numbers
-    zs = np.exp(1j * thetas)
-
-    # Reshape to get n pairs
-    pairs = zs.reshape(sample_size, 3)
-
-    return pairs
+    thetas = rng.uniform(0, 2 * np.pi, size=(sample_size, 3))
+    return np.exp(1j * thetas)
 
 
-def calculate_matrix(t: np.array,
-                     r1, r2, r3):
-    return np.array([[1j, -r3, -t[2], r1, 1j],
-                     [-1, r3, 0, 1, 1],
-                     [t[1], r2, -1j, t[2], 1j],
-                     [1j, t[0], 1j, 1j, 1j],
-                     [1j, 2, -1, -1, 1j]])
+def calculate_matrix(m,
+                     t: np.array,
+                     r,
+                     indexes):
+    m[indexes[0]] = t[0]
+    m[indexes[1]] = t[1]
+    m[indexes[2]] = t[2]
+    return m
 
 
 def calculate_eigenvalues(x: np.array):
     return np.linalg.eigvals(x)
 
 
-def generate_plot(x, y, dark_mode=False, bg_color=(0, 0, 0)):
+def generate_plot(z, dark_mode=False, bg_color=(0, 0, 0)):
     # Create a figure with adjusted layout
     fig, ax = plt.subplots(figsize=(12, 12), dpi=100, tight_layout=True)
-    if dark_mode:
-        fig.patch.set_facecolor(bg_color)
-    else:
-        fig.patch.set_facecolor(bg_color)
+    fig.patch.set_facecolor(bg_color)
     # Create scatter plot without axes
-    ax.scatter(x, y, s=1,
+    ax.scatter(z.real, z.imag, s=2,
                color='w' if dark_mode else "k",
                lw=0, alpha=0.9)
-    ax.set_xlim(-3, 3)
-    ax.set_ylim(-2.5, 3.5)
+    x_center, y_center = (np.mean(z.real), np.mean(z.imag))
+    ax.set_xlim(x_center - 8, x_center + 8)
+    ax.set_ylim(y_center - 8, y_center + 8)
 
     # Remove axes lines and labels
     ax.axis('off')
@@ -60,13 +50,13 @@ def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
     rng = np.random.default_rng(seed)
     sample_size = 10000
     sample = vectorized_sample_complex_pairs(rng, sample_size)
-    r1 = rng.uniform(-1, 1) + rng.uniform(-1, 1) * 1j
-    r2 = rng.uniform(-1, 1) + rng.uniform(-1, 1) * 1j
-    r3 = rng.uniform(-1, 1) + rng.uniform(-1, 1) * 1j
-    Z = np.array([calculate_eigenvalues(calculate_matrix(t, r1, r2, r3)) for t in sample]).ravel()
-    x = Z.real
-    y = Z.imag
-    buffer = generate_plot(x, y, dark_mode, bg_color)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    r = rng.uniform(-1, 1, 3) + rng.uniform(-1, 1, 3) * 1j
+    n = rng.integers(3, 12)
+    m = rng.integers(-1, 2, (n, n)) + 1j * rng.integers(-1, 2, (n, n))
+    indexes = rng.integers(0, n, (3, 2))
+
+    modified_matrices = np.array([calculate_matrix(m.copy(), t, r, indexes) for t in sample])
+    Z = np.linalg.eigvals(modified_matrices).ravel()
+    buffer = generate_plot(Z, dark_mode, bg_color)
     plt.close()
-    return image_data
+    return buffer.getvalue()

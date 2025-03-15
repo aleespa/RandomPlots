@@ -1,4 +1,3 @@
-import base64
 import io
 
 import matplotlib as mpl
@@ -70,7 +69,5 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
 
 def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
     buffer = generate_plot(seed, bg_color, dark_mode)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
     plt.close()
-    return image_data
-
+    return buffer.getvalue()

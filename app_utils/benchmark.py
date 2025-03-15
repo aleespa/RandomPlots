@@ -31,12 +31,12 @@ if not file_exists:
 
 # Start benchmarking
 for script in scripts:
-    if script != 'bw':
-        continue
+    # if script != 'noise':
+    #     continue
     try:
         module = importlib.import_module(f"figures.{script}")
         logger.info(f"Benchmarking script: {script}")
-        n_runs = 20
+        n_runs = 100
 
         # Check if the create_image function exists
         if not hasattr(module, "create_image"):

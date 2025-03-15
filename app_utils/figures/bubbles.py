@@ -1,4 +1,3 @@
-import base64
 import io
 
 import matplotlib as mpl
@@ -74,15 +73,15 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     return buffer
 
 
-def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
-    buffer = generate_plot(seed, bg_color, dark_mode)
-    image_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
-    plt.close()
-    return image_data
-
-
 def brownian_bridge(rng, n):
     t = np.linspace(0, 1, n)
     dW = rng.normal(size=n) * np.sqrt(1 / n)
     W = np.cumsum(dW)
     return W - t * W[-1]
+
+def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
+    buffer = generate_plot(seed, bg_color, dark_mode)
+    plt.close()
+    return buffer.getvalue()
+
+

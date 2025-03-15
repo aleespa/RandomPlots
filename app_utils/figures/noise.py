@@ -140,7 +140,7 @@ class Sin:
     def __init__(self, e, rng):
         self.e = e
         self.phase = rng.uniform(0, math.pi)
-        self.freq = rng.uniform(1.0, 6.0)
+        self.freq = rng.uniform(2.0, 21.0)
 
     def __repr__(self):
         return f'Sin({self.phase:.2f}+{self.freq:.2f}*{self.e})'
@@ -199,15 +199,15 @@ class Mix:
 operators = [
     VariableX,
     VariableY,
-    # Constant,
+    Constant,
     Sum,
-    Product,
-    Mod,
-    Well,
-    Tent,
+    # Product,
+    # Mod,
+    # Well,
+    # Tent,
     Sin,
     # Level,
-    Mix,
+    # Mix,
 ]
 operators0 = [op for op in operators if op.arity == 0]
 operators1 = [op for op in operators if op.arity > 0]
@@ -233,7 +233,7 @@ def generate(k, rng):
 
 def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     rng = np.random.default_rng(seed)
-    size = 1000
+    size = 512
     fig = plt.figure(figsize=(12, 12), dpi=100)
     ax = fig.add_axes((0, 0, 1, 1))
 
@@ -242,7 +242,7 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
         np.linspace(-1, 1, size, dtype=np.float32)
     )
 
-    k = 8
+    k = 25
     expr = generate(k, rng)
     r, g, b = expr.eval(x, y)
 
