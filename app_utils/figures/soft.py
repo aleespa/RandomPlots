@@ -24,7 +24,7 @@ class VariableX:
         return "x"
 
     def eval(self, X, Y):
-        return (X, X, X)
+        return X, X, X
 
 
 class VariableY:
@@ -37,7 +37,7 @@ class VariableY:
         return "y"
 
     def eval(self, X, Y):
-        return (Y, Y, Y)
+        return Y, Y, Y
 
 
 class Constant:
@@ -141,7 +141,7 @@ class Sin:
     def __init__(self, e, rng):
         self.e = e
         self.phase = rng.uniform(0, math.pi)
-        self.freq = rng.uniform(1.0, 6.0)
+        self.freq = rng.uniform(1.0, 12.0)
 
     def __repr__(self):
         return f'Sin({self.phase:.2f}+{self.freq:.2f}*{self.e})'
@@ -203,10 +203,10 @@ operators = [
     Constant,
     Sum,
     Product,
-    Mod,
-    Well,
-    Tent,
-    Sin,
+    # Mod,
+    # Well,
+    # Tent,
+    # Sin,
     Level,
     Mix,
 ]
@@ -234,7 +234,7 @@ def generate(k, rng):
 
 def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     rng = np.random.default_rng(seed)
-    size = 512
+    size = 1024
     fig = plt.figure(figsize=(12, 12), dpi=100)
     ax = fig.add_axes((0, 0, 1, 1))
 
@@ -243,7 +243,7 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
         np.linspace(-1, 1, size, dtype=np.float32)
     )
 
-    k = rng.integers(15, 40)
+    k = rng.integers(8, 15)
     expr = generate(k, rng)
     r, g, b = expr.eval(x, y)
 
@@ -255,7 +255,7 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     np.divide(img, 2, out=img)
 
     ax.imshow(img)
-    ax.axis('off')
+    ax.axis("off")
     buffer = io.BytesIO()
     plt.savefig(buffer, format='jpg', bbox_inches='tight', pad_inches=0)
     buffer.seek(0)

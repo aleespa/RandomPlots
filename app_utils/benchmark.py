@@ -31,7 +31,7 @@ if not file_exists:
 
 # Start benchmarking
 for script in scripts:
-    if script != 'super':
+    if script != 'bw':
         continue
     try:
         module = importlib.import_module(f"figures.{script}")

@@ -38,7 +38,7 @@ def save_image(base64_str, output_path):
 # Iterate over all Python scripts in the figures directory
 for script_file in os.listdir(FIGURES_DIR):
 
-    if script_file != 'super.py':
+    if script_file != 'bw.py':
         continue
     script_path = os.path.join(FIGURES_DIR, script_file)
 

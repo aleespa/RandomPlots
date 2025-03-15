@@ -200,14 +200,14 @@ class Mix:
 operators = [
     VariableX,
     VariableY,
-    Constant,
+    # Constant,
     Sum,
     Product,
     Mod,
     Well,
     Tent,
     Sin,
-    Level,
+    # Level,
     Mix,
 ]
 operators0 = [op for op in operators if op.arity == 0]
@@ -234,7 +234,7 @@ def generate(k, rng):
 
 def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     rng = np.random.default_rng(seed)
-    size = 512
+    size = 1000
     fig = plt.figure(figsize=(12, 12), dpi=100)
     ax = fig.add_axes((0, 0, 1, 1))
 
@@ -243,7 +243,7 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
         np.linspace(-1, 1, size, dtype=np.float32)
     )
 
-    k = rng.integers(15, 40)
+    k = 8
     expr = generate(k, rng)
     r, g, b = expr.eval(x, y)
 
