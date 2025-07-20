@@ -8,7 +8,7 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from numba import njit
 
-from tools.technology import images_to_video
+from common.technology import images_to_video
 
 matplotlib.use('Agg')
 import os

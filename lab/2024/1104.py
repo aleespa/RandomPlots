@@ -7,7 +7,7 @@ import numpy as np
 import toml
 from loguru import logger
 
-from tools.technology import create_directory, images_to_video
+from common.technology import create_directory, images_to_video
 
 colors = ["#f4f0e7", "#000007", "#EB251F", '#ffffff']  # Red, Green, Blue, Yellow, Cyan
 

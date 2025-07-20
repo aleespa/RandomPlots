@@ -140,7 +140,7 @@ class Sin:
     def __init__(self, e, rng):
         self.e = e
         self.phase = rng.uniform(0, math.pi)
-        self.freq = rng.uniform(1.0, 12.0)
+        self.freq = rng.uniform(2, 5)
 
     def __repr__(self):
         return f'Sin({self.phase:.2f}+{self.freq:.2f}*{self.e})'
@@ -205,9 +205,9 @@ operators = [
     # Mod,
     # Well,
     # Tent,
-    # Sin,
-    Level,
-    Mix,
+    Sin,
+    # Level,
+    # Mix,
 ]
 operators0 = [op for op in operators if op.arity == 0]
 operators1 = [op for op in operators if op.arity > 0]
@@ -242,7 +242,7 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
         np.linspace(-1, 1, size, dtype=np.float32)
     )
 
-    k = rng.integers(8, 15)
+    k = 10
     expr = generate(k, rng)
     r, g, b = expr.eval(x, y)
 
@@ -253,6 +253,7 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     np.clip(img, 0, 2, out=img)
     np.divide(img, 2, out=img)
 
+    # soft_img = gaussian_filter(img, sigma=1)
     ax.imshow(img)
     ax.axis("off")
     buffer = io.BytesIO()

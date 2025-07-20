@@ -1,7 +1,7 @@
 import numpy as np
 from matplotlib import pyplot as plt
 
-from tools.image_processing import ImageProcessingSettings
+from common.image_processing import ImageProcessingSettings
 
 
 def generate(settings=ImageProcessingSettings(5)):

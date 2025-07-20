@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.tri import Triangulation
 
-from tools.image_processing import ImageProcessingSettings
+from common.image_processing import ImageProcessingSettings
 
 
 def generate(settings=ImageProcessingSettings(1)):

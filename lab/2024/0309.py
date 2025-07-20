@@ -7,7 +7,7 @@ import numpy as np
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from tools.technology import clear_folder, create_directory, images_to_video
+from common.technology import clear_folder, create_directory, images_to_video
 
 
 def generate():

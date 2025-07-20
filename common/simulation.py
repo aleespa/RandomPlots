@@ -2,6 +2,7 @@ from typing import Union
 
 import numpy as np
 
+
 def gaussian_random_walk(
         n_steps: int,
         dimensions: int = 1,

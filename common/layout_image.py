@@ -6,7 +6,7 @@ import toml
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from tools.technology import create_directory, clear_folder
+from common.technology import create_directory, clear_folder
 
 
 def generate():

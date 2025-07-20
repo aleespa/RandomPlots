@@ -5,7 +5,7 @@ import matplotlib.colors as mcolors
 import numpy as np
 from matplotlib import pyplot as plt
 
-from tools.image_processing import ImageProcessingSettings
+from common.image_processing import ImageProcessingSettings
 
 colors_dark = [
     "#8488d7",
@@ -80,7 +80,6 @@ def plot_spiro(t, a, b, c, d, ax, color):
     s = spiro(scaled_t, a / b, c / d)
     ax.plot(s.real, s.imag, lw=3.5, alpha=0.9,
             color=color)
-
 
 def generate_k_l(rng):
     while True:

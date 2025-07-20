@@ -3,7 +3,7 @@ from math import sqrt
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.image_processing import ImageProcessingSettings
+from common.image_processing import ImageProcessingSettings
 
 colors = ['#ff9b9b', '#f8ff90', '#a9ff8f', '#22ba5a', '#58c0e7']
 

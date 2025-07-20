@@ -1,7 +1,7 @@
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.image_processing import ImageProcessingSettings
+from common.image_processing import ImageProcessingSettings
 
 colors = ['#3a3663', '#414977', '#476589', '#4c7c9a', '#58c0e7']
 

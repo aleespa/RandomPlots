@@ -7,7 +7,7 @@ import numpy as np
 import toml
 from loguru import logger
 
-from tools.technology import create_directory, images_to_video, clear_folder
+from common.technology import create_directory, images_to_video, clear_folder
 
 t = np.random.uniform(0, 2 * np.pi, 580)
 colors = [

@@ -6,7 +6,7 @@ import matplotlib.pylab as plt
 import numpy as np
 import toml
 
-from tools.technology import create_directory
+from common.technology import create_directory
 
 
 def pol(n):

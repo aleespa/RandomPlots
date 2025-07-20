@@ -4,8 +4,8 @@ from math import sin, pi, sqrt
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.image_processing import ImageProcessingSettings
-from tools.technology import images_to_video
+from common.image_processing import ImageProcessingSettings
+from common.technology import images_to_video
 
 
 def brownian_bridge(n):

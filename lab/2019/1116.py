@@ -3,7 +3,7 @@ from math import cos, sin, pi, sqrt
 import matplotlib.pylab as plt
 import numpy as np
 
-from tools.image_processing import ImageProcessingSettings
+from common.image_processing import ImageProcessingSettings
 
 colors = ['#f12525', '#fe6d57', '#f34126', '#f95312', '#ffe7d3']
 

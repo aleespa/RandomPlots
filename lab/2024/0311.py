@@ -7,8 +7,8 @@ import numpy as np
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from tools.simulation import brownian_bridge
-from tools.technology import create_directory, clear_folder, images_to_video
+from common.simulation import brownian_bridge
+from common.technology import create_directory, clear_folder, images_to_video
 
 
 def generate():

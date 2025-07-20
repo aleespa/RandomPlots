@@ -6,8 +6,8 @@ import matplotlib.pylab as plt
 import numpy as np
 from loguru import logger
 
-from tools.image_processing import ImageProcessingSettings
-from tools.technology import create_directory, images_to_video, clear_folder
+from common.image_processing import ImageProcessingSettings
+from common.technology import create_directory, images_to_video, clear_folder
 
 colors = [
     "#f4f0e7",

@@ -8,7 +8,7 @@ from loguru import logger
 from matplotlib import pyplot as plt
 from scipy.integrate import odeint
 
-from tools.technology import create_directory, clear_folder, images_to_video
+from common.technology import create_directory, clear_folder, images_to_video
 
 
 def generate():

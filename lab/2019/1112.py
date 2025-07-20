@@ -5,8 +5,8 @@ import matplotlib.pylab as plt
 import numpy as np
 from loguru import logger
 
-from tools.image_processing import ImageProcessingSettings
-from tools.technology import images_to_video
+from common.image_processing import ImageProcessingSettings
+from common.technology import images_to_video
 
 colors = ['#e26000', '#228B46', '#5092B8', '#ff9b9b', '#c9d06c', '#22ba5a', '#58c0e7']
 

@@ -9,7 +9,7 @@ from loguru import logger
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 FIGURES_DIR = os.path.join(ROOT_DIR, "figures")
 OUTPUTS_DIR = os.path.join(ROOT_DIR, "outputs")
-RUNS_PER_SCRIPT = 10
+RUNS_PER_SCRIPT = 100
 
 # Ensure the output directory exists
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
@@ -37,8 +37,8 @@ def save_image(base64_str, output_path):
 # Iterate over all Python scripts in the figures directory
 for script_file in os.listdir(FIGURES_DIR):
 
-    # if script_file != 'random_eigen.py':
-    #     continue
+    if script_file != 'soft.py':
+        continue
     script_path = os.path.join(FIGURES_DIR, script_file)
 
     # Skip non-Python files

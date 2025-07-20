@@ -7,8 +7,8 @@ import numpy as np
 import toml
 from loguru import logger
 
-from tools.fractal import julia_java, julia_set_v2
-from tools.technology import create_directory, images_to_video, clear_folder
+from common.fractal import julia_java, julia_set_v2
+from common.technology import create_directory, images_to_video, clear_folder
 
 colors = [
     "#f4f0e7",

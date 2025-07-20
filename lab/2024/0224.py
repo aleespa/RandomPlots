@@ -8,7 +8,7 @@ import numpy as np
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from tools.technology import images_to_video
+from common.technology import images_to_video
 
 os.add_dll_directory(r'C:\Users\Alejandro Lopez\Documents\codec')
 
