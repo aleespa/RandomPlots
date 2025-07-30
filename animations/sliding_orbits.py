@@ -19,7 +19,7 @@ def generate(figure_size=(12, 12), dpi=100, seed=3123):
     rng = get_rng(seed)
     t = rng.uniform(0, 2 * np.pi, 580)
     color_list = rng.choice(RedWht, 580)
-    for i, s in enumerate(np.linspace(0, 2, 180)):
+    for i, s in enumerate(np.linspace(0, 2, 20)):
         frame(s, t, color_list, figure_size, dpi)
 
         file_name = f'frame{str(i).zfill(4)}'
@@ -29,7 +29,7 @@ def generate(figure_size=(12, 12), dpi=100, seed=3123):
         gc.collect()
 
     images_to_video(Path(f"outputs/{FIGURE_NAME}"), f'{FIGURE_NAME}.mp4', 30)
-    logger.info(f"Finished")
+    logger.success(f"Finished")
 
 
 def frame(s, t: np.ndarray, color_list: list, figure_size=(12, 12), dpi=100):

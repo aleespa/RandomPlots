@@ -3,6 +3,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from loguru import logger
+
 
 def has_nvidia_gpu():
     """
@@ -21,11 +23,11 @@ def images_to_video(image_folder: Path, video_name, fps):
     """
     # Choose codec depending on GPU availability
     if has_nvidia_gpu():
-        print("✅ NVIDIA GPU detected — using h264_nvenc lossless.")
+        logger.info("NVIDIA GPU detected — using h264_nvenc lossless.")
         codec = 'h264_nvenc'
         codec_options = ['-qp', '0', '-preset', 'slow']
     else:
-        print("⚠️ No NVIDIA GPU found — using CPU (libx264 lossless).")
+        logger.warning("No NVIDIA GPU found — using CPU (libx264 lossless).")
         codec = 'libx264'
         codec_options = ['-crf', '0', '-preset', 'veryslow']
 
@@ -34,14 +36,14 @@ def images_to_video(image_folder: Path, video_name, fps):
     images.sort()
 
     if not images:
-        print("❌ No PNG images found in folder.")
+        logger.warning("No PNG images found in folder.")
         return
 
     first_img_name = images[0]
     name_parts = os.path.splitext(first_img_name)
     if not any(c.isdigit() for c in name_parts[0]):
-        print(
-            "⚠️ Warning: Your images do not contain numbers in their names. "
+        logger.warning(
+            "Warning: Your images do not contain numbers in their names. "
             "FFmpeg expects numbered patterns (e.g., frame_0001.png)."
         )
 
@@ -61,11 +63,13 @@ def images_to_video(image_folder: Path, video_name, fps):
         '-pix_fmt', 'yuv444p',   # Use 4:4:4 for true lossless color if supported
         output_path.absolute().__str__(),
     ]
+    result = subprocess.run(
+        ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+    )
+    if result.returncode != 0:
+        logger.error(f"FFmpeg error:\n{result.stderr}")
 
-    print(f"▶️ Running FFmpeg command:\n{' '.join(ffmpeg_cmd)}")
-    subprocess.run(ffmpeg_cmd)
-
-    print(f"✅ Video saved to {output_path}")
+    logger.success(f"Video saved to {output_path}")
 
 def clear_folder(folder_path):
     # List all files and directories inside the folder
