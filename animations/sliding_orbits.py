@@ -19,16 +19,20 @@ def generate(figure_size=(12, 12), dpi=100, seed=3123):
     rng = get_rng(seed)
     t = rng.uniform(0, 2 * np.pi, 580)
     color_list = rng.choice(RedWht, 580)
+
+    output_frames_path = Path('outputs') / f'{FIGURE_NAME}' / "frames"
+    create_directory(output_frames_path)
+    clear_folder(output_frames_path)
     for i, s in enumerate(np.linspace(0, 2, 20)):
         frame(s, t, color_list, figure_size, dpi)
 
         file_name = f'frame{str(i).zfill(4)}'
-        plt.savefig(f'outputs/{FIGURE_NAME}/{file_name}.png', facecolor='black')
+        plt.savefig(output_frames_path / f'{file_name}.png', facecolor='black')
         logger.info(f"{file_name}.png Saved")
         plt.close()
         gc.collect()
 
-    images_to_video(Path(f"outputs/{FIGURE_NAME}"), f'{FIGURE_NAME}.mp4', 30)
+    images_to_video(output_frames_path, f'{FIGURE_NAME}.mp4', 30)
     logger.success(f"Finished")
 
 

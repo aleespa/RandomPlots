@@ -14,3 +14,6 @@ RedWht = [
     '#fff2f1',
     '#ffffff',
 ]
+TWLAGN = ['#ccabd8', '#8474a1', '#6ec6ca', '#08979d', '#055b5c']
+NEAURA = ['#ff00b4', '#00ffbc', '#8ea5ff', '#ffffff', '#c493ff']
+ECOSPL = ['#e26000', '#228B46', '#5092B8', '#ff9b9b', '#c9d06c', '#22ba5a', '#58c0e7']
