@@ -5,8 +5,44 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def create_image(seed=0, bg_color=(0, 0, 0), cmap=None):
+    buffer = generate_plot(seed, bg_color, cmap)
+    plt.close()
+    return buffer.getvalue()
+
+
+def generate_plot(seed, bg_color=(0, 0, 0), cmap=None):
+    rng = np.random.default_rng(seed)
+    size = 512
+    fig, ax = plt.subplots(figsize=(12, 12), dpi=100, tight_layout=True)
+    fig.patch.set_facecolor(bg_color)
+    x, y = np.meshgrid(
+        np.linspace(-1, 1, size, dtype=np.float32),
+        np.linspace(-1, 1, size, dtype=np.float32),
+    )
+
+    k = rng.integers(15, 40)
+    expr = generate(k, rng)
+    r, g, b = expr.eval(x, y)
+
+    img = np.empty((size, size, 3), dtype=np.float32)
+    np.add(r, 1, out=img[..., 0])
+    np.add(g, 1, out=img[..., 1])
+    np.add(b, 1, out=img[..., 2])
+    np.clip(img, 0, 2, out=img)
+    np.divide(img, 2, out=img)
+
+    ax.imshow(img)
+    ax.axis('off')
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='jpg', bbox_inches='tight', pad_inches=0)
+    buffer.seek(0)
+
+    return buffer
+
+
 def well(x):
-    return 1 - 2 / (1 + x ** 2) ** 3
+    return 1 - 2 / (1 + x**2) ** 8
 
 
 def tent(x):
@@ -140,7 +176,7 @@ class Sin:
     def __init__(self, e, rng):
         self.e = e
         self.phase = rng.uniform(0, math.pi)
-        self.freq = rng.uniform(0.4, 5.0)
+        self.freq = rng.uniform(1.0, 6.0)
 
     def __repr__(self):
         return f'Sin({self.phase:.2f}+{self.freq:.2f}*{self.e})'
@@ -203,9 +239,9 @@ operators = [
     Sum,
     Product,
     Mod,
-    # Well,
+    Well,
     Tent,
-    # Sin,
+    Sin,
     Level,
     Mix,
 ]
@@ -229,39 +265,3 @@ def generate(k, rng):
             prev = split
         args.append(generate(k - 1 - prev, rng))
         return op(*args, rng=rng)
-
-
-def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
-    rng = np.random.default_rng(seed)
-    size = 2000
-    fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
-    fig.patch.set_facecolor(bg_color)
-    x, y = np.meshgrid(
-        np.linspace(-1, 1, size, dtype=np.float32),
-        np.linspace(-1, 1, size, dtype=np.float32)
-    )
-
-    k = 5
-    expr = Sin(Sin(generate(k, rng), rng), rng)
-    r, g, b = expr.eval(x, y)
-
-    img = np.empty((size, size, 3), dtype=np.float32)
-    np.add(r, 1, out=img[..., 0])
-    np.add(g, 1, out=img[..., 1])
-    np.add(b, 1, out=img[..., 2])
-    np.clip(img, 0, 2, out=img)
-    np.divide(img, 2, out=img)
-
-    ax.imshow(img)
-    ax.axis('off')
-    buffer = io.BytesIO()
-    plt.savefig(buffer, format='jpg', bbox_inches='tight', pad_inches=0)
-    buffer.seek(0)
-
-    return buffer
-
-
-def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
-    buffer = generate_plot(seed, bg_color, dark_mode)
-    plt.close()
-    return buffer.getvalue()

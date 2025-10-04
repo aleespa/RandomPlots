@@ -1,42 +1,25 @@
 import io
 
-import matplotlib.colors as mcolors
 import numpy as np
 from matplotlib import pyplot as plt
 
-colors_dark = [
-    "#8488d7",
-    "#a86f86",
-    "#8ba886",
-    "#4b6673",
-    "#e1e1e1",
-]
-cmap_dark = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors_dark, N=250)
 
-colors_light = [
-    "#e67e22",  # Muted orange
-    "#c0392b",  # Muted red
-    "#2980b9",  # Muted blue
-    "#8e44ad",  # Muted purple
-    "#38823E",  # Muted green
-]
-cmap_light = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors_light, N=250)
+def create_image(seed=0, bg_color=(0, 0, 0), cmap=None):
+    buffer = generate_plot(seed, bg_color, cmap)
+    plt.close()
+    return buffer.getvalue()
 
 
-def generate_plot(seed, bg_color, dark_mode):
+def generate_plot(seed, bg_color=(0, 0, 0), cmap=None):
     rng = np.random.default_rng(seed)
     # Generate data
     t = np.linspace(0, 2 * np.pi, 5000)
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
     fig.patch.set_facecolor(bg_color)
-    n_spirographs = rng.integers(4, 5)
+    n_spirographs = rng.integers(4, 6)
     for _ in range(n_spirographs):
         a, b, c, d = generate_k_l(rng)
-        if dark_mode:
-            line_color = cmap_dark(rng.uniform())
-        else:
-            line_color = cmap_light(rng.uniform())
-        plot_spiro(t, a, b, c, d, ax, line_color)
+        plot_spiro(t, a, b, c, d, ax, cmap(rng.uniform()))
 
     # Ensure the center is always at (0, 0)
     ax.set_aspect('equal')  # Ensure equal scaling for x and y axes
@@ -63,18 +46,14 @@ def generate_plot(seed, bg_color, dark_mode):
     return buffer
 
 
-def spiro(t: np.array,
-          k: float = 0.5,
-          l: float = 0.5):
-    return ((1 - k) * np.exp(1j * t)
-            + k * l * np.exp(- 1j * t * (1 - k) / k))
+def spiro(t: np.array, k: float = 0.5, l: float = 0.5):
+    return (1 - k) * np.exp(1j * t) + k * l * np.exp(-1j * t * (1 - k) / k)
 
 
 def plot_spiro(t, a, b, c, d, ax, color):
     scaled_t = t * a
     s = spiro(scaled_t, a / b, c / d)
-    ax.plot(s.real, s.imag, lw=3.5, alpha=0.9,
-            color=color)
+    ax.plot(s.real, s.imag, lw=3.5, alpha=0.9, color=color)
 
 
 def generate_k_l(rng):
@@ -83,10 +62,3 @@ def generate_k_l(rng):
         k, l = a / b, c / d
         if k != 1 and l != 1 and k != l:  # Ensure k and l are not 1
             return a, b, c, d
-
-
-def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
-    buffer = generate_plot(seed, bg_color, dark_mode)
-    plt.close()
-    return buffer.getvalue()
-

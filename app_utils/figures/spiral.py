@@ -1,31 +1,18 @@
 import io
 
-import matplotlib as mpl
 import numpy as np
 from matplotlib import pyplot as plt
 
 
-def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
+def create_image(seed=0, bg_color=(0, 0, 0), cmap=None):
+    buffer = generate_plot(seed, bg_color, cmap)
+    plt.close()
+    return buffer.getvalue()
+
+
+def generate_plot(seed, bg_color=(0, 0, 0), cmap=None):
     rng = np.random.default_rng(seed)
-
-    dark_background_colormaps = [
-        'Spectral', 'viridis', 'plasma', 'inferno', 'cividis',
-        'YlOrRd', 'RdPu', 'spring', 'summer', 'autumn', 'winter',
-        'cool', 'Wistia', 'hot', 'afmhot', 'copper', 'gist_heat',
-        'binary', 'gist_yarg', 'gist_gray', 'gray', 'bone', 'pink'
-    ]
-
-    light_background_colormaps = [
-        'gist_heat', 'binary', 'gist_yarg', 'gist_gray', 'gray',
-        'bone', 'pink'
-    ]
-    if dark_mode:
-        colormaps = dark_background_colormaps
-    else:
-        colormaps = light_background_colormaps
-
-    colormap = rng.choice(colormaps)
-    c = rng.uniform(-0.02, 0.02)
+    c = rng.uniform(-0.02, 0.03)
     s = -0.99
 
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
@@ -45,7 +32,7 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
 
     x_flat = x.flatten()
     y_flat = y.flatten()
-    colors = np.repeat(mpl.colormaps[colormap](np.linspace(0, 1, n_loops)), n_points, axis=0)
+    colors = np.repeat(cmap(np.linspace(0, 1, n_loops)), n_points, axis=0)
 
     # Single scatter call
     ax.scatter(
@@ -65,9 +52,3 @@ def generate_plot(seed, bg_color=(0, 0, 0), dark_mode=True):
     buffer.seek(0)
 
     return buffer
-
-
-def create_image(seed=0, dark_mode=True, bg_color=(0, 0, 0)):
-    buffer = generate_plot(seed, bg_color, dark_mode)
-    plt.close()
-    return buffer.getvalue()
