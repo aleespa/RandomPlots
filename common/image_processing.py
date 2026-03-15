@@ -5,7 +5,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import toml
 from matplotlib import pyplot as plt
 from numpy.random import Generator
 
@@ -16,16 +15,8 @@ class ImageProcessingSettings:
     filename: str
     rng: Generator
 
-    def __init__(self, seed=0):
-        try:
-            config = toml.load('config.toml')
-        except FileNotFoundError:
-            print("Error: config.toml not found!")
-            raise
-        except toml.TomlDecodeError:
-            print("Error: Failed to parse config.toml!")
-            raise
-        self.filename = config['file_to_run']
+    def __init__(self, seed=0, filename=None):
+        self.filename = filename or datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         self.rng = np.random.default_rng(seed=seed)
         create_directory(OUTPUT_PATH / self.filename)
         clear_folder(OUTPUT_PATH / self.filename)

@@ -3,6 +3,8 @@ import importlib
 
 from loguru import logger
 
+from common.image_processing import ImageProcessingSettings
+
 
 def load_script_function(module_path):
     """
@@ -19,7 +21,7 @@ def load_script_function(module_path):
         logger.exception(f"Failed to import module '{module_path}'")
         return None
 
-
+@logger.catch
 def main():
     parser = argparse.ArgumentParser(description="Run a specific plot generator.")
     parser.add_argument(
@@ -34,11 +36,14 @@ def main():
     )
     args = parser.parse_args()
 
-    logger.info(f"Attempting to run script: {args.script}")
+    logger.info(f"Running script: {args.script}")
     func = load_script_function(args.script)
+    settings = ImageProcessingSettings()
+    names = args.script.split('.')
+    settings.filename = names[1]+names[2]
     if func:
         try:
-            func(*args.args)
+            func(settings)
         except Exception as e:
             logger.exception(f"Error while executing script '{args.script}'")
 
