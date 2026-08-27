@@ -6,7 +6,8 @@ from matplotlib import pyplot as plt
 from common.image_processing import ImageProcessingSettings
 
 
-def generate(settings=ImageProcessingSettings(1)):
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     bg_color = "k"
     fig, ax = plt.subplots(figsize=(12, 12), dpi=200, tight_layout=True)
     fig.patch.set_facecolor(bg_color)

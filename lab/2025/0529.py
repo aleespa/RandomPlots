@@ -1,5 +1,4 @@
 import gc
-from datetime import datetime
 
 import matplotlib.colors as mcolors
 import numpy as np
@@ -26,10 +25,10 @@ colors_light = [
 cmap_light = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors_light, N=250)
 
 
-def generate(settings=ImageProcessingSettings(1)):
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-    filename = settings.filename
-    rng = np.random.default_rng(0)
+    rng = settings.rng
     t = np.linspace(0, 2 * np.pi, 5000)
     bg_color = 'k'
     dark_mode = True
@@ -62,8 +61,7 @@ def generate(settings=ImageProcessingSettings(1)):
         # Remove axis ticks and labels
         ax.axis('off')
 
-        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor="#f4f0e7")
+        settings.save_to_png(fig, "#f4f0e7")
         plt.close()
         gc.collect()
 
@@ -87,3 +85,7 @@ def generate_k_l(rng):
         k, l = a / b, c / d
         if k != 1 and l != 1 and k != l:  # Ensure k and l are not 1
             return a, b, c, d
+
+
+if __name__ == '__main__':
+    generate()

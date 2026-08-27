@@ -8,6 +8,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 from numpy.random import Generator
 
+from common.technology import images_to_video
+
 OUTPUT_PATH = Path(__file__).parent.parent / 'outputs'
 
 
@@ -36,6 +38,26 @@ class ImageProcessingSettings:
         )
         plt.close()
         gc.collect()
+
+    @property
+    def frames_path(self) -> Path:
+        """Folder holding the numbered frames of an animation, created on first use."""
+        path = self.output_path / self.filename / 'frames'
+        create_directory(path)
+        return path
+
+    def save_numbered_frame(self, index: int, face_color='#000000'):
+        """
+        Save the current figure as frames/frame%04d.png -- the naming ffmpeg expects,
+        and what `save_video` reads back.
+        """
+        plt.savefig(self.frames_path / f'frame{index:04d}.png', facecolor=face_color)
+        plt.close()
+        gc.collect()
+
+    def save_video(self, fps=30):
+        """Encode the frames folder into outputs/<filename>/<filename>.mp4 with ffmpeg."""
+        images_to_video(self.frames_path, f'{self.filename}.mp4', fps)
 
     def images_to_video(self, fps=30):
         """

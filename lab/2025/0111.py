@@ -6,7 +6,8 @@ from matplotlib.tri import Triangulation
 from common.image_processing import ImageProcessingSettings
 
 
-def generate(settings=ImageProcessingSettings(1)):
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
     x = settings.rng.exponential(0.2, 200)
     y = settings.rng.exponential(0.2, 200)
@@ -19,9 +20,9 @@ def generate(settings=ImageProcessingSettings(1)):
         edges = []
         widths = []
         for triangle in triang.triangles:
-            for i in range(3):
-                p1 = triangle[i]
-                p2 = triangle[(i + 1) % 3]
+            for k in range(3):
+                p1 = triangle[k]
+                p2 = triangle[(k + 1) % 3]
                 dist = np.linalg.norm([x[p1] - x[p2], y[p1] - y[p2]])
                 edges.append([(x[p1], y[p1]), (x[p2], y[p2])])
                 widths.append(1 / (1 + dist/2))  # Scale the width for better visibility
@@ -29,8 +30,12 @@ def generate(settings=ImageProcessingSettings(1)):
         ax.add_collection(line_collection)
 
         ax.set(xlim=(0, 2), ylim=(0, 2))
-        settings.save_frame()
+        settings.save_numbered_frame(i, "#f4f0e7")
         x *= (1 - 0.01 * np.log(y))
         y *= (1 - 0.01 * np.log(x))
 
-    settings.images_to_video()
+    settings.save_video(30)
+
+
+if __name__ == '__main__':
+    generate()

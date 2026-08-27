@@ -4,7 +4,8 @@ from matplotlib import pyplot as plt
 from common.image_processing import ImageProcessingSettings
 
 
-def generate(settings=ImageProcessingSettings(5)):
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(5)
 
     B = -1
     C = 0.6
@@ -15,8 +16,8 @@ def generate(settings=ImageProcessingSettings(5)):
     n_points = 4000
     for eloop in range(0, nloops):
 
-        xlast = settings.rng.normal(0, 1, 1)
-        ylast = settings.rng.normal(0, 1, 1)
+        xlast = settings.rng.normal(0, 1)
+        ylast = settings.rng.normal(0, 1)
 
         xnew = np.zeros(shape=(n_points,))
         ynew = np.zeros(shape=(n_points,))
@@ -36,4 +37,9 @@ def generate(settings=ImageProcessingSettings(5)):
         )
         plt.xlim(-1.35, 2.1)
         plt.ylim(-2.1, 1.35)
-    settings.save_to_png()
+    settings.save_to_png(fig, '#000000')
+    plt.close()
+
+
+if __name__ == '__main__':
+    generate()
