@@ -1,23 +1,20 @@
 import gc
-import random
-import string
 
 import matplotlib.pylab as plt
 import numpy as np
-from loguru import logger
 
 from colors.palettes import TWLAGN, NEAURA
-from common.simulation import get_rng
-from common.technology import create_directory, clear_folder
+from common.image_processing import ImageProcessingSettings
 
-FIGURE_NAME = 'lattice'
+FIGURE_SIZE = (12, 12)
+DPI = 100
 
-def generate(figure_size=(12, 12), dpi=100, seed=None):
-    create_directory(f"outputs/{FIGURE_NAME}")
-    clear_folder(f"outputs/{FIGURE_NAME}")
-    rng = get_rng(seed)
 
-    fig, _ = plt.subplots(figsize=figure_size, dpi=dpi)
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    rng = settings.rng
+
+    fig, _ = plt.subplots(figsize=FIGURE_SIZE, dpi=DPI)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     for x in range(30):
         for y in range(30):
@@ -35,13 +32,11 @@ def generate(figure_size=(12, 12), dpi=100, seed=None):
                 color=rng.choice(TWLAGN),
             )
 
-    random_name = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    fig.savefig(f'outputs/{FIGURE_NAME}/{random_name}.png', facecolor='k')
-    logger.success(f"{random_name}.png Saved")
+    settings.save_to_png(fig, 'k')
     plt.close()
     gc.collect()
 
-    fig, _ = plt.subplots(figsize=figure_size, dpi=dpi)
+    fig, _ = plt.subplots(figsize=FIGURE_SIZE, dpi=DPI)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     for x in range(30):
         for y in range(30):
@@ -54,8 +49,10 @@ def generate(figure_size=(12, 12), dpi=100, seed=None):
                 ax.plot(
                     [p1[0], p1[0] + q], [p1[1], p1[1]], color=rng.choice(NEAURA)
                 )
-    random_name = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    fig.savefig(f'outputs/{FIGURE_NAME}/{random_name}.png', facecolor='k')
-    logger.success(f"{random_name}.png Saved")
+    settings.save_to_png(fig, 'k')
     plt.close()
     gc.collect()
+
+
+if __name__ == '__main__':
+    generate()

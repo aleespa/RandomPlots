@@ -1,21 +1,20 @@
 import gc
-import random
-import string
 
 import matplotlib.pylab as plt
 import numpy as np
-from loguru import logger
 
 from colors.palettes import GYRYG, YBBPG
-from common.simulation import brownian_bridge, get_rng
-from common.technology import create_directory
+from common.image_processing import ImageProcessingSettings
+from common.simulation import brownian_bridge
 
-FIGURE_NAME = 'bb_connections'
+FIGURE_SIZE = (12, 12)
+DPI = 100
 
-def generate(figure_size=(12, 12), dpi=100, seed=None):
-    create_directory(f"outputs/{FIGURE_NAME}")
-    rng = get_rng(seed)
-    fig, _ = plt.subplots(figsize=figure_size, dpi=dpi)
+
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    rng = settings.rng
+    fig, _ = plt.subplots(figsize=FIGURE_SIZE, dpi=DPI)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     n = 500
     for k in range(35):
@@ -36,8 +35,10 @@ def generate(figure_size=(12, 12), dpi=100, seed=None):
             lw=2,
             alpha=0.8,
         )
-    random_name = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    fig.savefig(f'outputs/{FIGURE_NAME}/{random_name}.png', facecolor='k')
-    logger.info(f"{random_name}.png Saved")
+    settings.save_to_png(fig, 'k')
     plt.close()
     gc.collect()
+
+
+if __name__ == '__main__':
+    generate()

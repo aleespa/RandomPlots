@@ -1,21 +1,20 @@
 import gc
-import random
-import string
 
 import matplotlib.pylab as plt
 import numpy as np
-from loguru import logger
 from matplotlib.collections import LineCollection
 
-from common.technology import create_directory
+from common.image_processing import ImageProcessingSettings
 
-FIGURE_NAME = 'polygons'
+FIGURE_SIZE = (12, 12)
+DPI = 100
 
-def generate(figure_size=(12, 12), dpi=100, seed=3123):
-    create_directory(f"outputs/{FIGURE_NAME}")
+
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     n = 20
     u = np.linspace(0, 2 * np.pi, n)
-    fig, ax = plt.subplots(1, 1, figsize=figure_size, dpi=dpi)
+    fig, ax = plt.subplots(1, 1, figsize=FIGURE_SIZE, dpi=DPI)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     ax.set_xlim(-1.05, 1.05)
     ax.set_ylim(-1.05, 1.05)
@@ -34,8 +33,10 @@ def generate(figure_size=(12, 12), dpi=100, seed=3123):
     line_collection = LineCollection(segments, linewidths=1.5, colors=colors)
     ax.add_collection(line_collection)
 
-    random_name = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    fig.savefig(f'outputs/{FIGURE_NAME}/{random_name}.png', facecolor='k')
-    logger.info(f"{random_name}.png Saved")
+    settings.save_to_png(fig, 'k')
     plt.close()
     gc.collect()
+
+
+if __name__ == '__main__':
+    generate()

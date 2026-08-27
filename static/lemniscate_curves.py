@@ -1,28 +1,25 @@
 import gc
-import random
-import string
 
 import matplotlib.pylab as plt
 import numpy as np
-from loguru import logger
 
 from colors.palettes import GrnGre
-from common.simulation import get_rng
-from common.technology import create_directory
+from common.image_processing import ImageProcessingSettings
 
-FIGURE_NAME = 'lemniscate_curves'
+FIGURE_SIZE = (12, 12)
+DPI = 100
 
 
-def generate(figure_size=(12, 12), dpi=100, seed=None):
-    create_directory(f"outputs/{FIGURE_NAME}")
-    rng = get_rng(seed)
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    rng = settings.rng
     t_len = 200
     f_len = 50
 
     t = np.linspace(0, np.pi / 4, t_len)
     f = np.linspace(0, 10, f_len)
 
-    fig, ax = plt.subplots(1, 1, figsize=figure_size, facecolor='#000000', dpi=dpi)
+    fig, ax = plt.subplots(1, 1, figsize=FIGURE_SIZE, facecolor='#000000', dpi=DPI)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     ax.set_xlim(-10, 10)
     ax.set_ylim(-10, 10)
@@ -40,8 +37,10 @@ def generate(figure_size=(12, 12), dpi=100, seed=None):
     for sx, sy in [(1, 1), (1, -1), (-1, -1), (-1, 1)]:
         ax.plot(sx * x, sy * y, lw=7, color='#000000')
 
-    random_name = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    fig.savefig(f'outputs/{FIGURE_NAME}/{random_name}.png', facecolor='k')
-    logger.info(f"{random_name}.png Saved")
+    settings.save_to_png(fig, 'k')
     plt.close()
     gc.collect()
+
+
+if __name__ == '__main__':
+    generate()

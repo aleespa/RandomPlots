@@ -1,44 +1,28 @@
-import gc
-from pathlib import Path
-
 import numpy as np
-from loguru import logger
 from matplotlib import pyplot as plt
 
 from colors.palettes import RedWht
-from common.image_processing import clear_folder
-from common.simulation import get_rng
-from common.technology import create_directory, images_to_video
+from common.image_processing import ImageProcessingSettings
 
-FIGURE_NAME = 'sliding_orbits'
+FIGURE_SIZE = (12, 12)
+DPI = 100
 
 
-def generate(figure_size=(12, 12), dpi=100, seed=3123):
-    create_directory(f"outputs/{FIGURE_NAME}")
-    clear_folder(f"outputs/{FIGURE_NAME}")
-    rng = get_rng(seed)
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    rng = settings.rng
     t = rng.uniform(0, 2 * np.pi, 580)
     color_list = rng.choice(RedWht, 580)
 
-    output_frames_path = Path('outputs') / f'{FIGURE_NAME}' / "frames"
-    create_directory(output_frames_path)
-    clear_folder(output_frames_path)
     for i, s in enumerate(np.linspace(0, 2, 20)):
-        frame(s, t, color_list, figure_size, dpi)
+        frame(s, t, color_list)
+        settings.save_numbered_frame(i, 'black')
 
-        file_name = f'frame{str(i).zfill(4)}'
-        plt.savefig(output_frames_path / f'{file_name}.png', facecolor='black')
-        logger.info(f"{file_name}.png Saved")
-        plt.close()
-        gc.collect()
-
-    images_to_video(output_frames_path, f'{FIGURE_NAME}.mp4', 30)
-    logger.success(f"Finished")
+    settings.save_video(30)
 
 
-def frame(s, t: np.ndarray, color_list: list, figure_size=(12, 12), dpi=100):
-
-    fig, _ = plt.subplots(figsize=figure_size, dpi=dpi)
+def frame(s, t: np.ndarray, color_list: list):
+    fig, _ = plt.subplots(figsize=FIGURE_SIZE, dpi=DPI)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
     ax.set_xlim(-10, 10)
     ax.set_ylim(-10, 10)
@@ -67,3 +51,7 @@ def frame(s, t: np.ndarray, color_list: list, figure_size=(12, 12), dpi=100):
                 color='#00b0b0',
                 alpha=0.8,
             )
+
+
+if __name__ == '__main__':
+    generate()

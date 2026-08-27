@@ -1,23 +1,21 @@
 import gc
-import random
-import string
 
 import matplotlib.pylab as plt
-import numpy as np
-from loguru import logger
 
-from common.technology import create_directory
+from common.image_processing import ImageProcessingSettings
 
-FIGURE_NAME = 'random_quadrilaterals'
+FIGURE_SIZE = (12, 12)
+DPI = 150
 
 colors = ['#3a3663', '#414977', '#476589', '#4c7c9a', '#58c0e7']
 
-def generate(figure_size=(12, 12), dpi=150, seed=None):
-    create_directory(f"outputs/{FIGURE_NAME}")
-    rng = np.random.default_rng(seed)
+
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    rng = settings.rng
 
     for fig_num in [1, 2]:
-        fig, _ = plt.subplots(figsize=figure_size, dpi=dpi)
+        fig, _ = plt.subplots(figsize=FIGURE_SIZE, dpi=DPI)
         ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='k')
         for _ in range(100):
             R = rng.uniform(-5, 5, 4)
@@ -29,8 +27,10 @@ def generate(figure_size=(12, 12), dpi=150, seed=None):
                 y = [0, -R[1], R[1], 0]
             ax.fill_between(x, y, alpha=0.25, color=rng.choice(colors))
             ax.plot(x, y, alpha=0.2, color='white', lw=1)
-        random_name = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-        fig.savefig(f'outputs/{FIGURE_NAME}/{random_name}.png', facecolor='black')
-        logger.info(f"{random_name}.png Saved")
+        settings.save_to_png(fig, 'black')
         plt.close()
         gc.collect()
+
+
+if __name__ == '__main__':
+    generate()
