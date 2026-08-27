@@ -1,13 +1,9 @@
-import gc
-from datetime import datetime
-
 import matplotlib.colors as mcolors
 import matplotlib.pylab as plt
 import numpy as np
 from loguru import logger
 
 from common.image_processing import ImageProcessingSettings
-from common.technology import create_directory, images_to_video, clear_folder
 
 colors = [
     "#f4f0e7",
@@ -22,21 +18,19 @@ colors = [
 cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors, N=1000)
 
 
-def generate():
-    settings = ImageProcessingSettings()
-    filename = settings.filename
-    create_directory(f"outputs/{filename}")
-    clear_folder(f"outputs/{filename}")
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     logger.info(f"Starting calculation")
 
     n = 120
-    x = np.random.uniform(-1, 1, (n, n)) + np.random.uniform(-1, 1, (n, n)) * 1j
-    v1 = np.random.uniform(-1, 1, n) + np.random.uniform(-1, 1, n) * 1j
-    v2_ = np.random.uniform(-1, 1, n) + np.random.uniform(-1, 1, n) * 1j
+    rng = settings.rng
+    x = rng.uniform(-1, 1, (n, n)) + rng.uniform(-1, 1, (n, n)) * 1j
+    v1 = rng.uniform(-1, 1, n) + rng.uniform(-1, 1, n) * 1j
+    v2_ = rng.uniform(-1, 1, n) + rng.uniform(-1, 1, n) * 1j
     v2 = make_orthogonal(v1, v2_)
     v1 = v1 / np.linalg.norm(v1)
     v2 = v2 / np.linalg.norm(v2)
-    for theta in np.linspace(0, 2 * np.pi, 300):
+    for i, theta in enumerate(np.linspace(0, 2 * np.pi, 300)):
         fig, ax = plt.subplots(figsize=(12, 12), dpi=200)
         ax = fig.add_axes((0, 0, 1, 1), facecolor="#000D1E")
         ax.set_xticks([])
@@ -66,12 +60,8 @@ def generate():
         )
         ax.set_xlim(-7, 7)
         ax.set_ylim(-7, 7)
-        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
-        logger.info(f"{time_string}.png Saved")
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor="#f4f0e7")
-        plt.close()
-        gc.collect()
-    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 60)
+        settings.save_numbered_frame(i, "#f4f0e7")
+    settings.save_video(60)
     logger.info(f"Finished")
 
 
@@ -130,3 +120,7 @@ def make_orthogonal(v1, v2):
     v2_orthogonal = v2 - projection
 
     return v2_orthogonal
+
+
+if __name__ == '__main__':
+    generate()

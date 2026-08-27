@@ -1,14 +1,9 @@
-import gc
-import random
-import string
-
 import matplotlib.colors as mcolors
 import numpy as np
-import toml
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from common.technology import create_directory
+from common.image_processing import ImageProcessingSettings
 
 colors = [
     "#3b3b3b",  # Dark gray
@@ -27,30 +22,28 @@ colors = [
 cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors)
 
 
-def generate():
-    config = toml.load('config.toml')
-    filename = config['file_to_run']
-    create_directory(f"outputs/{filename}")
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
     t = np.linspace(0, 2 * np.pi, 1000)
     fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
     ax = fig.add_axes((0, 0, 1, 1), facecolor='#f4f0e7')
-    random_ks = np.random.random_integers(1, 20, size=10)
     for k in range(48):
-        plot_epicycloid(t, k, ax)
+        plot_epicycloid(t, k, ax, settings.rng)
         logger.info(f"k = {k}")
-    name = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-    logger.info(f"{name}.png Saved")
-    fig.savefig(f'outputs/{filename}/{name}.png', facecolor='k')
+    settings.save_to_png(fig, 'k')
     logger.info(f"Finished")
     plt.close()
-    gc.collect()
 
 
 def epicycloid(t: np.array, k: float = 0.5):
     return (k + 1) * np.exp(1j * t) - np.exp(1j * (k + 1) * t)
 
 
-def plot_epicycloid(t, k, ax):
+def plot_epicycloid(t, k, ax, rng):
     s = epicycloid(t, k)
-    ax.plot(s.real, s.imag, lw=3.2, alpha=0.9, color=cmap(np.random.uniform()))
+    ax.plot(s.real, s.imag, lw=3.2, alpha=0.9, color=cmap(rng.uniform()))
+
+
+if __name__ == '__main__':
+    generate()

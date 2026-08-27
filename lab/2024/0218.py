@@ -1,8 +1,4 @@
-import gc
-import os
-import sys
 import time
-from datetime import datetime
 
 import numpy as np
 from loguru import logger
@@ -10,10 +6,7 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from numba import njit
 
-from common.technology import images_to_video
-
-openh264_dir = r'C:\Users\Alejandro Lopez\Documents\codec'
-os.add_dll_directory(openh264_dir)
+from common.image_processing import ImageProcessingSettings
 
 
 @njit
@@ -58,9 +51,8 @@ def calc_orbit(n_points, a, b, n_iter):
 
 
 def generate_plot(
-    l_cx: np.array, l_cy: np.array, area: np.array, filename: str, name: str
+    l_cx: np.array, l_cy: np.array, area: np.array, i: int, settings: ImageProcessingSettings
 ):
-    time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
     start_color = '#f4f0e7'  # Light color you specified
     end_color = '#000000'  # Black
 
@@ -70,7 +62,6 @@ def generate_plot(
     )
 
     h, _, _ = np.histogram2d(l_cx, l_cy, bins=4000, range=area)
-    figure_aspect_ratio = 9 / 16
     fig, _ = plt.subplots(figsize=(9, 16), dpi=200)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     extent = [-1, 1, -1, 1]
@@ -83,14 +74,12 @@ def generate_plot(
     ax.set_xlim(x1, x2)
     ax.set_ylim(y1 - z, y2 + z)
     plt.xticks([]), plt.yticks([])
-    fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
-    plt.close()
+    settings.save_numbered_frame(i, 'k')
     del l_cx, l_cy
-    gc.collect()
 
 
-def generate():
-    filename = sys.argv[1]
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     n_points = 500
     n_iter = 200
     n_frames = 450
@@ -99,9 +88,13 @@ def generate():
         t1 = time.time()
         l_cx, l_cy = calc_orbit(n_points, theta, np.pi / 2, n_iter)
         area = np.array([[-1, 1], [-1, 1]])
-        generate_plot(l_cx, l_cy, area, 'tests', f'')
+        generate_plot(l_cx, l_cy, area, i, settings)
         t2 = time.time()
         logger.info(
             f"theta = {theta:.8f} frame {str(i + 1).zfill(3)}/{n_frames} time = {t2- t1:.2f} seconds"
         )
-    images_to_video(f'outputs/tests', '20240218_V2.mp4', 30)
+    settings.save_video(30)
+
+
+if __name__ == '__main__':
+    generate()

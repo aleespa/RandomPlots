@@ -1,13 +1,10 @@
-import os
-
 import numpy as np
 from matplotlib import pyplot as plt
 
-openh264_dir = r'C:\Users\Alejandro Lopez\Documents\codec'
-os.add_dll_directory(openh264_dir)
+from common.image_processing import ImageProcessingSettings
 
 
-def plot(n=100):
+def plot(settings: ImageProcessingSettings):
     num_points = 800
     number_centers = 20
     # Sphere parameters
@@ -21,8 +18,8 @@ def plot(n=100):
         axis=0,
     )
 
-    theta = np.random.uniform(0, np.pi, num_points)
-    phi = np.random.uniform(0, 2 * np.pi, num_points)
+    theta = settings.rng.uniform(0, np.pi, num_points)
+    phi = settings.rng.uniform(0, 2 * np.pi, num_points)
 
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d', facecolor='#f4f0e7')
@@ -39,8 +36,13 @@ def plot(n=100):
     ax.axis('off')
     ax.view_init(elev=10, azim=0)
 
-    plt.show()
+    settings.save_to_png(fig, '#f4f0e7')
 
 
-def generate():
-    plot()
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    plot(settings)
+
+
+if __name__ == '__main__':
+    generate()

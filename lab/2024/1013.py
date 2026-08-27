@@ -1,14 +1,9 @@
-import gc
-import random
-import string
-
 import matplotlib.colors
 import matplotlib.pylab as plt
 import numpy as np
-import toml
 from loguru import logger
 
-from common.technology import create_directory
+from common.image_processing import ImageProcessingSettings
 
 colors = [
     "#3b3b3b",  # Dark gray
@@ -27,26 +22,21 @@ colors = [
 cmap = matplotlib.colors.ListedColormap(colors)
 
 
-def generate():
-    config = toml.load('config.toml')
-    filename = config['file_to_run']
-    create_directory(f"outputs/{filename}")
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
     t = np.linspace(0, 2 * np.pi, 10000)
     for _ in range(50):
         fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
         ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
         for _ in range(4):
-            a, b, c, d = sorted(np.random.randint(1, 24, 4))
+            a, b, c, d = sorted(settings.rng.integers(1, 24, 4))
             k, l = a / b, c / d
-            plot_spiro(t, k, l, ax)
+            plot_spiro(t, k, l, ax, settings.rng)
             logger.info(f"{a}/{b}, {c}/{d}")
 
-        name = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-        logger.info(f"{name}.png Saved")
-        fig.savefig(f'outputs/{filename}/{name}.png', facecolor='k')
+        settings.save_to_png(fig, 'k')
         plt.close()
-        gc.collect()
     logger.info(f"Finished")
 
 
@@ -54,6 +44,10 @@ def spiro(t: np.array, k: float = 0.5, l: float = 0.5):
     return (1 - k) * np.exp(1j * t) + k * l * np.exp(-1j * t * (1 - k) / k)
 
 
-def plot_spiro(t, k, l, ax):
+def plot_spiro(t, k, l, ax, rng):
     s = spiro(100 * t, k, l)
-    ax.plot(s.real, s.imag, lw=3, alpha=0.9, color=cmap(np.random.uniform()))
+    ax.plot(s.real, s.imag, lw=3, alpha=0.9, color=cmap(rng.uniform()))
+
+
+if __name__ == '__main__':
+    generate()

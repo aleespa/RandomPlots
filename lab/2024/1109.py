@@ -1,14 +1,11 @@
-import gc
-from datetime import datetime
-
 import matplotlib.colors as mcolors
 import matplotlib.pylab as plt
 import numpy as np
-import toml
 from loguru import logger
 
-from common.fractal import julia_java, julia_set_v2
-from common.technology import create_directory, images_to_video, clear_folder
+from common.fractal import julia_set_v2
+from common.image_processing import ImageProcessingSettings
+from common.technology import create_directory
 
 colors = [
     "#f4f0e7",
@@ -23,26 +20,19 @@ colors = [
 cmap = mcolors.LinearSegmentedColormap.from_list("custom_cmap", colors, N=1000)
 
 
-def generate():
-    config = toml.load('config.toml')
-    filename = config['file_to_run']
-    create_directory(f"outputs/{filename}")
-    clear_folder(f"outputs/{filename}")
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     logger.info(f"Starting calculation")
     n = 10
     theta = np.linspace(0, 2 * np.pi, n)
-    create_directory(f"outputs/{filename}/temp")
-    clear_folder(f"outputs/{filename}/temp")
+    temp_dir = settings.output_path / settings.filename / 'temp'
+    create_directory(temp_dir)
     z = 1.01 * np.exp(1j * theta) * ((2 - np.exp(1j * theta)) / 4)
     for i, s in enumerate(np.linspace(1, 1e-10, n)):
-
-        julia_java(z[i], 480, 0, 0, 1.5, f'outputs/{filename}/temp/{i}.txt')
+        julia_set_v2(z[i], 480, 0, 0, 1.5, str(temp_dir / f'{i}.txt'))
         logger.info(f"Calculation finished for s = {s}")
-        julia_set_v2(z[i], 480, 0, 0, 1.5, f'outputs/{filename}/temp/{i}_.txt')
     for i in range(n):
-        number_iterations = np.loadtxt(
-            f"outputs/{filename}/temp/{i}.txt", delimiter=",", dtype=float
-        )
+        number_iterations = np.loadtxt(temp_dir / f"{i}.txt", dtype=float)
         fig, ax = plt.subplots(figsize=(12, 12), dpi=200)
         ax = fig.add_axes((0, 0, 1, 1), facecolor="#f4f0e7")
         ax.set_xticks([])
@@ -50,11 +40,10 @@ def generate():
 
         ax.imshow(number_iterations, cmap=cmap)
 
-        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
-        logger.info(f"{time_string}.png Saved")
-
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor="#f4f0e7")
-        plt.close()
-        gc.collect()
-    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 30)
+        settings.save_numbered_frame(i, "#f4f0e7")
+    settings.save_video(30)
     logger.info(f"Finished")
+
+
+if __name__ == '__main__':
+    generate()

@@ -1,19 +1,15 @@
-import gc
-import os
-import sys
 import time
-from datetime import datetime
 
 import numpy as np
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from common.technology import images_to_video
-
-os.add_dll_directory(r'C:\Users\Alejandro Lopez\Documents\codec')
+from common.image_processing import ImageProcessingSettings
 
 
-def generate():
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+
     def generate_plot(angle: float):
         ax.clear()  # Clear previous plot data
         for k in range(15):
@@ -35,7 +31,6 @@ def generate():
         ax.set_xlim(x1, x2)
         ax.set_ylim(y1 - z, y2 + z)
 
-    filename = sys.argv[1]
     n_frames = 780
 
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
@@ -43,11 +38,14 @@ def generate():
     for i, (theta) in enumerate(np.linspace(0, 2 * np.pi, n_frames)):
         t1 = time.time()
         generate_plot(theta)
-        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
+        fig.savefig(settings.frames_path / f'frame{i:04d}.png', facecolor='k')
         t2 = time.time()
         logger.info(
             f"theta = {theta:.8f} frame {str(i + 1).zfill(3)}/{n_frames} time = {t2- t1:.2f} seconds"
         )
-        gc.collect()
-    images_to_video(f'outputs/{filename}', '20240224.mp4', 60)
+    plt.close(fig)
+    settings.save_video(60)
+
+
+if __name__ == '__main__':
+    generate()

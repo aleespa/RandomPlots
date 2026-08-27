@@ -1,31 +1,23 @@
-import sys
-
-import matplotlib
 import numpy as np
 from matplotlib import pyplot as plt
 from scipy.spatial import ConvexHull
 
-matplotlib.use('Agg')
+from common.image_processing import ImageProcessingSettings
 
-def random_walk(n):
-    # Seed = 1,2 and 3
-    np.random.seed(3)
-    return np.cumsum(np.random.normal(0,0.5, (n, 2)),
-                     axis=0)
 
-def convex_hull(points):
-   return ConvexHull(points)
+def random_walk(n, rng: np.random.Generator):
+    return np.cumsum(rng.normal(0, 0.5, (n, 2)), axis=0)
 
-def generate_plot(Z: np.array,
-                  filename: str):
+
+def generate_plot(Z: np.array, settings: ImageProcessingSettings):
     fig, _ = plt.subplots(figsize=(12, 12), dpi=200)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     # ax.plot(Z[:,0], Z[:,1], color='k', lw=1.5)
-    for k in range(10,10000,5):
-        hull = ConvexHull(Z[:k,:])
+    for k in range(10, 10000, 5):
+        hull = ConvexHull(Z[:k, :])
         for simplex in hull.simplices:
-            ax.plot(Z[:k,:][simplex, 0],
-                     Z[:k,:][simplex, 1],
+            ax.plot(Z[:k, :][simplex, 0],
+                     Z[:k, :][simplex, 1],
                      lw=1, color='k')
     hull = ConvexHull(Z[:, :])
     for simplex in hull.simplices:
@@ -35,11 +27,16 @@ def generate_plot(Z: np.array,
         # 800000
         # 162807
         # 003366
-    fig.savefig(f'outputs/{filename}.png', facecolor='k')
+    settings.save_to_png(fig, 'k')
     plt.close()
 
-def generate():
-    filename = sys.argv[1]
+
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     n = 10000
-    Z = random_walk(n)
-    generate_plot(Z, filename)
+    Z = random_walk(n, settings.rng)
+    generate_plot(Z, settings)
+
+
+if __name__ == '__main__':
+    generate()

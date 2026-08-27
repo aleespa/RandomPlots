@@ -1,21 +1,15 @@
-import gc
 import time
-from datetime import datetime
 
 import numpy as np
-import toml
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from common.technology import create_directory, clear_folder, images_to_video
+from common.image_processing import ImageProcessingSettings
 
 
-def generate():
-    config = toml.load('config.toml')
-    filename = config['file_to_run']
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     n_frames = 600
-    create_directory(f"outputs/{filename}")
-    clear_folder(f"outputs/{filename}")
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     y = np.linspace(0, 1, 100)
@@ -40,15 +34,13 @@ def generate():
         ax.set_xlim(x1, x2)
         ax.set_ylim(y1 - z, y2 + z)
 
-        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
+        fig.savefig(settings.frames_path / f'frame{i:04d}.png', facecolor='k')
         t2 = time.time()
         logger.info(
             f"theta = {t:.8f} "
             f"frame {str(i + 1).zfill(3)}/{2 * n_frames} "
             f"time = {t2 - t1:.2f} seconds"
         )
-        gc.collect()
     for i, t in enumerate(angles[::-1]):
         ax.clear()
         t1 = time.time()
@@ -66,14 +58,17 @@ def generate():
         ax.set_xlim(x1, x2)
         ax.set_ylim(y1 - z, y2 + z)
 
-        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
+        fig.savefig(settings.frames_path / f'frame{n_frames + i:04d}.png', facecolor='k')
         t2 = time.time()
         logger.info(
             f"theta = {t:.8f} "
             f"frame {str(n_frames + i + 1).zfill(3)}/{2 * n_frames} "
             f"time = {t2 - t1:.2f} seconds"
         )
-        gc.collect()
 
-    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 60)
+    plt.close(fig)
+    settings.save_video(60)
+
+
+if __name__ == '__main__':
+    generate()

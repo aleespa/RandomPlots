@@ -1,17 +1,12 @@
-import gc
-import sys
-
 import numpy as np
 from loguru import logger
 from matplotlib import pyplot as plt
 
-from common.technology import create_directory, clear_folder
+from common.image_processing import ImageProcessingSettings
 
 
-def generate():
-    filename = sys.argv[1]
-    create_directory(f"outputs/{filename}")
-    clear_folder(f"outputs/{filename}")
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
     fig, _ = plt.subplots(figsize=(12, 12), dpi=250)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
@@ -33,6 +28,9 @@ def generate():
         )
     ax.set_xlim(-1.5, 4.5)
     ax.set_ylim(-3, 3)
-    fig.savefig(f'outputs/{filename}/figure.png', facecolor='k')
+    settings.save_to_png(fig, 'k')
     logger.info(f"Finished")
-    gc.collect()
+
+
+if __name__ == '__main__':
+    generate()

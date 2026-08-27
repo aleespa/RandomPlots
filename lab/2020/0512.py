@@ -1,18 +1,12 @@
-import random
-import string
-
 import matplotlib.pylab as plt
 import numpy as np
-import toml
 from loguru import logger
 
-from common.technology import create_directory
+from common.image_processing import ImageProcessingSettings
 
 
-def generate():
-    config = toml.load('config.toml')
-    filename = config['file_to_run']
-    create_directory(f"outputs/{filename}")
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     m = 4000
     n = 4000
 
@@ -37,7 +31,9 @@ def generate():
     ax.set_yticks([])
     ax.imshow(np.flipud(number_iterations), cmap='gist_earth')
 
-    name = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
-    logger.info(f"{name}.png Saved")
-    fig.savefig(f'outputs/{filename}/{name}.png', facecolor='k')
+    settings.save_to_png(fig, 'k')
     logger.info(f"Finished")
+
+
+if __name__ == '__main__':
+    generate()

@@ -1,24 +1,19 @@
-import gc
-import sys
 import time
-from datetime import datetime
 
 import numpy as np
 from loguru import logger
 from matplotlib import pyplot as plt
 from scipy.integrate import odeint
 
-from common.technology import create_directory, clear_folder, images_to_video
+from common.image_processing import ImageProcessingSettings
 
 
-def generate():
-    filename = sys.argv[1]
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     n_frames = 60
-    create_directory(f"outputs/{filename}")
-    clear_folder(f"outputs/{filename}")
     fig, _ = plt.subplots(figsize=(9, 16), dpi=100)
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
-    t = np.linspace(0, 2, 20)
+    t = np.linspace(0, 2, n_frames)
     x_initial = np.linspace(-2, 2, n_frames)
     y_initial = np.linspace(-2, 2, n_frames)
     X, Y = np.meshgrid(x_initial, y_initial)
@@ -42,17 +37,16 @@ def generate():
         ax.set_xlim(x1, x2)
         ax.set_ylim(y1 - z, y2 + z)
 
-        time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
-        fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
+        fig.savefig(settings.frames_path / f'frame{i:04d}.png', facecolor='k')
         t2 = time.time()
         logger.info(
             f"theta = {mu:.8f} "
             f"frame {str(i + 1).zfill(3)}/{n_frames} "
             f"time = {t2 - t1:.2f} seconds"
         )
-        gc.collect()
 
-    images_to_video(f'outputs/{filename}', f'{filename}.mp4', 6)
+    plt.close(fig)
+    settings.save_video(6)
 
 
 def system(state, t, mu):
@@ -60,3 +54,7 @@ def system(state, t, mu):
     dxdt = mu * x + y - x**2
     dydt = -x + mu * y + 2 * x**2
     return [dxdt, dydt]
+
+
+if __name__ == '__main__':
+    generate()

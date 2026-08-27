@@ -1,21 +1,9 @@
-import gc
-import sys
-from datetime import datetime
-
-import matplotlib
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from numba import njit
 
-from common.technology import images_to_video
-
-matplotlib.use('Agg')
-import os
-
-# Add directory containing OpenH264 DLL to the DLL search path
-openh264_dir = r'C:\Users\Alejandro Lopez\Documents\codec'
-os.add_dll_directory(openh264_dir)
+from common.image_processing import ImageProcessingSettings
 
 
 @njit
@@ -60,9 +48,8 @@ def calc_orbit(n_points, a, b, n_iter):
 
 
 def generate_plot(
-    l_cx: np.array, l_cy: np.array, area: np.array, filename: str, name: str
+    l_cx: np.array, l_cy: np.array, area: np.array, i: int, settings: ImageProcessingSettings
 ):
-    time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
     start_color = '#f4f0e7'  # Light color you specified
     end_color = '#000000'  # Black
 
@@ -75,49 +62,21 @@ def generate_plot(
     ax = fig.add_axes((0.0, 0.0, 1.0, 1.0), facecolor='#f4f0e7')
     ax.imshow(np.log(h + 1), vmin=0, vmax=5, cmap=cmap)
     plt.xticks([]), plt.yticks([])
-    fig.savefig(f'outputs/{filename}/{time_string}.png', facecolor='k')
-    plt.close()
+    settings.save_numbered_frame(i, 'k')
     del l_cx, l_cy
-    gc.collect()
 
 
-def generate():
-    filename = sys.argv[1]
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
     n_points = 600
     n_iter = 150
-    # a, b = 5.45, 4.55
-    for a, b in np.random.uniform(0, 2 * np.pi, (0, 2)):
+    area = np.array([[-0.5, 1], [-1, 1]])
+    for i, b in enumerate(np.linspace(0, 2 * np.pi, 600)):
+        a = 0.5
         l_cx, l_cy = calc_orbit(n_points, a, b, n_iter)
-        area = np.array([[-1, 1], [-1, 1]])
-        generate_plot(l_cx, l_cy, area, filename, f'{a:.5f}{b:.5f}')
+        generate_plot(l_cx, l_cy, area, i, settings)
+    settings.save_video(30)
 
-    # n_points = 600
-    # n_iter = 100
-    # a, b = 5.46781, 5.13645
-    # l_cx, l_cy = calc_orbit(n_points, a, b, n_iter)
-    # area = np.array([[-1, 0.2], [-1, 1]])
-    # generate_plot(l_cx, l_cy, area, filename, f'version_1')
 
-    # n_points = 600
-    # n_iter = 200
-    # a, b = 3.19899, 0.79022
-    # l_cx, l_cy = calc_orbit(n_points, a, b, n_iter)
-    # area = np.array([[-0.6, 0.9], [-0.4, 1]])
-    # generate_plot(l_cx, l_cy, area, filename, f'version_2')
-
-    # n_points = 600
-    # n_iter = 200
-    # a, b = 0.44717, 1.98510
-    # l_cx, l_cy = calc_orbit(n_points, a, b, n_iter)
-    # area = np.array([[-0.55, 1], [-1, 0.9]])
-    # generate_plot(l_cx, l_cy, area, filename, f'version_3')
-
-    # for b in np.linspace(0,2*np.pi, 600):
-    #     a = 0.5
-    #     l_cx, l_cy = calc_orbit(n_points, a, b, n_iter)
-    #     area = np.array([[-0.5, 1], [-1, 1]])
-    #     generate_plot(l_cx, l_cy ,area, 'animation2',f'{a:.5f}{b:.5f}')
-    #     del l_cx, l_cy
-    #     gc.collect()
-
-    images_to_video(f'outputs/animation2', 'non_linear_final.mp4', 30)
+if __name__ == '__main__':
+    generate()
