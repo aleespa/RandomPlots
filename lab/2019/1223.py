@@ -1,5 +1,9 @@
+import gc
+
 import matplotlib.pyplot as plt
 import numpy as np
+
+from common.image_processing import ImageProcessingSettings
 
 
 def koch_snowflake(order, scale=10):
@@ -27,10 +31,18 @@ def koch_snowflake(order, scale=10):
     return x, y
 
 
-p = plt.figure(figsize=(14, 14), facecolor='black', dpi=400)
-p = plt.axis('off')
-p = plt.axis('equal')
-for z in np.linspace(1, 10, 35)[::-1]:
-    x, y = koch_snowflake(order=7, scale=z)
-    plt.fill(x, y, color=plt.cm.Blues(z / 10 - 0.25))
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/23122019.png', facecolor='black')
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    fig = plt.figure(figsize=(14, 14), facecolor='black', dpi=400)
+    plt.axis('off')
+    plt.axis('equal')
+    for z in np.linspace(1, 10, 35)[::-1]:
+        x, y = koch_snowflake(order=7, scale=z)
+        plt.fill(x, y, color=plt.cm.Blues(z / 10 - 0.25))
+    settings.save_to_png(fig, 'black')
+    plt.close(fig)
+    gc.collect()
+
+
+if __name__ == '__main__':
+    generate()
