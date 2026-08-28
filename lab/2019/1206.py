@@ -3,13 +3,11 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-colors = ['#ff9b9b', '#f8ff90', '#a9ff8f', '#22ba5a', '#58c0e7']
-p = plt.figure(figsize=(14, 14), facecolor='black', dpi=500)
-p = plt.axis('off')
+from common.image_processing import ImageProcessingSettings
 
 
-def cubo(a, b, t, color):
-    p = plt.plot(
+def cubo(a, b, t):
+    plt.plot(
         [
             a * cos(t) - a * sin(t),
             b * cos(t) - a * sin(t),
@@ -30,6 +28,15 @@ def cubo(a, b, t, color):
     )
 
 
-for t in np.linspace(0, 2 * pi, 100):
-    cubo(cos(t + 0.1) ** 2, sin(t + 0.5) ** 2, pi / 4, 'red')
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/06122019.png', facecolor='black')
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    fig = plt.figure(figsize=(14, 14), facecolor='black', dpi=500)
+    plt.axis('off')
+
+    for t in np.linspace(0, 2 * pi, 100):
+        cubo(cos(t + 0.1) ** 2, sin(t + 0.5) ** 2, pi / 4)
+    settings.save_to_png(fig, 'black')
+
+
+if __name__ == '__main__':
+    generate()

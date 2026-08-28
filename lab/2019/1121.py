@@ -1,6 +1,7 @@
 import matplotlib.pylab as plt
-
 import numpy as np
+
+from common.image_processing import ImageProcessingSettings
 
 
 def Mandelbrot(a):
@@ -15,14 +16,18 @@ def Mandelbrot(a):
     return n
 
 
-x = np.linspace(-2, 0.5, 2000)
-y = np.linspace(-1, 1, 2000)
-xx, yy = np.meshgrid(x, y, sparse=True)
-z = np.array([[Mandelbrot(complex(s, t)) for s in xx[0]] for t in yy[:, 0]])
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    x = np.linspace(-2, 0.5, 2000)
+    y = np.linspace(-1, 1, 2000)
+    xx, yy = np.meshgrid(x, y, sparse=True)
+    z = np.array([[Mandelbrot(complex(s, t)) for s in xx[0]] for t in yy[:, 0]])
 
-p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
-p = plt.axis('off')
-h = plt.contourf(x, y, z, cmap='magma')
-p = plt.savefig(
-    f'C:/Users/Alejandro/Pictures/RandomPlots/21112019.png', facecolor='black'
-)
+    fig = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
+    plt.axis('off')
+    plt.contourf(x, y, z, cmap='magma')
+    settings.save_to_png(fig, 'black')
+
+
+if __name__ == '__main__':
+    generate()

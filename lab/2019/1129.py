@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
+
 recorrido = np.array(
     [
         [63, 14, 37, 24, 51, 26, 35, 10],
@@ -21,19 +23,20 @@ def tablero(w, h):
     return np.row_stack(h * (re, ro))
 
 
-tablero_ajedrez = tablero(4, 4)
-
-
-def camino_caballo(slider):
+def camino_caballo(tablero_ajedrez, slider):
     tablero_ajedrez[recorrido == slider] = -1
     fig, ax = plt.subplots(facecolor='white', figsize=(12, 12), dpi=200)
     ax.imshow(tablero_ajedrez, cmap=plt.cm.gist_gray, interpolation='nearest')
     plt.axis('off')
 
 
-for i in range(1, 65):
-    camino_caballo(i)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/29112019/plor{i}.png',
-        facecolor='black',
-    )
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    tablero_ajedrez = tablero(4, 4)
+    for i in range(1, 65):
+        camino_caballo(tablero_ajedrez, i)
+        settings.save_frame('black')
+
+
+if __name__ == '__main__':
+    generate()

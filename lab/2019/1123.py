@@ -1,13 +1,15 @@
 import matplotlib.pylab as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
 
-def Lolka(VI):
+
+def Lolka(VI, rng):
     alpha, beta, gamma, delta = -0.4, 0.01, 0.2, -0.01
     h = 0.01
     f = lambda x: np.array(
         [
-            alpha * x[0] + beta * x[0] * x[1] + np.random.uniform(-3, 3),
+            alpha * x[0] + beta * x[0] * x[1] + rng.uniform(-3, 3),
             gamma * x[1] + delta * x[0] * x[1],
         ]
     )
@@ -20,7 +22,7 @@ def Lolka(VI):
         k4 = f(U[j] + h * k3)
         U.append(U[j] + (h / 6) * (k1 + 2 * k2 + 2 * k3 + k4))
 
-    p = plt.plot(
+    plt.plot(
         [U[i][0] for i in range(len(U))],
         [U[i][1] for i in range(len(U))],
         alpha=0.8,
@@ -28,10 +30,14 @@ def Lolka(VI):
     )
 
 
-p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
-p = plt.axis('off')
-for i in range(1, 11):
-    Lolka([5 * i, 80])
-p = plt.savefig(
-    f'C:/Users/Alejandro/Pictures/RandomPlots/23112019.png', facecolor='black'
-)
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    fig = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
+    plt.axis('off')
+    for i in range(1, 11):
+        Lolka([5 * i, 80], settings.rng)
+    settings.save_to_png(fig, 'black')
+
+
+if __name__ == '__main__':
+    generate()

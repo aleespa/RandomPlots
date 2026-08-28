@@ -3,16 +3,23 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
-p = plt.axis('off')
-# p = plt.xlim(-.5,.5)
-# p = plt.ylim(0,1)
-for x in np.linspace(-2 * pi, 2 * pi, 300):
-    plt.plot(
-        [-x, x],
-        [cos(-x), sin(x + 5)],
-        lw=0.9,
-        color=plt.cm.Spectral((x + 2 * pi) / (4 * pi)),
-        alpha=0.8,
-    )
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/01122019.png', facecolor='black')
+from common.image_processing import ImageProcessingSettings
+
+
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    fig = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
+    plt.axis('off')
+    for x in np.linspace(-2 * pi, 2 * pi, 300):
+        plt.plot(
+            [-x, x],
+            [cos(-x), sin(x + 5)],
+            lw=0.9,
+            color=plt.cm.Spectral((x + 2 * pi) / (4 * pi)),
+            alpha=0.8,
+        )
+    settings.save_to_png(fig, 'black')
+
+
+if __name__ == '__main__':
+    generate()
