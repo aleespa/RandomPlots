@@ -3,8 +3,7 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-colors = ['#32886f', '#0b5a42', '#72b7a3', '#bbbbbb', '#aaaaaa'] * 100
-n = 0
+from common.image_processing import ImageProcessingSettings
 
 
 def dibujo(t, n):
@@ -22,17 +21,26 @@ def dibujo(t, n):
             s=65,
         )
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-n = 50
-m = 0
-for t in np.linspace(0, 2 * pi, 600):
-    p = plt.figure(figsize=(12, 12), facecolor='black')
-    p = plt.axis('off')
-    p = plt.xlim(-n, n)
-    p = plt.ylim(-n, n)
-    dibujo(t, n)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/29122019/plot{m}.png',
-        facecolor='black',
-    )
-    m += 1
+
+    colors = ['#32886f', '#0b5a42', '#72b7a3', '#bbbbbb', '#aaaaaa'] * 100
+    n = 0
+
+
+
+
+    n = 50
+    m = 0
+    for t in np.linspace(0, 2 * pi, 600):
+        p = plt.figure(figsize=(12, 12), facecolor='black')
+        p = plt.axis('off')
+        p = plt.xlim(-n, n)
+        p = plt.ylim(-n, n)
+        dibujo(t, n)
+        settings.save_frame('black')
+        m += 1
+
+if __name__ == '__main__':
+    generate()

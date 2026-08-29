@@ -2,10 +2,10 @@ import os
 import subprocess
 from pathlib import Path
 
+from common.image_processing import ImageProcessingSettings
 from common.image_processing import create_directory
 from common.technology import images_to_video
 
-OUTPUT_PATH = Path('outputs')
 
 def main():
 
@@ -39,5 +39,15 @@ def main():
 
     print(sys.executable)
 
-if __name__ =="__main__":
-    main()
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+
+
+    OUTPUT_PATH = Path('outputs')
+
+
+    if __name__ =="__main__":
+        main()
+
+if __name__ == '__main__':
+    generate()

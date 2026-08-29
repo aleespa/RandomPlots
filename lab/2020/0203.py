@@ -3,8 +3,9 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-lws = np.random.uniform(1,4.5,100)
-colors = np.random.beta(0.5,0.5,100)
+from common.image_processing import ImageProcessingSettings
+
+
 def hexline(t):
     p = plt.figure(figsize=(14,14),facecolor='black',dpi=100)
     p = plt.axis('off')
@@ -15,6 +16,19 @@ def hexline(t):
                  lw=lws[i],
                  color=plt.cm.coolwarm_r(colors[i]))
 
-for i, t in zip(range(300),np.linspace(0,2*pi,300)):
-    hexline(t)
-    plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/03022020/plor{i}.png',facecolor='black')
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+
+
+    lws = settings.rng.uniform(1,4.5,100)
+    colors = np.random.beta(0.5,0.5,100)
+
+    for i, t in zip(range(300),np.linspace(0,2*pi,300)):
+        hexline(t)
+        settings.save_to_png(fig, 'black')
+        plt.close(fig)
+        import gc
+        gc.collect()
+
+if __name__ == '__main__':
+    generate()

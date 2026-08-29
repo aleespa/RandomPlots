@@ -3,7 +3,7 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-colors = ['#ff729d', '#ffbc77', '#afdf80', '#a4ffcf', '#afdf80'] * 400
+from common.image_processing import ImageProcessingSettings
 
 
 def pol(n):
@@ -23,8 +23,17 @@ def pol(n):
                     color=colors[i + j],
                 )
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-pol(28)
-plt.savefig(
-    f'C:/Users/Alejandro/Pictures/RandomPlots/02022020_2.PNG', facecolor='black'
-)
+
+    colors = ['#ff729d', '#ffbc77', '#afdf80', '#a4ffcf', '#afdf80'] * 400
+
+
+
+
+    pol(28)
+    settings.save_frame('black')
+
+if __name__ == '__main__':
+    generate()

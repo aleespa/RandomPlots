@@ -2,14 +2,24 @@ from math import cos, sin
 
 import matplotlib.pylab as plt
 
-p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
-p = plt.axis('off')
-# p = plt.xlim(0,6000)
-# p = plt.ylim(0,6000)
-for i in range(0,11):
-    plt.scatter([z*cos(z) for z in range(10000) if z%15 ==i],
-                [z*sin(z) for z in range(10000) if z%15 ==i],
-                alpha=0.8,
-                s=8,
-                color=plt.cm.summer(i/10))
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/01022020.png',facecolor='black')
+from common.image_processing import ImageProcessingSettings
+
+
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+
+
+    p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
+    p = plt.axis('off')
+    # p = plt.xlim(0,6000)
+    # p = plt.ylim(0,6000)
+    for i in range(0,11):
+        plt.scatter([z*cos(z) for z in range(10000) if z%15 ==i],
+                    [z*sin(z) for z in range(10000) if z%15 ==i],
+                    alpha=0.8,
+                    s=8,
+                    color=plt.cm.summer(i/10))
+    settings.save_frame('black')
+
+if __name__ == '__main__':
+    generate()

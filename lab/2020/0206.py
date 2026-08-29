@@ -3,9 +3,7 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-colors = ['#3b567d', '#67a23f', '#f6ae33', '#f94333', '#249596']
-random_colors = np.random.choice(colors, 60)
-random_lw = np.random.uniform(0.5, 4.5, 60)
+from common.image_processing import ImageProcessingSettings
 
 
 def spiral(t):
@@ -20,10 +18,23 @@ def spiral(t):
             color=random_colors[i],
         )
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-for t, i in zip(np.linspace(0, pi / 2, 360), range(360)):
-    spiral(t)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/06022020/plot{i}.png',
-        facecolor='black',
-    )
+
+    colors = ['#3b567d', '#67a23f', '#f6ae33', '#f94333', '#249596']
+    random_colors = settings.rng.choice(colors, 60)
+    random_lw = settings.rng.uniform(0.5, 4.5, 60)
+
+
+
+
+    for t, i in zip(np.linspace(0, pi / 2, 360), range(360)):
+        spiral(t)
+        settings.save_to_png(fig, 'black')
+        plt.close(fig)
+        import gc
+        gc.collect()
+
+if __name__ == '__main__':
+    generate()

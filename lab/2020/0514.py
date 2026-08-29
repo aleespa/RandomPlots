@@ -3,10 +3,7 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-plt.figure(figsize=(14, 14), dpi=400, facecolor='black')
-# plt.xlim(-1.05,1.05)
-# plt.ylim(-1.05,1.05)
-plt.axis('off')
+from common.image_processing import ImageProcessingSettings
 
 
 def pol(n, x, y, color):
@@ -21,11 +18,23 @@ def pol(n, x, y, color):
                     color=color,
                 )
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-for k in range(9):
-    for l in range(9):
-        pol(k + l + 4, k * 2, l * 2, color=plt.cm.GnBu(k * l / (8 * 8) + 0.1))
 
-p = plt.savefig(
-    f'C:/Users/Alejandro/Pictures/RandomPlots/14052020.PNG', facecolor='black'
-)
+    plt.figure(figsize=(14, 14), dpi=400, facecolor='black')
+    # plt.xlim(-1.05,1.05)
+    # plt.ylim(-1.05,1.05)
+    plt.axis('off')
+
+
+
+
+    for k in range(9):
+        for l in range(9):
+            pol(k + l + 4, k * 2, l * 2, color=plt.cm.GnBu(k * l / (8 * 8) + 0.1))
+
+    p = settings.save_frame('black')
+
+if __name__ == '__main__':
+    generate()

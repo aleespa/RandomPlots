@@ -1,6 +1,8 @@
 import matplotlib.pylab as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
+
 
 def lines(n):
     p = plt.figure(figsize=(14, 14), facecolor='black')
@@ -10,12 +12,20 @@ def lines(n):
         plt.plot([0, x], [f(x), f(x)], color=plt.cm.viridis(x / (30)), lw=3)
         plt.plot([x, x], [0, f(x)], color=plt.cm.plasma(x / (30)), lw=3)
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-for n, i in zip(
-    list(np.linspace(0, 5, 250)) + list(np.linspace(5, 0, 250)), range(500)
-):
-    lines(n)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/18012020/plor{i}.png',
-        facecolor='black',
-    )
+
+
+
+    for n, i in zip(
+        list(np.linspace(0, 5, 250)) + list(np.linspace(5, 0, 250)), range(500)
+    ):
+        lines(n)
+        settings.save_to_png(fig, 'black')
+        plt.close(fig)
+        import gc
+        gc.collect()
+
+if __name__ == '__main__':
+    generate()

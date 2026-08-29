@@ -3,6 +3,8 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
+
 
 def rot(year):
     p = plt.figure(figsize=(13, 13), facecolor='black')
@@ -81,33 +83,33 @@ def rot(year):
         zorder=10,
     )
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-m = 0
-for y in np.linspace(0, 2010, 210):
-    rot(y)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/31122019/plot{m}.png',
-        facecolor='black',
-    )
-    m += 1
-for y in np.linspace(2010, 2018, 190):
-    rot(y)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/31122019/plot{m}.png',
-        facecolor='black',
-    )
-    m += 1
-for y in np.linspace(2018, 2020, 120):
-    rot(y)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/31122019/plot{m}.png',
-        facecolor='black',
-    )
-    m += 1
-for _ in range(60):
-    rot(2020)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/31122019/plot{m}.png',
-        facecolor='black',
-    )
-    m += 1
+
+
+
+
+    m = 0
+    for y in np.linspace(0, 2010, 210):
+        rot(y)
+        settings.save_to_png(fig, 'black')
+        m += 1
+    for y in np.linspace(2010, 2018, 190):
+        rot(y)
+        settings.save_to_png(fig, 'black')
+        m += 1
+    for y in np.linspace(2018, 2020, 120):
+        rot(y)
+        settings.save_to_png(fig, 'black')
+        m += 1
+    for _ in range(60):
+        rot(2020)
+        settings.save_to_png(fig, 'black')
+        m += 1
+        plt.close(fig)
+        import gc
+        gc.collect()
+
+if __name__ == '__main__':
+    generate()

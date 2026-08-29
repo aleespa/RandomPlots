@@ -4,23 +4,33 @@ from math import pi
 import matplotlib.pylab as plt
 import numpy as np
 
-N = 7500
-f = lambda n: n / 11 + n**2 / 21 + n**3 / 31
-S = np.cumsum([cexp(f(n) * complex(0, 2 * pi)) for n in range(1, N)])
+from common.image_processing import ImageProcessingSettings
 
-p = plt.figure(figsize=(14, 14), facecolor='black', dpi=100)
-p = plt.axis('off')
-for k in range(440):
-    plt.ylim(-25, 35)
-    plt.xlim(-40, 20)
-    plt.plot(
-        [S[i].real for i in range(N - 1)][k * 20 : (k + 1) * 20 + 1],
-        [S[i].imag for i in range(N - 1)][k * 20 : (k + 1) * 20 + 1],
-        lw=1,
-        color='w',
-        alpha=0.8,
-    )
-    p = plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/29022020/plot{k}.PNG',
-        facecolor='black',
-    )
+
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+
+
+    N = 7500
+    f = lambda n: n / 11 + n**2 / 21 + n**3 / 31
+    S = np.cumsum([cexp(f(n) * complex(0, 2 * pi)) for n in range(1, N)])
+
+    fig = plt.figure(figsize=(14, 14), facecolor='black', dpi=100)
+    p = plt.axis('off')
+    for k in range(440):
+        plt.ylim(-25, 35)
+        plt.xlim(-40, 20)
+        plt.plot(
+            [S[i].real for i in range(N - 1)][k * 20 : (k + 1) * 20 + 1],
+            [S[i].imag for i in range(N - 1)][k * 20 : (k + 1) * 20 + 1],
+            lw=1,
+            color='w',
+            alpha=0.8,
+        )
+        p = settings.save_to_png(fig, 'black')
+        plt.close(fig)
+        import gc
+        gc.collect()
+
+if __name__ == '__main__':
+    generate()

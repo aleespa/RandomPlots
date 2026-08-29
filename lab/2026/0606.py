@@ -1,22 +1,11 @@
-"""
-Weierstrass P-function visualizer using matplotlib domain coloring.
-
-Supports the standard square lattice (ω1=1, ω2=i) and randomly generated
-lattices from two linearly independent complex periods.
-
-Python 3 compatible.
-"""
-
 from pathlib import Path
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
 
-# ---------------------------------------------------------------------------
-# Lattice helpers
-# ---------------------------------------------------------------------------
 
 def random_periods(
     min_modulus: float = 0.5,
@@ -43,8 +32,6 @@ def random_periods(
         angle_diff = abs((θ2 - θ1 + np.pi) % (2 * np.pi) - np.pi)
         if angle_diff > min_angle_separation and angle_diff < np.pi - min_angle_separation:
             return ω1, ω2
-
-
 def make_lattice_points(
     n: int,
     omega1: complex = 1.0,
@@ -63,12 +50,6 @@ def make_lattice_points(
     ]
     points.sort(key=abs)
     return points
-
-
-# ---------------------------------------------------------------------------
-# Weierstrass P-function partial sums
-# ---------------------------------------------------------------------------
-
 def make_partial_sum(lattice_points: list[complex], n_terms: int):
     """Return a vectorised callable for the n_terms-th partial sum of ℘."""
     active = lattice_points[:n_terms]
@@ -80,12 +61,6 @@ def make_partial_sum(lattice_points: list[complex], n_terms: int):
         return result
 
     return wp
-
-
-# ---------------------------------------------------------------------------
-# Domain coloring
-# ---------------------------------------------------------------------------
-
 def domain_color(f_vals: np.ndarray, modulus_clamp: float = 10.0) -> np.ndarray:
     """
     Convert complex array to RGB via domain coloring:
@@ -104,12 +79,6 @@ def domain_color(f_vals: np.ndarray, modulus_clamp: float = 10.0) -> np.ndarray:
 
     hsv = np.stack([hue, np.ones_like(hue), value], axis=-1)
     return mcolors.hsv_to_rgb(hsv)
-
-
-# ---------------------------------------------------------------------------
-# Plotting
-# ---------------------------------------------------------------------------
-
 def plot_partial_sum(
     f,
     re_range: tuple[float, float] = (-7.0, 7.0),
@@ -142,18 +111,10 @@ def plot_partial_sum(
     ax.set_xlabel("Re(z)")
     ax.set_ylabel("Im(z)")
     return ax
-
-
-# ---------------------------------------------------------------------------
-# Batch generation
-# ---------------------------------------------------------------------------
-
 def _auto_range(omega1: complex, omega2: complex, zoom: float = 4.0) -> tuple[float, float]:
     """Sensible plot range based on the period moduli."""
     half = zoom * max(abs(omega1), abs(omega2))
     return (-half, half)
-
-
 def make_plots(
     n: int = 6,
     omega1: complex | None = None,
@@ -192,12 +153,6 @@ def make_plots(
         fig.savefig(path, bbox_inches="tight")
         plt.close(fig)
         print(f"  saved {path}")
-
-
-# ---------------------------------------------------------------------------
-# Quick side-by-side comparison (zoomed in vs zoomed out)
-# ---------------------------------------------------------------------------
-
 def compare_zoom(
     n: int = 6,
     n_terms: int = 20,
@@ -235,21 +190,77 @@ def compare_zoom(
     fig.tight_layout()
     return fig
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+    """
+    Weierstrass P-function visualizer using matplotlib domain coloring.
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+    Supports the standard square lattice (ω1=1, ω2=i) and randomly generated
+    lattices from two linearly independent complex periods.
 
-if __name__ == "__main__":
-    # Random lattice, reproducible with seed=
-    fig = compare_zoom(n=2, n_terms=100, omega1=1, omega2=1j, resolution=1000, seed=42)
-    fig.savefig("weierstrass_preview.png", dpi=120, bbox_inches="tight")
-    plt.show()
+    Python 3 compatible.
+    """
 
-    # Standard square lattice (original behaviour):
-    # fig = compare_zoom(n=6, n_terms=20, omega1=1, omega2=1j)
 
-    # Uncomment to generate full frame sequences with a random lattice:
-    # make_plots(6, outdir="./zoomed_out/", n_images=25, seed=42)
-    # make_plots(6, re_range=(-1, 1), im_range=(-1, 1),
-    #            outdir="./zoomed_in/", n_images=25, seed=42)
+
+
+    # ---------------------------------------------------------------------------
+    # Lattice helpers
+    # ---------------------------------------------------------------------------
+
+
+
+
+
+    # ---------------------------------------------------------------------------
+    # Weierstrass P-function partial sums
+    # ---------------------------------------------------------------------------
+
+
+
+    # ---------------------------------------------------------------------------
+    # Domain coloring
+    # ---------------------------------------------------------------------------
+
+
+
+    # ---------------------------------------------------------------------------
+    # Plotting
+    # ---------------------------------------------------------------------------
+
+
+
+    # ---------------------------------------------------------------------------
+    # Batch generation
+    # ---------------------------------------------------------------------------
+
+
+
+
+
+    # ---------------------------------------------------------------------------
+    # Quick side-by-side comparison (zoomed in vs zoomed out)
+    # ---------------------------------------------------------------------------
+
+
+
+    # ---------------------------------------------------------------------------
+    # Entry point
+    # ---------------------------------------------------------------------------
+
+    if __name__ == "__main__":
+        # Random lattice, reproducible with seed=
+        fig = compare_zoom(n=2, n_terms=100, omega1=1, omega2=1j, resolution=1000, seed=42)
+        fig.savefig("weierstrass_preview.png", dpi=120, bbox_inches="tight")
+        plt.show()
+
+        # Standard square lattice (original behaviour):
+        # fig = compare_zoom(n=6, n_terms=20, omega1=1, omega2=1j)
+
+        # Uncomment to generate full frame sequences with a random lattice:
+        # make_plots(6, outdir="./zoomed_out/", n_images=25, seed=42)
+        # make_plots(6, re_range=(-1, 1), im_range=(-1, 1),
+        #            outdir="./zoomed_in/", n_images=25, seed=42)
+
+if __name__ == '__main__':
+    generate()

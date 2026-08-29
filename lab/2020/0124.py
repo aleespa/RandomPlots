@@ -1,28 +1,37 @@
 from math import cos, sin
 
 import matplotlib.pylab as plt
-import numpy as np
 
-p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
-p = plt.axis('off')
-plt.scatter([(z)*cos(z)*sin(z) for z in range(7000)],
-            [z*sin(z)*sin(z) for z in range(7000)],
-            s=4,
-            color=[plt.cm.Accent(np.random.uniform(0,1)) for z in range(7000)])
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/23012020_1.png',facecolor='black')
+from common.image_processing import ImageProcessingSettings
 
-p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
-p = plt.axis('off')
-plt.scatter([(z)*cos(z)*sin(z*10) for z in range(7000)],
-            [z*sin(z)*sin(z) for z in range(7000)],
-            s=4,
-            color=[plt.cm.Accent(np.random.uniform(0,1)) for z in range(7000)])
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/23012020_2.png',facecolor='black')
 
-p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
-p = plt.axis('off')
-plt.scatter([(z)*cos(z)*sin(z*10) for z in range(7000)],
-            [z*sin(z)*sin(z*.4) for z in range(7000)],
-            s=4,
-            color=[plt.cm.Accent(np.random.uniform(0,1)) for z in range(7000)])
-plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/23012020_3.png',facecolor='black')
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+
+
+    p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
+    p = plt.axis('off')
+    plt.scatter([(z)*cos(z)*sin(z) for z in range(7000)],
+                [z*sin(z)*sin(z) for z in range(7000)],
+                s=4,
+                color=[plt.cm.Accent(settings.rng.uniform(0,1)) for z in range(7000)])
+    settings.save_frame('black')
+
+    p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
+    p = plt.axis('off')
+    plt.scatter([(z)*cos(z)*sin(z*10) for z in range(7000)],
+                [z*sin(z)*sin(z) for z in range(7000)],
+                s=4,
+                color=[plt.cm.Accent(settings.rng.uniform(0,1)) for z in range(7000)])
+    settings.save_frame('black')
+
+    p = plt.figure(figsize=(14,14),facecolor='black',dpi=400)
+    p = plt.axis('off')
+    plt.scatter([(z)*cos(z)*sin(z*10) for z in range(7000)],
+                [z*sin(z)*sin(z*.4) for z in range(7000)],
+                s=4,
+                color=[plt.cm.Accent(settings.rng.uniform(0,1)) for z in range(7000)])
+    settings.save_frame('black')
+
+if __name__ == '__main__':
+    generate()

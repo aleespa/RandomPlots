@@ -7,7 +7,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from numpy import pi, cos, sin
 from scipy import interpolate
 
-filename = os.path.basename(sys.argv[0])[:-3]
+from common.image_processing import ImageProcessingSettings
 
 
 def ikeda_map(x0, y0, u):
@@ -15,8 +15,6 @@ def ikeda_map(x0, y0, u):
     x1 = 1 + u * (x0 * cos(tn) - y0 * sin(tn))
     y1 = u * (x0 * sin(tn) + y0 * cos(tn))
     return x1, y1
-
-
 def plot_1():
     u = 0.918
     m = 20
@@ -73,8 +71,6 @@ def plot_1():
         plt.close()
         plt.cla()
         plt.clf()
-
-
 def plot_2():
     u = 0.5
     m = 20
@@ -119,8 +115,6 @@ def plot_2():
     plt.close()
     plt.cla()
     plt.clf()
-
-
 def plot_3():
     u = 0.7
     m = 25 * 4
@@ -233,8 +227,6 @@ def plot_3():
     plt.close()
     plt.cla()
     plt.clf()
-
-
 class Frame:
     def __int__(self):
         pass
@@ -242,7 +234,26 @@ class Frame:
     def get_social_life(self):
         pass
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
+
+
+    filename = os.path.basename(sys.argv[0])[:-3]
+
+
+
+
+
+
+
+
+
+
+
+
+    if __name__ == '__main__':
+        plot_1()
+        # plot_3()
 
 if __name__ == '__main__':
-    plot_1()
-    # plot_3()
+    generate()

@@ -3,11 +3,7 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-fig, ax = plt.subplots(figsize=(14, 14), facecolor='black', dpi=400)
-
-p = plt.axis('off')
-p = plt.xlim(0, 2)
-p = plt.ylim(0, 2)
+from common.image_processing import ImageProcessingSettings
 
 
 def circles(x, y, r, l):
@@ -22,10 +18,23 @@ def circles(x, y, r, l):
         )
         ax.add_artist(plt.Circle((x, y), radius=r, color="black", zorder=l))
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-for i in range(100):
-    circles(np.random.uniform(-0.2, 2.2), np.random.uniform(0, 2), 0.5, i)
 
-p = plt.savefig(
-    f'C:/Users/Alejandro/Pictures/RandomPlots/09052020.PNG', facecolor='black'
-)
+    fig, ax = plt.subplots(figsize=(14, 14), facecolor='black', dpi=400)
+
+    p = plt.axis('off')
+    p = plt.xlim(0, 2)
+    p = plt.ylim(0, 2)
+
+
+
+
+    for i in range(100):
+        circles(settings.rng.uniform(-0.2, 2.2), settings.rng.uniform(0, 2), 0.5, i)
+
+    p = settings.save_frame('black')
+
+if __name__ == '__main__':
+    generate()

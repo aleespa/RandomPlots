@@ -5,7 +5,7 @@ import sys
 import matplotlib.pylab as plt
 import numpy as np
 
-filename = os.path.basename(sys.argv[0])[:-3]
+from common.image_processing import ImageProcessingSettings
 
 
 def sim_sde(
@@ -39,56 +39,64 @@ def sim_sde(
             + sigma * W[i, :, np.newaxis]
         )
     return z
-
-
 def cartesian_product_itertools(arrays):
     return np.array(list(itertools.product(*arrays)))
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-r = 1
-m = 600
-layers = 50
-n = 10000
-Ic = np.stack(
-    [
-        r * np.cos(np.linspace(0, 2 * np.pi, m)),
-        r * np.sin(np.linspace(0, 2 * np.pi, m)),
-    ],
-    axis=-1,
-)
 
-Z = [
-    sim_sde(
-        alpha=1,
-        beta=1,
-        a=1,
-        b=25,
-        initial_value=Ic * x,
-        m=m,
-        random_state=1,
-        n=15000,
-        sigma=1,
+    filename = os.path.basename(sys.argv[0])[:-3]
+
+
+
+
+
+
+    r = 1
+    m = 600
+    layers = 50
+    n = 10000
+    Ic = np.stack(
+        [
+            r * np.cos(np.linspace(0, 2 * np.pi, m)),
+            r * np.sin(np.linspace(0, 2 * np.pi, m)),
+        ],
+        axis=-1,
     )
-    for x in np.linspace(0, 2, layers)
-]
 
-time = 20
-frame_rate = 30
-frames = time * frame_rate
-times = np.ceil(np.linspace(0, n, frames)).astype(int)
-for k, j in enumerate(times):
-    if k <= 355:
-        plt.figure(num=1, clear=True, figsize=(12, 12), dpi=100, facecolor='black')
-        plt.axis('off')
-        for i, z in enumerate(Z):
-            plt.scatter(
-                z[j, 0, :], z[j, 1, :], color=plt.cm.turbo(i / layers), alpha=0.8, s=5
-            )
-        plt.xlim(Z[0][j, 0, 0] - 3, Z[0][j, 0, 0] + 3)
-        plt.ylim(Z[0][j, 1, 0] - 3, Z[0][j, 1, 0] + 3)
-        plt.tight_layout()
-        plt.savefig(
-            f"./../outputs/{filename}/plot{frames-k}.png",
-            facecolor='black',
+    Z = [
+        sim_sde(
+            alpha=1,
+            beta=1,
+            a=1,
+            b=25,
+            initial_value=Ic * x,
+            m=m,
+            random_state=1,
+            n=15000,
+            sigma=1,
         )
-        plt.close()
+        for x in np.linspace(0, 2, layers)
+    ]
+
+    time = 20
+    frame_rate = 30
+    frames = time * frame_rate
+    times = np.ceil(np.linspace(0, n, frames)).astype(int)
+    for k, j in enumerate(times):
+        if k <= 355:
+            plt.figure(num=1, clear=True, figsize=(12, 12), dpi=100, facecolor='black')
+            plt.axis('off')
+            for i, z in enumerate(Z):
+                plt.scatter(
+                    z[j, 0, :], z[j, 1, :], color=plt.cm.turbo(i / layers), alpha=0.8, s=5
+                )
+            plt.xlim(Z[0][j, 0, 0] - 3, Z[0][j, 0, 0] + 3)
+            plt.ylim(Z[0][j, 1, 0] - 3, Z[0][j, 1, 0] + 3)
+            plt.tight_layout()
+            settings.save_frame('black')
+            plt.close()
+
+if __name__ == '__main__':
+    generate()

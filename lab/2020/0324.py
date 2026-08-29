@@ -3,6 +3,8 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
+
 
 def branch(X):
     Z = []
@@ -28,13 +30,22 @@ def branch(X):
             Z.append([x[0] + cos(t[k]), x[1] + sin(t[k])])
     return np.array(Z)
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-p = plt.figure(figsize=(14, 14), facecolor='black', dpi=400)
-p = plt.axis('off')
-# p = plt.xlim(-10,10)
-# p = plt.ylim(-10,10)
-X = branch(np.array([[0, 0]]))
-for _ in range(15):
-    X = branch(X)
 
-p = plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/24032020', facecolor='black')
+
+
+
+    p = plt.figure(figsize=(14, 14), facecolor='black', dpi=400)
+    p = plt.axis('off')
+    # p = plt.xlim(-10,10)
+    # p = plt.ylim(-10,10)
+    X = branch(np.array([[0, 0]]))
+    for _ in range(15):
+        X = branch(X)
+
+    p = settings.save_frame('black')
+
+if __name__ == '__main__':
+    generate()

@@ -1,6 +1,8 @@
 import matplotlib.pylab as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
+
 
 def Mandelbrot(a):
     z = 0
@@ -12,17 +14,25 @@ def Mandelbrot(a):
     if abs(z) > 2:
         return abs(z)
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
-p = plt.axis('off')
-colors = ['#60beb3', '#7fffd4', '#a6f6ea', '#5b7bd6', '#e6f5f4'] * 2
-for u in np.linspace(-1.5, 0.6, 65):
-    for x in np.linspace(-1, 1, 65):
-        plt.scatter(
-            [u],
-            [x],
-            s=Mandelbrot(complex(u, x)),
-            alpha=0.9,
-            color=np.random.choice(colors),
-        )
-p = plt.savefig(f'C:/Users/Alejandro/Pictures/RandomPlots/26032020', facecolor='black')
+
+
+
+    p = plt.figure(figsize=(12, 12), facecolor='black', dpi=400)
+    p = plt.axis('off')
+    colors = ['#60beb3', '#7fffd4', '#a6f6ea', '#5b7bd6', '#e6f5f4'] * 2
+    for u in np.linspace(-1.5, 0.6, 65):
+        for x in np.linspace(-1, 1, 65):
+            plt.scatter(
+                [u],
+                [x],
+                s=Mandelbrot(complex(u, x)),
+                alpha=0.9,
+                color=settings.rng.choice(colors),
+            )
+    p = settings.save_frame('black')
+
+if __name__ == '__main__':
+    generate()

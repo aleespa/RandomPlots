@@ -3,6 +3,8 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
+from common.image_processing import ImageProcessingSettings
+
 
 def branch(X):
     Z = []
@@ -27,45 +29,32 @@ def branch(X):
             Z.append([x[0] + cos(t[k]), x[1] + sin(t[k])])
     return np.array(Z)
 
-
-p = plt.figure(figsize=(14, 14), facecolor='black', dpi=500)
-p = plt.axis('off')
-p = plt.xlim(-15, 15)
-p = plt.ylim(-15, 15)
-
-plt.scatter([0], [0], s=4, color='red', zorder=10000)
-n = 1
-p = plt.text(
-    s=f'$n=$ {n}',
-    x=-3,
-    y=-9,
-    size=25,
-    color='red',
-    bbox={'facecolor': 'black', 'alpha': 1, 'pad': 2},
-)
-p = plt.savefig(
-    f'C:/Users/Alejandro/Pictures/RandomPlots/23032020/plot{0}.PNG', facecolor='black'
-)
-# p = plt.fill([-3.1,-3.1,3,3],[-9.1,-8.3,-8.3,-9.1],color='white',zorder=2)
-
-X = branch(np.array([[0, 0]]))
-n += len(X)
-p = plt.text(
-    s=f'$n=$ {n}',
-    x=-3,
-    y=-9,
-    size=25,
-    color='red',
-    bbox={'facecolor': 'black', 'alpha': 1, 'pad': 2},
-)
-p = plt.savefig(
-    f'C:/Users/Alejandro/Pictures/RandomPlots/23032020/plot{1}.PNG', facecolor='black'
-)
-# p = plt.fill([-3.1,-3.1,3,3],[-9.1,-8.3,-8.3,-9.1],color='white',zorder=2)
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
 
-for i in range(2, 21):
-    X = branch(X)
+
+
+
+    fig = plt.figure(figsize=(14, 14), facecolor='black', dpi=500)
+    p = plt.axis('off')
+    p = plt.xlim(-15, 15)
+    p = plt.ylim(-15, 15)
+
+    plt.scatter([0], [0], s=4, color='red', zorder=10000)
+    n = 1
+    p = plt.text(
+        s=f'$n=$ {n}',
+        x=-3,
+        y=-9,
+        size=25,
+        color='red',
+        bbox={'facecolor': 'black', 'alpha': 1, 'pad': 2},
+    )
+    p = settings.save_to_png(fig, 'black')
+    # p = plt.fill([-3.1,-3.1,3,3],[-9.1,-8.3,-8.3,-9.1],color='white',zorder=2)
+
+    X = branch(np.array([[0, 0]]))
     n += len(X)
     p = plt.text(
         s=f'$n=$ {n}',
@@ -75,8 +64,26 @@ for i in range(2, 21):
         color='red',
         bbox={'facecolor': 'black', 'alpha': 1, 'pad': 2},
     )
-    p = plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/23032020/plot{i}.PNG',
-        facecolor='black',
-    )
+    p = settings.save_to_png(fig, 'black')
     # p = plt.fill([-3.1,-3.1,3,3],[-9.1,-8.3,-8.3,-9.1],color='white',zorder=2)
+
+
+    for i in range(2, 21):
+        X = branch(X)
+        n += len(X)
+        p = plt.text(
+            s=f'$n=$ {n}',
+            x=-3,
+            y=-9,
+            size=25,
+            color='red',
+            bbox={'facecolor': 'black', 'alpha': 1, 'pad': 2},
+        )
+        p = settings.save_to_png(fig, 'black')
+        # p = plt.fill([-3.1,-3.1,3,3],[-9.1,-8.3,-8.3,-9.1],color='white',zorder=2)
+        plt.close(fig)
+        import gc
+        gc.collect()
+
+if __name__ == '__main__':
+    generate()

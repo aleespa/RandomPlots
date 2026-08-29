@@ -3,7 +3,7 @@ from math import cos, sin, pi
 import matplotlib.pylab as plt
 import numpy as np
 
-colors = [plt.cm.Spectral(np.random.uniform(0, 1)) for j in range(60)]
+from common.image_processing import ImageProcessingSettings
 
 
 def loc(z):
@@ -17,10 +17,21 @@ def loc(z):
         ]
         plt.plot(X, Y, alpha=0.85, lw=2.2, color=color)
 
+def generate(settings: ImageProcessingSettings = None):
+    settings = settings or ImageProcessingSettings(1)
 
-for z, i in zip(np.linspace(0, 8, 300), range(300)):
-    loc(z)
-    plt.savefig(
-        f'C:/Users/Alejandro/Pictures/RandomPlots/22012020/plor{i}.png',
-        facecolor='black',
-    )
+
+    colors = [plt.cm.Spectral(settings.rng.uniform(0, 1)) for j in range(60)]
+
+
+
+
+    for z, i in zip(np.linspace(0, 8, 300), range(300)):
+        loc(z)
+        settings.save_to_png(fig, 'black')
+        plt.close(fig)
+        import gc
+        gc.collect()
+
+if __name__ == '__main__':
+    generate()
