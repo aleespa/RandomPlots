@@ -18,9 +18,10 @@ class ImageProcessingSettings:
     output_path: Path = OUTPUT_PATH
     rng: Generator
 
-    def __init__(self, seed=0, filename=None):
+    def __init__(self, seed=0, filename=None, hdr=False):
         self.filename = filename or datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         self.rng = np.random.default_rng(seed=seed)
+        self.hdr = hdr
         create_directory(self.output_path / self.filename)
         clear_folder(self.output_path / self.filename)
 
@@ -57,7 +58,16 @@ class ImageProcessingSettings:
 
     def save_video(self, fps=30):
         """Encode the frames folder into outputs/<filename>/<filename>.mp4 with ffmpeg."""
-        images_to_video(self.frames_path, f'{self.filename}.mp4', fps)
+        if self.hdr:
+            from common.technology import images_to_hdr_video
+
+            images_to_hdr_video(
+                self.frames_path,
+                f'{self.filename}_HDR_HLG.mp4',
+                fps,
+            )
+        else:
+            images_to_video(self.frames_path, f'{self.filename}.mp4', fps)
 
     def images_to_video(self, fps=30):
         """

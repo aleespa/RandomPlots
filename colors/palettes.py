@@ -1,30 +1,34 @@
-GrnGre = ['#23895d', '#7fd677', '#eadb87', '#eeda9e', '#b8b8b8']
-GYRYG = ['#96ceb4', '#ffeead', '#ff6f69', '#ffcc5c', '#88d8b0']
-YBBPG = ['#f7f4a3', '#7fccec', '#6a81d9', '#a479c9', '#dfdfdf']
+GrnGre = ["#23895d", "#7fd677", "#eadb87", "#eeda9e", "#b8b8b8"]
+GYRYG = ["#96ceb4", "#ffeead", "#ff6f69", "#ffcc5c", "#88d8b0"]
+YBBPG = ["#f7f4a3", "#7fccec", "#6a81d9", "#a479c9", "#dfdfdf"]
 RedWht = [
-    '#ff817a',
-    '#ff8d87',
-    '#ff9a94',
-    '#ffa6a1',
-    '#ffb3af',
-    '#ffc0bc',
-    '#ffccc9',
-    '#ffd9d7',
-    '#ffe5e4',
-    '#fff2f1',
-    '#ffffff',
+    "#ff817a",
+    "#ff8d87",
+    "#ff9a94",
+    "#ffa6a1",
+    "#ffb3af",
+    "#ffc0bc",
+    "#ffccc9",
+    "#ffd9d7",
+    "#ffe5e4",
+    "#fff2f1",
+    "#ffffff",
 ]
-TWLAGN = ['#ccabd8', '#8474a1', '#6ec6ca', '#08979d', '#055b5c']
-NEAURA = ['#ff00b4', '#00ffbc', '#8ea5ff', '#ffffff', '#c493ff']
-ECOSPL = ['#e26000', '#228B46', '#5092B8', '#ff9b9b', '#c9d06c', '#22ba5a', '#58c0e7']
-SUNWAV  = [
-    ('#ff6f4b', 20),
-    ('#fd4c55', 20),
-    ('#e13661', 20),
-    ('#c1246b', 20),
-    ('#a11477', 20),
-    ('#c1246b', 20),
-    ('#e13661', 20),
-    ('#fd4c55', 20),
-    ('#ff6f4b', 40),
+TWLAGN = ["#ccabd8", "#8474a1", "#6ec6ca", "#08979d", "#055b5c"]
+NEAURA = ["#ff00b4", "#00ffbc", "#8ea5ff", "#ffffff", "#c493ff"]
+ECOSPL = ["#e26000", "#228B46", "#5092B8", "#ff9b9b", "#c9d06c", "#22ba5a", "#58c0e7"]
+SUNWAV = [
+    ("#ff6f4b", 20),
+    ("#fd4c55", 20),
+    ("#e13661", 20),
+    ("#c1246b", 20),
+    ("#a11477", 20),
+    ("#c1246b", 20),
+    ("#e13661", 20),
+    ("#fd4c55", 20),
+    ("#ff6f4b", 40),
 ]
+CYBERPUNK = ["#ff007f", "#00f0ff", "#ffe600", "#7b2cbf", "#ff5400", "#00ff87"]
+ELECTRIC_AURORA = ["#00ff88", "#00e5ff", "#ff00aa", "#8338ec", "#ffbe0b", "#3a86ff"]
+SOLAR_FLARE = ["#7209b7", "#f72585", "#ff3600", "#ff9e00", "#ffee32", "#ffffff"]
+HOLOGRAPHIC = ["#06d6a0", "#118ab2", "#8338ec", "#ff006e", "#fb5607", "#ffbe0b"]

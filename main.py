@@ -48,6 +48,11 @@ def main():
         default=None,
         help="Output folder name under outputs/ (defaults to the module path)",
     )
+    parser.add_argument(
+        "--hdr",
+        action="store_true",
+        help="encode video outputs as 10-bit Rec.2020 HLG HEVC when supported",
+    )
     args = parser.parse_args()
 
     logger.info(f"Running script: {args.script}")
@@ -56,7 +61,9 @@ def main():
         return 1
 
     settings = ImageProcessingSettings(
-        seed=args.seed, filename=args.name or output_name(args.script)
+        seed=args.seed,
+        filename=args.name or output_name(args.script),
+        hdr=args.hdr,
     )
     try:
         func(settings)

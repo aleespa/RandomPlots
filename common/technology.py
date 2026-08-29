@@ -60,7 +60,7 @@ def images_to_video(image_folder: Path, video_name, fps):
         '-i', images_path.absolute().__str__(),
         '-c:v', codec,
         *codec_options,
-        '-pix_fmt', 'yuv444p',   # Use 4:4:4 for true lossless color if supported
+        '-pix_fmt', 'yuv420p',   # H.264 standard format, widely supported on Windows
         output_path.absolute().__str__(),
     ]
     result = subprocess.run(
@@ -70,6 +70,86 @@ def images_to_video(image_folder: Path, video_name, fps):
         logger.error(f"FFmpeg error:\n{result.stderr}")
 
     logger.success(f"Video saved to {output_path}")
+
+
+def images_to_hdr_video(
+    image_folder: Path,
+    video_name: str,
+    fps: int,
+    width: int = 1080,
+    height: int = 1920,
+    bitrate: str = "24M",
+):
+    """Encode numbered PNG frames as an Instagram-oriented HLG HDR10 video.
+
+    The PNG frames are assumed to be sRGB/BT.709 artwork. FFmpeg converts them
+    to BT.2020 HLG, then encodes 10-bit 4:2:0 HEVC. This produces a valid HDR
+    delivery file; genuine additional highlight latitude requires an HDR-aware
+    renderer upstream of this function.
+    """
+    images = sorted(
+        img for img in os.listdir(image_folder) if img.lower().endswith(".png")
+    )
+    if not images:
+        logger.warning("No PNG images found in folder.")
+        return
+
+    output_path = image_folder.parent / video_name
+    images_path = image_folder / "frame%04d.png"
+
+    # zscale performs the colour conversion from BT.709/sRGB to BT.2020 HLG.
+    # The explicit format conversion guarantees a 10-bit HEVC-compatible input.
+    vf = (
+        f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=disable,"
+        "zscale=matrixin=bt709:primariesin=bt709:transferin=bt709:"
+        "matrix=bt2020nc:primaries=bt2020:transfer=arib-std-b67:npl=1000:range=limited,"
+        "format=yuv420p10le"
+    )
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-y",
+        "-framerate",
+        str(fps),
+        "-i",
+        images_path.absolute().__str__(),
+        "-vf",
+        vf,
+        "-c:v",
+        "libx265",
+        "-preset",
+        "medium",
+        "-b:v",
+        bitrate,
+        "-maxrate",
+        bitrate,
+        "-bufsize",
+        "48M",
+        "-pix_fmt",
+        "yuv420p10le",
+        "-profile:v",
+        "main10",
+        "-tag:v",
+        "hvc1",
+        "-color_primaries",
+        "bt2020",
+        "-colorspace",
+        "bt2020nc",
+        "-color_trc",
+        "arib-std-b67",
+        "-color_range",
+        "tv",
+        "-movflags",
+        "+faststart",
+        output_path.absolute().__str__(),
+    ]
+    result = subprocess.run(
+        ffmpeg_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+    )
+    if result.returncode != 0:
+        logger.error(f"FFmpeg HDR error:\n{result.stderr}")
+        return
+
+    logger.success(f"HDR video saved to {output_path}")
 
 def clear_folder(folder_path):
     # List all files and directories inside the folder
