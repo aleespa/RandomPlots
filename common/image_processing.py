@@ -56,8 +56,14 @@ class ImageProcessingSettings:
         plt.close()
         gc.collect()
 
-    def save_video(self, fps=30):
-        """Encode the frames folder into outputs/<filename>/<filename>.mp4 with ffmpeg."""
+    def save_video(self, fps=30, crf=0):
+        """
+        Encode the frames folder into outputs/<filename>/<filename>.mp4 with ffmpeg.
+
+        `crf=0` (default) is lossless. Pass a higher crf (e.g. 18-23) for a much
+        smaller, still visually near-lossless file -- appropriate for uploading
+        to Instagram rather than archiving. Ignored when `hdr=True`.
+        """
         if self.hdr:
             from common.technology import images_to_hdr_video
 
@@ -67,7 +73,7 @@ class ImageProcessingSettings:
                 fps,
             )
         else:
-            images_to_video(self.frames_path, f'{self.filename}.mp4', fps)
+            images_to_video(self.frames_path, f'{self.filename}.mp4', fps, crf=crf)
 
     def images_to_video(self, fps=30):
         """

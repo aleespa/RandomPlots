@@ -12,24 +12,37 @@ def has_nvidia_gpu():
     """
     return shutil.which("nvidia-smi") is not None
 
-def images_to_video(image_folder: Path, video_name, fps):
+def images_to_video(image_folder: Path, video_name, fps, crf: int = 0):
     """
-    Convert a folder of images into a lossless MP4 video using FFmpeg.
+    Convert a folder of images into an MP4 video using FFmpeg.
 
     Parameters:
     - image_folder: Folder containing image frames.
     - video_name: Name of the output video file (including .mp4 extension).
     - fps: Frames per second for the output video.
+    - crf: 0 (default) encodes lossless -- large files, meant for archival
+      masters. Any value > 0 switches to constant-quality encoding at that
+      quality level (lower = better/bigger; ~18-23 is visually near-lossless
+      but a fraction of the size -- appropriate for uploading to Instagram,
+      which recompresses on ingest anyway).
     """
     # Choose codec depending on GPU availability
     if has_nvidia_gpu():
-        logger.info("NVIDIA GPU detected — using h264_nvenc lossless.")
         codec = 'h264_nvenc'
-        codec_options = ['-qp', '0', '-preset', 'slow']
+        if crf == 0:
+            logger.info("NVIDIA GPU detected — using h264_nvenc lossless.")
+            codec_options = ['-qp', '0', '-preset', 'slow']
+        else:
+            logger.info(f"NVIDIA GPU detected — using h264_nvenc, cq={crf}.")
+            codec_options = ['-rc', 'vbr', '-cq', str(crf), '-b:v', '0', '-preset', 'p5']
     else:
-        logger.warning("No NVIDIA GPU found — using CPU (libx264 lossless).")
         codec = 'libx264'
-        codec_options = ['-crf', '0', '-preset', 'veryslow']
+        if crf == 0:
+            logger.warning("No NVIDIA GPU found — using CPU (libx264 lossless).")
+            codec_options = ['-crf', '0', '-preset', 'veryslow']
+        else:
+            logger.warning(f"No NVIDIA GPU found — using CPU (libx264, crf={crf}).")
+            codec_options = ['-crf', str(crf), '-preset', 'medium']
 
     # Sort images
     images = [img for img in os.listdir(image_folder) if img.lower().endswith(".png")]
