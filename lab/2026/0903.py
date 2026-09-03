@@ -9,15 +9,15 @@ from pathlib import Path
 import numpy as np
 from loguru import logger
 from matplotlib import pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap, to_rgb
+from matplotlib.colors import LinearSegmentedColormap, hsv_to_rgb, rgb_to_hsv, to_rgb
 from scipy.ndimage import gaussian_filter
 
 from common.image_processing import ImageProcessingSettings
 
-FPS = 10
-LOOP_SECONDS = 8
+FPS = 60
+LOOP_SECONDS = 3
 LOOP_FRAMES = FPS * LOOP_SECONDS  # exact loop period, in frames
-REPEATS = 2  # play the rendered loop this many times back-to-back in the mp4
+REPEATS = 4  # play the rendered loop this many times back-to-back in the mp4
 FIGURE_SIZE = (7.2, 12.8)  # 1080x1920 @ 150 dpi -- 9:16 for Reels/Stories
 DPI = 150
 WIDTH, HEIGHT = 1080, 1920
@@ -26,6 +26,7 @@ BG_COLOR = "#000000"
 # ECOSPL blue -> ECOSPL rose along the tide (source pole -> sink pole), with a
 # near-black toe so the empty plane stays dark and white kept for line cores.
 PALETTE = ["#07111f", "#5092B8", "#58c0e7", "#c9d06c", "#ff9b9b", "#ffffff"]
+COLOUR_SATURATION = 1.2  # modest saturation boost for the tide palette
 
 N_WORKERS = min(os.cpu_count() or 1, 12)
 
@@ -177,22 +178,22 @@ def generate(settings: ImageProcessingSettings = None):
     # per turn (0 = pure tide), c: spiral tightness in log|C|, k: signed
     # phase laps per loop (speed and direction).
     layers = [
-        (0, 9.0, 2, 1.0, 1.0),  # the tide: Apollonian circles streaming q -> p
-        (7, -3.0, -1, 0.75, 0.0),  # counter-rotating loxodromes
-        (3, 5.0, 1, 0.45, 0.0),  # a looser spiral riding with the tide
+        (5, 9.0, 2, 1.0, 1.0),  # the tide: Apollonian circles streaming q -> p
+        (10, -3.0, -1, 0.75, 0.0),  # counter-rotating loxodromes
+        (7, 5.0, 1, 0.45, 0.0),  # a looser spiral riding with the tide
     ]
     pole_gap = 0.34  # distance between fixed points, in frame heights
     pole_tilt_deg = 18.0  # max random tilt of the p-q axis from vertical
     off_screen = False  # True: push q outside the frame for a whirlpool look
-    sigma_px = 0.9  # line half-width in pixels
+    sigma_px = 1.5  # line half-width in pixels
     min_spacing_px = 4.0  # line spacing below which lines are fully faded
     fade_px = 10.0  # extra spacing over which lines fade back in
     colour_span = 2.2  # log|C| range mapped across the palette
-    fill_gain = 0.08  # brightness of the soft cos(phi) tide bands
-    core_gain = 0.8  # white push where lines overlap
-    exposure_pct = 99.7  # raw density percentile driven to full white
-    bloom_weight = 0.45
-    bloom_sigma = 7.0
+    fill_gain = 0.03  # brightness of the soft cos(phi) tide bands
+    core_gain = 0.3  # white push where lines overlap
+    exposure_pct = 99.9  # raw density percentile driven to full white
+    bloom_weight = 0.20
+    bloom_sigma = 5.0
 
     aspect = WIDTH / HEIGHT
     tilt = np.deg2rad(rng.uniform(-pole_tilt_deg, pole_tilt_deg))
@@ -218,6 +219,10 @@ def generate(settings: ImageProcessingSettings = None):
         ],
         dtype=np.float32,
     )
+    # Boost chroma without tinting the deliberately neutral black/white ends.
+    lut_hsv = rgb_to_hsv(lut)
+    lut_hsv[:, 1] = np.clip(lut_hsv[:, 1] * COLOUR_SATURATION, 0.0, 1.0)
+    lut = hsv_to_rgb(lut_hsv).astype(np.float32)
 
     state = dict(
         z=z,
