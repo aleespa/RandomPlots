@@ -12,11 +12,12 @@ import torch.nn.functional as F
 from loguru import logger
 from matplotlib.colors import LinearSegmentedColormap
 
+from colors.palettes import EMBER_FURNACE
 from common.image_processing import ImageProcessingSettings
 
 # RP_FPS=5 in the environment gives a quick 30-frame test loop with the same timing.
 FPS = int(os.environ.get("RP_FPS", "60"))
-LOOP_SECONDS = 6
+LOOP_SECONDS = 8
 LOOP_FRAMES = FPS * LOOP_SECONDS  # exact loop period, in frames
 REPEATS = 3  # play the rendered loop this many times back-to-back in the mp4
 WIDTH, HEIGHT = 1080, 1920  # 9:16 for Reels/Stories
@@ -26,22 +27,11 @@ HALF_HEIGHT = HALF_WIDTH * HEIGHT / WIDTH
 # The map of the reference figure: two branches w_k = exp(2 pi i k / 2), k = 0, 1.
 A = 1.02 + 1.93j
 B = 0.345 + 0.515j
-C = -0.22 + 0.57j
+C = 0.22 + 0.57j
 
-# Density ramp: wine-dark void, teal haze, cyan silk, white edge, then the
-# densest cores run back through orange and ember to near-black.
-PALETTE = [
-    "#000000",
-    "#2a0810",
-    "#173a45",
-    "#2fa0a8",
-    "#a9ece9",
-    "#fff6ee",
-    "#f2a070",
-    "#c8451c",
-    "#3a0c08",
-    "#000000"
-]
+# Density ramp: near-black void, ember haze, amber silk, white edge, then the
+# densest cores run back through cyan and deep blue to black.
+PALETTE = EMBER_FURNACE
 
 PNG_WRITERS = 4  # threads encoding PNGs while the GPU renders the next frame
 
@@ -155,7 +145,7 @@ class _Renderer:
         index = (level.clamp(0.0, 1.0) * (self.lut.shape[0] - 1)).long()
         rgb = self.lut[index].permute(2, 0, 1)  # (3, H, W)
         if self.k["glow_weight"] > 0:
-            # Only the bright silk glows; the wine-dark background stays flat.
+            # Only the bright silk glows; the dark background stays flat.
             lift = (level - 0.35).clamp(0.0, 1.0)
             rgb = rgb + self.k["glow_weight"] * _blur(rgb, self.glow_kernel) * lift
         frame = (rgb.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8)
@@ -183,8 +173,8 @@ def generate(settings: ImageProcessingSettings = None):
     points iterated this way settles on the attractor of the iterated function
     system, and the picture is its invariant measure: each frame histograms
     every visited position into the pixel grid, the log of the density is sent
-    through a colour ramp (dark void -> teal -> cyan -> white -> orange ->
-    ember), and a soft glow is added to the bright silk.
+    through a colour ramp (dark void -> ember -> amber -> white -> cyan ->
+    deep blue), and a soft glow is added to the bright silk.
 
     The loop moves the constant c around a small circle, c(tau) = c_0 + r
     exp(2 pi i tau), which deforms the folds of the attractor continuously and
@@ -205,9 +195,9 @@ def generate(settings: ImageProcessingSettings = None):
         n_points=1_200_000,  # chaos-game points in the cloud
         iterations_per_frame=48,  # map steps histogrammed into each frame
         burn_in=80,  # steps before a fresh cloud is trusted to sit on the attractor
-        orbit_radius=0.15,  # radius of the circle c travels; larger = wilder morph
+        orbit_radius=0.18,  # radius of the circle c travels; larger = wilder morph
         orbit_phase=float(rng.uniform(0.0, 1.0)),  # where on the circle the loop starts
-        softness=0.7,  # px, blur of the raw histogram
+        softness=0.6,  # px, blur of the raw histogram
         glow_weight=0.25,
         glow_sigma=6.0,
     )
