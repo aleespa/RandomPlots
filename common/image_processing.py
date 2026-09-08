@@ -1,14 +1,19 @@
+from __future__ import annotations
+
 import gc
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
-from matplotlib import pyplot as plt
 from numpy.random import Generator
 
 from common.technology import images_to_video
+
+if TYPE_CHECKING:
+    from matplotlib.figure import Figure
 
 OUTPUT_PATH = Path(__file__).parent.parent / 'outputs'
 
@@ -25,13 +30,15 @@ class ImageProcessingSettings:
         create_directory(self.output_path / self.filename)
         clear_folder(self.output_path / self.filename)
 
-    def save_to_png(self, fig:plt.Figure, bg_color='#000000'):
+    def save_to_png(self, fig: Figure, bg_color='#000000'):
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         fig.savefig(
             self.output_path / self.filename / f'{time_string}.png', facecolor=bg_color
         )
 
     def save_frame(self, face_color='#000000'):
+        from matplotlib import pyplot as plt
+
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
         plt.savefig(
             self.output_path / self.filename / f'{time_string}.png',
@@ -52,6 +59,8 @@ class ImageProcessingSettings:
         Save the current figure as frames/frame%04d.png -- the naming ffmpeg expects,
         and what `save_video` reads back.
         """
+        from matplotlib import pyplot as plt
+
         plt.savefig(self.frames_path / f'frame{index:04d}.png', facecolor=face_color)
         plt.close()
         gc.collect()
