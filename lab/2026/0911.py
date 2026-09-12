@@ -36,9 +36,9 @@ from common.image_processing import ImageProcessingSettings
 
 # RP_FPS in the environment allows quick test runs (e.g. RP_FPS=5)
 FPS = int(os.environ.get("RP_FPS", "60"))
-LOOP_SECONDS = 8  # 6-second exact loop period
+LOOP_SECONDS = 12  # 6-second exact loop period
 LOOP_FRAMES = FPS * LOOP_SECONDS  # exact loop period, in frames
-REPEATS = 3  # play the rendered loop 3 times back-to-back in the final mp4
+REPEATS = 2  # play the rendered loop 3 times back-to-back in the final mp4
 WIDTH, HEIGHT = 1080, 1920  # 9:16 for Reels/Stories
 HALF_WIDTH = 165.0  # Expands the view box so the entire figure fits with comfortable breathing margin
 HALF_HEIGHT = HALF_WIDTH * HEIGHT / WIDTH
@@ -128,12 +128,11 @@ class _NebulaRenderer:
         self.cos_theta = torch.cos(self.theta)
         self.sin_theta = torch.sin(self.theta)
 
-        # Ribbon phase offsets across multiple strand arms
+        # Clean geometric ribbon strands
         n_strands = knobs["n_strands"]
         self.strand_phases = torch.arange(
             n_strands, device=device, dtype=torch.float32
         ) * (2 * np.pi / n_strands)
-        self.strand_weights = torch.linspace(0.94, 1.06, n_strands, device=device)
 
         # Arc length color index along the spiral
         color_idx = (
@@ -179,11 +178,10 @@ class _NebulaRenderer:
         )
         flat_canvas = canvas.view(3, -1)
 
-        # Accumulate across multiple strands
+        # Accumulate across strands
         for s_idx, strand_phi in enumerate(self.strand_phases):
-            eff_u = u_t * self.strand_weights[s_idx]
-            arg_x = eff_u * self.theta + phi_t + strand_phi
-            arg_y = eff_u * self.theta + phi_t + strand_phi + np.pi / 4
+            arg_x = u_t * self.theta + phi_t + strand_phi
+            arg_y = u_t * self.theta + phi_t + strand_phi
 
             denom_x = torch.sin(arg_x) + 2.0
             denom_y = torch.cos(arg_y) + 2.0
@@ -268,19 +266,19 @@ def generate(settings: ImageProcessingSettings = None):
     rng = settings.rng
 
     knobs = dict(
-        u_center=4.0,  # center frequency
-        u_amp=0.12,  # very gentle frequency modulation: u swings subtly between 3.82 and 4.18
-        u_cycles=1,  # 1 smooth periodic wave across the 6s
-        phi_cycles=1,  # 1 smooth phase shift
-        phi_amp=0.30,  # smooth subtle phase excursion
-        rot_cycles=0,  # no disorienting full spin
-        rot_amp=0.08,  # gentle subtle angular oscillation (+/- ~4.5 degrees)
-        breathe_amp=0.015,  # barely perceptible organic breathing pulsation
+        u_center=4.0,  # exactly integer 4 resonance at loop midpoint (creates clean 4-fold aligned membrane)
+        u_amp=0.25,  # sweeps between 3.75 and 4.25, locking into crisp membrane at midpoint
+        u_cycles=1,  # 1 full cycle per loop
+        phi_cycles=1,  # phase shift oscillates harmonically and reaches 0 at resonance
+        phi_amp=0.18,  # subtle phase excursion
+        rot_cycles=0,  # zero spin
+        rot_amp=0.04,  # gentle subtle angular oscillation (+/- ~2.3 degrees)
+        breathe_amp=0.015,  # subtle organic breathing
         breathe_cycles=1,
-        theta_max=160,  # spiral winding extent
+        theta_max=48.0 * np.pi,  # clean, controlled winding envelope
         n_points=240000,  # dense, smooth filament trace
-        n_strands=2,  # bundle of interwoven ribbon strands
-        color_cycles=2.0,  # palette repeats along spiral length
+        n_strands=2,  # 6 clean, distinct ribbon layers forming the membrane
+        color_cycles=1.8,  # palette repeats along spiral length
         splat_radius=2,  # 5x5 footprint for thicker, bolder lines on mobile
         splat_sigma=1.2,  # smooth Gaussian line weight
         gain=2.2,  # rich filament saturation
