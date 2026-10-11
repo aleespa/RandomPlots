@@ -14,11 +14,17 @@ symmetry. The sizes of the circles breathe as it draws, so every pass of
 the pen traces a slightly different flower over the fading ghost of the
 last one.
 
+Every time the pen swings out to the tip of a petal, a marimba bar is
+struck. Which note depends on which way the petal points, so the melody
+turns with the flower, and the bigger the petal, the louder the note: as
+the circles breathe, some petals grow loud enough to be heard and others
+fade into silence.
+
 z(t) = Σₖ cₖ e^{ikt}
 
-Made with Python, NumPy & OpenCV.
+Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
 #generativeart #fourier #epicycles #fourierseries #mathart
-#randomplots #creativecoding #algorithmicart #mathisbeautiful #animation
+#randomplots #sonification #creativecoding #algorithmicart #mathisbeautiful #animation
 """
 
 import gc
@@ -28,7 +34,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 import numpy as np
 from loguru import logger
+from scipy.signal import find_peaks
 
+from common import audio
 from common.image_processing import ImageProcessingSettings
 
 # --- Video -------------------------------------------------------------------
@@ -71,6 +79,17 @@ GUIDE_THICKNESS = 2
 HEAD_RADIUS = 4.0  # pixels on the output frame
 BLOOM = 0.9
 BLOOM_SIGMA = 7.0
+
+# --- Sound -------------------------------------------------------------------
+PENTATONIC = (0, 2, 4, 7, 9)  # major pentatonic, semitones above the root
+ROOTS = range(57, 65)  # melody root (MIDI), chosen by the seed
+BASS_LINE = (0, 9, 7, 4, 2)  # semitones above root - 24, one per pass
+MAX_NOTE_RATE = 7.0  # notes per second the rhythmic grid may reach
+MAX_SUBBEATS = 3  # tips per repeat of the flower shape
+GATE = 0.55  # a petal must reach this fraction of the widest to sound
+SAMPLES_PER_REPEAT = 2000  # resolution of the tip search
+REVERB_RT60 = 2.2
+REVERB_WET = 0.3
 
 
 def make_drawing(rng):
@@ -129,6 +148,71 @@ def trail_lut():
     return [tuple(int(round(v)) for v in c) for c in lut]
 
 
+def soundtrack(m, pen, rng):
+    """
+    A soft marimba struck whenever the pen reaches a petal tip.
+
+    The flower shape repeats DRAW_CYCLES * m times per loop (once per
+    symmetry sector), so the tips of the average repeat define a fixed
+    rhythmic grid of up to MAX_SUBBEATS beats. On each beat of each repeat
+    the bar is struck at the moment the pen actually peaks there, if that
+    petal currently reaches GATE of the widest; louder for wider petals.
+    The pitch is fixed per symmetry sector (a seeded pentatonic melody),
+    the stereo position follows the tip's x, and a bass bar marks each pass.
+    """
+    repeats = DRAW_CYCLES * m
+    n = repeats * SAMPLES_PER_REPEAT
+    z = pen(np.arange(n) / n)
+    r = np.abs(z)
+    r_max = r.max()
+
+    # Cut the loop into repeats at the quietest point of the average shape.
+    offset = int(np.argmin(r.reshape(repeats, -1).mean(axis=0)))
+    shape = np.roll(r, -offset).reshape(repeats, -1)
+    profile = shape.mean(axis=0)
+    beats = int(np.clip(MAX_NOTE_RATE * DURATION // repeats, 1, MAX_SUBBEATS))
+    peaks, _ = find_peaks(profile, prominence=0.01 * np.ptp(profile))
+    if len(peaks) == 0:
+        peaks = np.array([np.argmax(profile)])
+    peaks = np.sort(peaks[np.argsort(-profile[peaks])][:beats])
+    gaps = np.diff(np.concatenate([peaks, [peaks[0] + SAMPLES_PER_REPEAT]]))
+    half = int(min(gaps.min() // 2, SAMPLES_PER_REPEAT // 4))
+
+    root = int(rng.choice(ROOTS))
+    melody = rng.permutation(8)[:m]  # scale degree for each symmetry sector
+
+    def note(degree):
+        return root + 12 * (degree // 5) + PENTATONIC[degree % 5]
+
+    track = audio.silence(DURATION)
+    struck = 0
+    for repeat in range(repeats):
+        for b, p in enumerate(peaks):
+            lo, hi = max(p - half, 0), min(p + half + 1, SAMPLES_PER_REPEAT)
+            i = lo + int(np.argmax(shape[repeat, lo:hi]))
+            j = (repeat * SAMPLES_PER_REPEAT + i + offset) % n
+            when = j / n * DURATION
+            if b == 0 and repeat % m == 0:
+                bass = root - 24 + BASS_LINE[repeat // m % len(BASS_LINE)]
+                bar = audio.marimba(audio.midi_to_hz(bass), 0.55, length=4.0)
+                audio.add(track, audio.pan(bar, 0.0), when)
+            reach = r[j] / r_max
+            if reach < GATE:
+                continue
+            velocity = (0.25 + 0.5 * (reach - GATE) / (1.0 - GATE)) * 0.8**b
+            freq = audio.midi_to_hz(note(melody[repeat % m] + 2 * b))
+            bar = audio.marimba(freq, velocity)
+            audio.add(track, audio.pan(bar, 0.7 * z[j].real / r_max), when)
+            struck += 1
+
+    logger.info(
+        f"Soundtrack: {struck} marimba notes on a grid of {beats} x {repeats}, "
+        f"{60 * repeats / DURATION:.0f} repeats/min, root MIDI {root}"
+    )
+    track = audio.reverb(track, rng, rt60=REVERB_RT60, wet=REVERB_WET)
+    return audio.normalize(track)
+
+
 def generate(settings: ImageProcessingSettings = None):
     """
     A looping Fourier-epicycle drawing with m-fold symmetry.
@@ -150,6 +234,9 @@ def generate(settings: ImageProcessingSettings = None):
     to cream towards the pen. Lines are drawn additively with anti-aliased
     cv2 primitives on a SUPERSAMPLE x canvas, area-downsampled, given a
     gaussian bloom and added to a dark radial background.
+
+    The soundtrack (see `soundtrack`) is synthesized from the same pen(t)
+    and muxed into the MP4.
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
@@ -238,7 +325,7 @@ def generate(settings: ImageProcessingSettings = None):
             if done % (5 * FPS) == 0:
                 logger.info(f"{done}/{FRAME_COUNT} frames")
 
-    settings.save_video(fps=FPS, crf=18)
+    settings.save_video(fps=FPS, crf=18, audio=soundtrack(m, pen, rng))
     gc.collect()
 
 

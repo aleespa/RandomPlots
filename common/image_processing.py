@@ -65,24 +65,36 @@ class ImageProcessingSettings:
         plt.close()
         gc.collect()
 
-    def save_video(self, fps=30, crf=0):
+    def save_video(self, fps=30, crf=0, audio=None, sample_rate=None):
         """
         Encode the frames folder into outputs/<filename>/<filename>.mp4 with ffmpeg.
 
         `crf=0` (default) is lossless. Pass a higher crf (e.g. 18-23) for a much
         smaller, still visually near-lossless file -- appropriate for uploading
         to Instagram rather than archiving. Ignored when `hdr=True`.
+
+        `audio` is an optional soundtrack, a float array of shape (samples, 2)
+        (or mono (samples,)) in [-1, 1], as long as the video -- see
+        `common.audio`. It is saved next to the video as <filename>.wav and
+        muxed in as AAC.
         """
         if self.hdr:
             from common.technology import images_to_hdr_video
 
-            images_to_hdr_video(
-                self.frames_path,
-                f'{self.filename}_HDR_HLG.mp4',
-                fps,
-            )
+            video_name = f'{self.filename}_HDR_HLG.mp4'
+            images_to_hdr_video(self.frames_path, video_name, fps)
         else:
-            images_to_video(self.frames_path, f'{self.filename}.mp4', fps, crf=crf)
+            video_name = f'{self.filename}.mp4'
+            images_to_video(self.frames_path, video_name, fps, crf=crf)
+
+        if audio is not None:
+            from common.audio import SAMPLE_RATE, write_wav
+            from common.technology import add_audio_to_video
+
+            folder = self.output_path / self.filename
+            wav_path = folder / f'{self.filename}.wav'
+            write_wav(wav_path, audio, sample_rate or SAMPLE_RATE)
+            add_audio_to_video(folder / video_name, wav_path)
 
     def images_to_video(self, fps=30):
         """
