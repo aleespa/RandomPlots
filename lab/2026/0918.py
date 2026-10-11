@@ -55,7 +55,7 @@ LOOPS = 4.2 # periods of the original orbit covered by the clip
 # Nudge applied to the starting positions and velocities, as a fraction of the
 # orbit's own scale. The figure-eight is linearly stable, so a small one wanders
 # and breathes for a few periods before it is obviously off; a larger one can
-# end the usual way, with one body thrown clear and the other two left paired.
+# end the usual way, with one body thrown clear and the other two left paired.c
 # Set to 0.0 to recover the exact, endlessly repeating orbit.
 PERTURBATION = 0.02
 
