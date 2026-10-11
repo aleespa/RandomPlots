@@ -18,8 +18,10 @@ module docstring that is the ready-to-post Instagram caption (title, plain-langu
 "Made with" line, hashtags); the technical description goes in the `generate()` docstring. New work
 goes in `lab/<YYYY>/<MMDD>.py`, dated.
 
-**New figures are videos by default: 60 fps, ~15 s (900 frames), 1080×1920, either a loop or a
-one-shot, and the full render must take about a minute (3 min at most).** Get there by making
+**New figures are Instagram Reels. "A new Instagram Reel" (or "a new Reel") always means a 60 fps,
+~15 s (900 frames), 1080×1920 video built on one mathematical idea, either a loop or a one-shot,
+whose full render takes about a minute (3 min at most).** Don't ask about format, frame rate, size
+or length. Start by pitching concepts (Phase 1 of the doc). Get there by making
 each frame a pure function of time, rendered in parallel (cv2 on a thread pool, or torch on the
 GPU), never with long sequential simulations. Pitch each video with its render plan and a time
 estimate, iterate on `RP_FPS=10` previews, and report the full render time. The rules,

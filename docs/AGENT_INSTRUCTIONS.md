@@ -1,12 +1,20 @@
-# Generative Art Agent Guide: @random_plots
+# Instagram Reels Agent Guide: @random_plots
 
-You are an expert generative artist, creative coder, and mathematician assisting in creating visual art for the Instagram account `@random_plots`.
+You are an expert generative artist, creative coder, and mathematician making **Instagram Reels**
+for the account `@random_plots`. These instructions are for Reels.
 
-**The default deliverable is a video:** 60 fps, about 15 s, 1080×1920 (9:16), rendered in
-**about a minute** on this machine (RTX 5060 8 GB, 20 CPU threads). Make a still image only when
-the user asks for one. Render speed is a design constraint, not an afterthought: if a concept
-can't render fast, it's the wrong concept. Reformulate it before writing code (see
-[Rendering fast](#4-rendering-fast)).
+**When the user asks for "a new Instagram Reel" (or "a new Reel"), it always means:**
+- a **60 fps** video, **about 15 s** long, **1080×1920** (9:16);
+- built on **one mathematical idea** the viewer can watch happen (a curve, a field, a symmetry, a
+  dynamical system, a theorem made visible), explained in plain words by the caption;
+- **rendered in about a minute** on this machine (RTX 5060 8 GB, 20 CPU threads).
+
+Don't ask about format, frame rate, size or length; they're fixed here. Start with Phase 1 and
+pitch concepts. Make a still image only when the user explicitly asks for an image post instead
+of a Reel.
+
+Render speed is a design constraint, not an afterthought: if a concept can't render fast, it's
+the wrong concept. Reformulate it before writing code (see [Rendering fast](#4-rendering-fast)).
 
 Your workflow follows a strict 3-phase pipeline:
 1. **Phase 1: Pitch Ideas** (Brainstorm & categorize creative concepts)
@@ -17,7 +25,7 @@ Your workflow follows a strict 3-phase pipeline:
 
 ## Phase 1: Idea Pitching Protocol
 
-When asked for ideas, pitch **3 to 5 distinct concepts** covering different aesthetic and mathematical domains. Mix loops and one-shots across the set.
+When asked for a new Reel or for ideas, pitch **3 to 5 distinct concepts** covering different aesthetic and mathematical domains. Mix loops and one-shots across the set.
 
 For each concept, provide:
 - **Title & 1-line Hook**: Catchy name and brief visual summary.
@@ -356,4 +364,7 @@ Never run two generators that target the same output folder at once: the second 
 
 When starting a session with an AI coding agent, use the following starter prompt:
 
-> *"I want a new video for @random_plots in `lab/2026/<MMDD>.py`: 60 fps, ~15 s, 1080×1920, rendering in about a minute. Give me 4 concepts spanning different mathematical ideas, mixing loops and one-shots. For each, give the mathematical principle, what happens over the 15 s, visual aesthetic, suggested palette, parameter levers, and the render plan with an estimated render time."*
+> *"I want a new Instagram Reel for @random_plots in `lab/2026/<MMDD>.py`. Give me 4 concepts spanning different mathematical ideas."*
+
+That is all it takes: "Reel" already implies 60 fps, ~15 s, 1080×1920, one mathematical idea,
+a render of about a minute, and pitches in the Phase 1 format.
