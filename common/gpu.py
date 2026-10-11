@@ -1,6 +1,6 @@
 """
 Torch helpers shared by GPU-rendered videos: device choice, Gaussian blur/bloom
-and bilinear point splatting. Images are (H, W, C) float tensors.
+(`wide_blur` for large radii) and bilinear point splatting. Images are (H, W, C) float tensors.
 """
 
 import torch
@@ -39,6 +39,25 @@ def blur(image: torch.Tensor, kernel: torch.Tensor) -> torch.Tensor:
     )
     out = F.conv2d(
         F.pad(out, (0, 0, radius, radius), mode="replicate"), vertical, groups=channels
+    )
+    return out[0].permute(1, 2, 0)
+
+
+def wide_blur(image: torch.Tensor, sigma: float, factor: int) -> torch.Tensor:
+    """
+    Gaussian blur of an (H, W, C) image with a large `sigma` (in full-size pixels),
+    computed on a copy shrunk `factor` times and scaled back up: wide bloom at a
+    fraction of the cost of `blur`.
+    """
+    planes = F.avg_pool2d(image.permute(2, 0, 1)[None], factor)
+    small = blur(
+        planes[0].permute(1, 2, 0), gaussian_kernel(sigma / factor, image.device)
+    )
+    out = F.interpolate(
+        small.permute(2, 0, 1)[None],
+        size=image.shape[:2],
+        mode="bilinear",
+        align_corners=False,
     )
     return out[0].permute(1, 2, 0)
 
