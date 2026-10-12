@@ -23,12 +23,38 @@ class ImageProcessingSettings:
     output_path: Path = OUTPUT_PATH
     rng: Generator
 
-    def __init__(self, seed=0, filename=None, hdr=False):
+    def __init__(
+        self, seed=0, filename=None, hdr=False, audio_only=None, audio_seed=None
+    ):
+        """
+        `audio_only`: None for a normal run, which clears the output folder. A
+        string (possibly empty) re-runs only the soundtrack over the frames of
+        an earlier full run in the same folder, which is kept: `render_frames`
+        skips, `save_video` reuses the silent master, and a non-empty string is
+        added to the output names (`<name>_<tag>.mp4`) so auditions coexist.
+
+        `audio_rng` is the soundtrack's own generator, seeded by `audio_seed`
+        (default: `seed`), so the music can be re-rolled without touching the
+        picture.
+        """
         self.filename = filename or datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
+        self.seed = seed
         self.rng = np.random.default_rng(seed=seed)
+        self.audio_seed = seed if audio_seed is None else audio_seed
+        self.audio_rng = np.random.default_rng([self.audio_seed, 1])
         self.hdr = hdr
-        create_directory(self.output_path / self.filename)
-        clear_folder(self.output_path / self.filename)
+        self.audio_only = audio_only is not None
+        self.audio_tag = audio_only or ''
+        folder = self.output_path / self.filename
+        if self.audio_only:
+            if not (folder / 'frames').is_dir():
+                raise FileNotFoundError(
+                    f'--audio-only needs the frames of a full run in {folder}: '
+                    'render the video first, with the same --name'
+                )
+            return
+        create_directory(folder)
+        clear_folder(folder)
 
     def save_to_png(self, fig: Figure, bg_color='#000000'):
         time_string = datetime.now().strftime('%Y-%m-%d_%H-%M-%S-%f')
@@ -75,26 +101,40 @@ class ImageProcessingSettings:
 
         `audio` is an optional soundtrack, a float array of shape (samples, 2)
         (or mono (samples,)) in [-1, 1], as long as the video -- see
-        `common.audio`. It is saved next to the video as <filename>.wav and
-        muxed in as AAC.
+        `common.audio`. The silent encode is kept as <video>_silent.mp4, the
+        track is saved as <filename>.wav plus a <filename>_spectrogram.png to
+        look at, and the two are muxed (AAC) into the final video. An
+        audio-only run reuses the silent master, so only the mux happens, and
+        its tag (if any) is added to every output name.
         """
-        if self.hdr:
-            from common.technology import images_to_hdr_video
+        folder = self.output_path / self.filename
+        video_name = f'{self.filename}_HDR_HLG.mp4' if self.hdr else f'{self.filename}.mp4'
+        silent = folder / video_name.replace('.mp4', '_silent.mp4')
+        if self.audio_only and audio is None:
+            raise ValueError('--audio-only, but generate() passed no soundtrack')
 
-            video_name = f'{self.filename}_HDR_HLG.mp4'
-            images_to_hdr_video(self.frames_path, video_name, fps)
-        else:
-            video_name = f'{self.filename}.mp4'
-            images_to_video(self.frames_path, video_name, fps, crf=crf)
+        if not (self.audio_only and silent.exists()):
+            if self.hdr:
+                from common.technology import images_to_hdr_video
 
-        if audio is not None:
-            from common.audio import SAMPLE_RATE, write_wav
-            from common.technology import add_audio_to_video
+                images_to_hdr_video(self.frames_path, video_name, fps)
+            else:
+                images_to_video(self.frames_path, video_name, fps, crf=crf)
+            if audio is not None:
+                os.replace(folder / video_name, silent)
+        if audio is None:
+            return
 
-            folder = self.output_path / self.filename
-            wav_path = folder / f'{self.filename}.wav'
-            write_wav(wav_path, audio, sample_rate or SAMPLE_RATE)
-            add_audio_to_video(folder / video_name, wav_path)
+        from common.audio import SAMPLE_RATE, spectrogram_png, write_wav
+        from common.technology import add_audio_to_video
+
+        sr = sample_rate or SAMPLE_RATE
+        suffix = f'_{self.audio_tag}' if self.audio_tag else ''
+        wav_path = folder / f'{self.filename}{suffix}.wav'
+        write_wav(wav_path, audio, sr)
+        spectrogram_png(folder / f'{self.filename}{suffix}_spectrogram.png', audio, sr)
+        output = folder / video_name.replace('.mp4', f'{suffix}.mp4')
+        add_audio_to_video(silent, wav_path, output)
 
     def images_to_video(self, fps=30):
         """

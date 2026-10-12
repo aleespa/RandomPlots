@@ -104,8 +104,20 @@ def render_frames(
     parallel=False: frames are rendered in order on this thread (GPU work, or a
     renderer that carries state from frame to frame) while a small pool writes
     the PNGs. Do any warm-up before calling.
+
+    In an `--audio-only` run nothing is rendered; the frames on disk are kept.
     """
     frames_path = settings.frames_path
+    if getattr(settings, "audio_only", False):
+        found = len(list(frames_path.glob("frame*.png")))
+        if found != count:
+            raise RuntimeError(
+                f"--audio-only needs the {count} frames of a full run in "
+                f"{frames_path}, found {found}: render the video first "
+                "(same --name and RP_FPS)"
+            )
+        logger.info(f"Audio only: keeping the {count} frames already rendered")
+        return
     step = max(1, 5 * FPS)  # log every 5 s of video
     mode = f"{workers} threads" if parallel else "in order"
     logger.info(f"Rendering {count} frames ({count / FPS:.1f} s @ {FPS} fps), {mode}")

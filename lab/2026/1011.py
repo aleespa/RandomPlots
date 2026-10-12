@@ -28,8 +28,6 @@ Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
 """
 
 import gc
-import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
@@ -38,19 +36,14 @@ from scipy.signal import find_peaks
 
 from common import audio
 from common.image_processing import ImageProcessingSettings
+from common.music import STYLES, Scale
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames
 
 # --- Video -------------------------------------------------------------------
-# RP_FPS in the environment gives a quick low-frame-rate test render.
-FPS = int(os.environ.get("RP_FPS", "60"))
 DURATION = 20.0
-FRAME_COUNT = int(round(FPS * DURATION))
-WIDTH, HEIGHT = 1080, 1920  # 9:16 for Reels/Stories
+FRAME_COUNT = frame_count(DURATION)
 SUPERSAMPLE = 2  # lines are drawn at this multiple and area-downsampled
 SUBPIXEL_BITS = 4  # cv2 fixed-point coordinates
-WORKERS = min(
-    16, os.cpu_count() or 4
-)  # frames are independent: render them in parallel
-PNG_PARAMS = [cv2.IMWRITE_PNG_COMPRESSION, 1]
 
 # --- Epicycles ---------------------------------------------------------------
 SYMMETRIES = (3, 4, 5, 6, 7)  # m, chosen by the seed: frequencies k = 1 + m j
@@ -81,15 +74,12 @@ BLOOM = 0.9
 BLOOM_SIGMA = 7.0
 
 # --- Sound -------------------------------------------------------------------
-PENTATONIC = (0, 2, 4, 7, 9)  # major pentatonic, semitones above the root
-ROOTS = range(57, 65)  # melody root (MIDI), chosen by the seed
-BASS_LINE = (0, 9, 7, 4, 2)  # semitones above root - 24, one per pass
+STYLE = "mallet_garden"  # common.music.STYLES: instrument, scale, register, room
+BASS_LINE = (0, 4, 3, 2, 1)  # scale degrees two octaves down, one per pass
 MAX_NOTE_RATE = 7.0  # notes per second the rhythmic grid may reach
 MAX_SUBBEATS = 3  # tips per repeat of the flower shape
 GATE = 0.55  # a petal must reach this fraction of the widest to sound
 SAMPLES_PER_REPEAT = 2000  # resolution of the tip search
-REVERB_RT60 = 2.2
-REVERB_WET = 0.3
 
 
 def make_drawing(rng):
@@ -150,16 +140,19 @@ def trail_lut():
 
 def soundtrack(m, pen, rng):
     """
-    A soft marimba struck whenever the pen reaches a petal tip.
+    A note struck whenever the pen reaches a petal tip (a marimba by default).
 
     The flower shape repeats DRAW_CYCLES * m times per loop (once per
     symmetry sector), so the tips of the average repeat define a fixed
     rhythmic grid of up to MAX_SUBBEATS beats. On each beat of each repeat
     the bar is struck at the moment the pen actually peaks there, if that
     petal currently reaches GATE of the widest; louder for wider petals.
-    The pitch is fixed per symmetry sector (a seeded pentatonic melody),
-    the stereo position follows the tip's x, and a bass bar marks each pass.
+    The pitch is fixed per symmetry sector (a seeded melody in the STYLE's
+    scale), the stereo position follows the tip's x, and a bass note marks
+    each pass. Notes wrap around the end and the room is circular, so the
+    sound loops with the picture.
     """
+    style = STYLES[STYLE]
     repeats = DRAW_CYCLES * m
     n = repeats * SAMPLES_PER_REPEAT
     z = pen(np.arange(n) / n)
@@ -178,11 +171,8 @@ def soundtrack(m, pen, rng):
     gaps = np.diff(np.concatenate([peaks, [peaks[0] + SAMPLES_PER_REPEAT]]))
     half = int(min(gaps.min() // 2, SAMPLES_PER_REPEAT // 4))
 
-    root = int(rng.choice(ROOTS))
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
     melody = rng.permutation(8)[:m]  # scale degree for each symmetry sector
-
-    def note(degree):
-        return root + 12 * (degree // 5) + PENTATONIC[degree % 5]
 
     track = audio.silence(DURATION)
     struck = 0
@@ -193,24 +183,22 @@ def soundtrack(m, pen, rng):
             j = (repeat * SAMPLES_PER_REPEAT + i + offset) % n
             when = j / n * DURATION
             if b == 0 and repeat % m == 0:
-                bass = root - 24 + BASS_LINE[repeat // m % len(BASS_LINE)]
-                bar = audio.marimba(audio.midi_to_hz(bass), 0.55, length=4.0)
-                audio.add(track, audio.pan(bar, 0.0), when)
+                bass = scale.hz(BASS_LINE[repeat // m % len(BASS_LINE)], octave=-2)
+                audio.add(track, style.bass(bass, 0.55, length=4.0), when)
             reach = r[j] / r_max
             if reach < GATE:
                 continue
             velocity = (0.25 + 0.5 * (reach - GATE) / (1.0 - GATE)) * 0.8**b
-            freq = audio.midi_to_hz(note(melody[repeat % m] + 2 * b))
-            bar = audio.marimba(freq, velocity)
-            audio.add(track, audio.pan(bar, 0.7 * z[j].real / r_max), when)
+            freq = scale.hz(melody[repeat % m] + 2 * b)
+            sound = style.voice(freq, velocity)
+            audio.add(track, audio.pan(sound, 0.7 * z[j].real / r_max), when)
             struck += 1
 
     logger.info(
-        f"Soundtrack: {struck} marimba notes on a grid of {beats} x {repeats}, "
-        f"{60 * repeats / DURATION:.0f} repeats/min, root MIDI {root}"
+        f"Soundtrack ({STYLE}): {struck} notes on a grid of {beats} x {repeats}, "
+        f"{60 * repeats / DURATION:.0f} repeats/min, root MIDI {scale.root}"
     )
-    track = audio.reverb(track, rng, rt60=REVERB_RT60, wet=REVERB_WET)
-    return audio.normalize(track)
+    return audio.master(style.room(track, rng))
 
 
 def generate(settings: ImageProcessingSettings = None):
@@ -226,7 +214,7 @@ def generate(settings: ImageProcessingSettings = None):
     drifts by whole turns, so c_k(t) is periodic and the video loops exactly.
 
     Every frame is a closed-form function of t, so frames are rendered
-    independently on a thread pool (NumPy and cv2 release the GIL). Each
+    independently on render_frames' thread pool (NumPy and cv2 release the GIL). Each
     frame draws the largest SHOWN_CIRCLES circles centred on the partial
     sums (largest first), the arm through all partial sums, and the pen's
     actual history over the last TAIL of a pass -- ghosts of earlier,
@@ -235,8 +223,8 @@ def generate(settings: ImageProcessingSettings = None):
     cv2 primitives on a SUPERSAMPLE x canvas, area-downsampled, given a
     gaussian bloom and added to a dark radial background.
 
-    The soundtrack (see `soundtrack`) is synthesized from the same pen(t)
-    and muxed into the MP4.
+    The soundtrack (see `soundtrack`) is synthesized from the same pen(t),
+    after the frames, from settings.audio_rng, and muxed into the MP4.
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
@@ -249,7 +237,6 @@ def generate(settings: ImageProcessingSettings = None):
     lut = trail_lut()
     tail_u = np.linspace(-TAIL / DRAW_CYCLES, 0.0, TAIL_SAMPLES)
     chunk = int(np.ceil(TAIL_SAMPLES / TAIL_BINS))
-    frames_path = settings.frames_path
 
     def to_fixed(z):
         x = (WIDTH / 2 + scale * z.real) * fixed
@@ -308,24 +295,12 @@ def generate(settings: ImageProcessingSettings = None):
 
         lines = cv2.resize(layer, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
         glow = cv2.GaussianBlur(lines, (0, 0), BLOOM_SIGMA)
-        image = cv2.addWeighted(cv2.add(base, lines), 1.0, glow, BLOOM, 0.0)
-        if not cv2.imwrite(
-            str(frames_path / f"frame{frame:04d}.png"), image, PNG_PARAMS
-        ):
-            raise OSError(f"Could not write frame {frame}")
+        return cv2.addWeighted(cv2.add(base, lines), 1.0, glow, BLOOM, 0.0)
 
-    logger.info(
-        f"Rendering Ptolemy's Pen, {m}-fold, {2 * TERMS + 1} circles: "
-        f"{FRAME_COUNT} frames @ {FPS} fps on {WORKERS} threads"
-    )
-    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        futures = [pool.submit(render, frame) for frame in range(FRAME_COUNT)]
-        for done, future in enumerate(as_completed(futures), start=1):
-            future.result()
-            if done % (5 * FPS) == 0:
-                logger.info(f"{done}/{FRAME_COUNT} frames")
-
-    settings.save_video(fps=FPS, crf=18, audio=soundtrack(m, pen, rng))
+    logger.info(f"Ptolemy's Pen, {m}-fold, {2 * TERMS + 1} circles")
+    render_frames(settings, render, FRAME_COUNT)
+    track = soundtrack(m, pen, settings.audio_rng)
+    settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
 

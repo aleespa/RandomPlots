@@ -164,9 +164,15 @@ def images_to_hdr_video(
 
     logger.success(f"HDR video saved to {output_path}")
 
-def add_audio_to_video(video_path: Path, audio_path: Path, bitrate: str = "256k"):
-    """Mux a WAV soundtrack into an existing MP4 in place (video stream copied)."""
-    muxed = video_path.with_name(video_path.stem + ".muxing.mp4")
+def add_audio_to_video(
+    video_path: Path, audio_path: Path, output_path: Path = None, bitrate: str = "256k"
+):
+    """
+    Mux a WAV soundtrack into an MP4 (video stream copied), writing
+    `output_path`, or replacing `video_path` in place when that is None.
+    """
+    output_path = output_path or video_path
+    muxed = output_path.with_name(output_path.stem + ".muxing.mp4")
     ffmpeg_cmd = [
         "ffmpeg",
         "-y",
@@ -187,8 +193,8 @@ def add_audio_to_video(video_path: Path, audio_path: Path, bitrate: str = "256k"
     if result.returncode != 0:
         logger.error(f"FFmpeg audio mux error:\n{result.stderr}")
         return
-    os.replace(muxed, video_path)
-    logger.success(f"Soundtrack added to {video_path}")
+    os.replace(muxed, output_path)
+    logger.success(f"Soundtrack added: {output_path}")
 
 
 def clear_folder(folder_path):

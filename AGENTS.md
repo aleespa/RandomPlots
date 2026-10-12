@@ -31,6 +31,8 @@ Use four-space indentation, `snake_case` functions and variables, `PascalCase` c
 
 New figures are Instagram Reels. "A new Instagram Reel" (or "a new Reel") always means a 60 fps, about 15 s, 1080×1920 video built on one mathematical idea, either a seamless loop or a one-shot with a beginning and an end; don't ask about format, frame rate, size or length. A full render must take about a minute (3 minutes at most), so make each frame a pure function of time and render frames in parallel with cv2 on a thread pool or torch on the GPU, through `common.video.render_frames` (torch helpers in `common.gpu`). Avoid long sequential simulations. Follow the "Video Spec", "Rendering Fast" and "Loop or One-Shot" sections of `docs/AGENT_INSTRUCTIONS.md`.
 
+The video comes first and music second: add a soundtrack only after the picture is approved, computed from the same maths with `settings.audio_rng`, never changing a frame. Pick a style from the "Soundtrack" section of `docs/AGENT_INSTRUCTIONS.md` (`common.audio`, `common.music`), audition 2–3 candidates with `main.py <module> --audio-only <tag>` (seconds each, the frames are reused) and let the user choose by listening.
+
 New generators should expose `generate(settings: ImageProcessingSettings = None)` and initialize settings inside the function. Use `settings.rng` for reproducible randomness. Start figure modules with a publication-ready caption and document the algorithm in `generate()`. Reuse shared saving helpers and palettes; close Matplotlib figures and release resources after rendering.
 
 ## Testing Guidelines

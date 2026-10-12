@@ -53,6 +53,21 @@ def main():
         action="store_true",
         help="encode video outputs as 10-bit Rec.2020 HLG HEVC when supported",
     )
+    parser.add_argument(
+        "--audio-only",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="TAG",
+        help="re-run only the soundtrack over the frames of an earlier full run "
+        "(same --name); with a TAG the result is saved as <name>_<TAG>.mp4",
+    )
+    parser.add_argument(
+        "--audio-seed",
+        type=int,
+        default=None,
+        help="seed of the soundtrack's RNG (settings.audio_rng), default --seed",
+    )
     args = parser.parse_args()
 
     logger.info(f"Running script: {args.script}")
@@ -64,6 +79,8 @@ def main():
         seed=args.seed,
         filename=args.name or output_name(args.script),
         hdr=args.hdr,
+        audio_only=args.audio_only,
+        audio_seed=args.audio_seed,
     )
     try:
         func(settings)

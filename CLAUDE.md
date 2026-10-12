@@ -28,6 +28,11 @@ estimate, iterate on `RP_FPS=10` previews, and report the full render time. The 
 templates and verification steps are in the doc's "Video Spec", "Rendering Fast" and "Loop or
 One-Shot" sections. Stills only when asked.
 
+**The video comes first; music is second.** Add a soundtrack only once the picture is approved,
+computed from the same maths and never changing a frame. Pick a style from the doc's
+"Soundtrack" catalogue (`common.music.STYLES` and friends), audition 2–3 candidates with
+`--audio-only <tag>` (seconds each, no re-render) and let the user choose by listening.
+
 ## Commands
 
 Dependencies are managed with `uv` (Python 3.13, see `pyproject.toml` / `uv.lock`). `torch` is
@@ -41,6 +46,8 @@ uv run python main.py lab.2026.0314 --seed 7     # RNG seed (default 0)
 uv run python main.py lab.2026.0314 --name test  # output folder name override
 uv run python main.py lab.2026.0908 --hdr        # animations: 10-bit HEVC HLG instead of H.264
 RP_FPS=10 uv run python main.py lab.2026.1011 --name preview  # low-fps preview, same timing
+uv run python main.py lab.2026.1011 --audio-only harp     # soundtrack only, over the last full run's frames -> 20261011_harp.mp4
+uv run python main.py lab.2026.1011 --audio-only --audio-seed 5  # re-roll the music, rewrite 20261011.mp4
 uv run python -m lab.2026.0314                   # standalone run via the __main__ block (seed 1)
 uv run black <path>                              # formatter (defaults, no config)
 ```
@@ -48,7 +55,8 @@ uv run black <path>                              # formatter (defaults, no confi
 Always run figures as modules (`main.py` or `python -m`), never by file path —
 `uv run python lab/2026/0314.py` fails with `ModuleNotFoundError: No module named 'common'`.
 
-`main.py` imports the module, builds one `ImageProcessingSettings(seed, filename, hdr)` and calls
+`main.py` imports the module, builds one `ImageProcessingSettings(seed, filename, hdr, audio_only,
+audio_seed)` and calls
 `generate(settings)`. The output folder is the module path minus its top-level package
 (`lab.2026.0314` -> `20260314`, `static.polygons` -> `polygons`).
 
@@ -73,7 +81,13 @@ timed render and the loop-seam check.
   - `settings.save_numbered_frame(i, bg)` + `settings.save_video(fps, crf=0)` — animations. Frames
     go to `outputs/<name>/frames/frame%04d.png` (the pattern ffmpeg reads); the frame call also does
     `plt.close()` + `gc.collect()`. `save_video` switches to `images_to_hdr_video` when `hdr=True`.
-  - `__init__` **creates and clears** `outputs/<filename>/`.
+    With `audio=track` it keeps `<name>_silent.mp4`, writes `<name>.wav` + `_spectrogram.png`
+    and muxes them into `<name>.mp4`.
+  - `settings.audio_rng` — the soundtrack's own generator (`--audio-seed`, default `--seed`).
+  - `__init__` **creates and clears** `outputs/<filename>/`, except with `audio_only`, which
+    keeps the folder and makes `render_frames` skip and `save_video` only re-mux.
+- `common/audio.py` (voices, effects, `master` to −14 LUFS, spectrogram) and `common/music.py`
+  (scales, chords, tempo, `STYLES`) — soundtracks; see the doc's "Soundtrack" section.
 - `common/video.py` — video plumbing: `FPS` (60 / `RP_FPS`), `WIDTH, HEIGHT`, `frame_count`,
   colour helpers, and `render_frames(settings, render, count, parallel=True, rgb=False)`, which
   renders every frame (thread pool, or in order for GPU/stateful renders), writes the PNGs and

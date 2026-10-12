@@ -16,10 +16,14 @@ of a Reel.
 Render speed is a design constraint, not an afterthought: if a concept can't render fast, it's
 the wrong concept. Reformulate it before writing code (see [Rendering fast](#4-rendering-fast)).
 
+**The video is the Reel; music comes second.** Pictures first: pitch, build and approve the
+video without sound. Only then write the soundtrack, from the same maths, without changing a
+single frame (see [Soundtrack](#9-soundtrack)).
+
 Your workflow follows a strict 3-phase pipeline:
 1. **Phase 1: Pitch Ideas** (Brainstorm & categorize creative concepts)
-2. **Phase 2: Generate Code** (Implement selected idea according to repo conventions)
-3. **Phase 3: Verify & Polish** (Preview, timed full render, probe, inspect frames)
+2. **Phase 2: Generate Code** (Implement selected idea according to repo conventions; video, then soundtrack)
+3. **Phase 3: Verify & Polish** (Preview, timed full render, probe, inspect frames, then audition the music)
 
 ---
 
@@ -35,6 +39,9 @@ For each concept, provide:
 - **Shape of the video**: **loop** (ends exactly where it starts) or **one-shot** (a beginning, a development, an end: something builds, unfolds, transforms or resolves). Say what happens over the ~15 s.
 - **Render plan**: how a frame is computed (closed form in `t`, or a cheap state update), which engine (see the table in [Rendering fast](#4-rendering-fast)), and an **estimated full render time**. Only pitch concepts you expect to render in about a minute. Anything you estimate above ~3 min needs a cheaper formulation, or the user's explicit OK, before any code is written.
 - **Key Knobs to Tweak**: 2–3 parameters that drastically alter the visual outcome across seeds.
+- **Sound** (one line, secondary): a style from the [catalogue](#style-catalogue) and what in the
+  maths drives it, e.g. *"Music box: a bell on every petal tip, pitch by petal direction."*
+  It never decides which concept wins.
 
 *Wait for the user to select or combine ideas before writing code.*
 
@@ -72,7 +79,7 @@ When implementing the selected concept, follow the repository's strict architect
 | Frames | `render_frames(settings, render, FRAME_COUNT)` writes `frames/frame%04d.png` (see [Templates](#6-templates)) |
 | Encode | `settings.save_video(fps=FPS, crf=18)`: near-lossless H.264 (h264_nvenc on this machine). Its default `crf=0` is lossless and far bigger, only for archival masters. |
 | Preview | `RP_FPS=10` renders 150 frames with identical timing (see Phase 3) |
-| Sound | Optional: `settings.save_video(..., audio=track)` with a track built from `common/audio.py`, exactly `DURATION` long (see `lab/2026/1011.py`) |
+| Sound | Added after the video is approved: `settings.save_video(..., audio=track)`, a track exactly `DURATION` long from `common.audio` + `common.music`, finished with `audio.master` (see [Soundtrack](#9-soundtrack)) |
 
 Motion is always expressed in **normalised time `t` or in seconds, never per frame**, so an
 `RP_FPS` preview shows the same motion and the video keeps its speed if `FPS` changes. A
@@ -299,6 +306,125 @@ uv run python main.py lab.<YYYY>.<MMDD> --hdr
   `pix_fmt=yuv420p10le`, `color_primaries=bt2020`, and
   `color_transfer=arib-std-b67`.
 
+### 9. Soundtrack
+
+The music is second. Write it **after** the video is approved (Phase 3, steps 1–5 passed and
+the user is happy with the picture), and never change a frame, a constant the picture uses, or
+the order of `settings.rng` draws to suit the sound. If the sound needs something from the
+maths, compute it from the same closed forms.
+
+**Where it lives.** A `soundtrack(...)` function in the script, called after `render_frames`:
+
+```python
+render_frames(settings, render, FRAME_COUNT)
+track = soundtrack(..., settings.audio_rng)   # never settings.rng
+settings.save_video(fps=FPS, crf=18, audio=track)
+```
+
+`settings.audio_rng` is seeded separately (`--audio-seed`, default `--seed`), so the music can
+be re-rolled while the picture stays put. Synthesis must take under ~5 s; voices are cached,
+so hundreds of notes are cheap. The user isn't a musician: make the musical choices yourself,
+from the catalogue below, and let them choose by listening.
+
+**The tools.**
+- `common.audio` makes sounds. Voices: `marimba` (warm wood), `bell` (glassy metal), `pluck`
+  (harp or koto string), `pad(freq, duration)` (soft sustained chord tone, stereo), `kick`,
+  `tick(rng)` (hi-hat or shaker), `riser(duration, rng)` (a build-up). Placement: `pan`,
+  `add(track, sound, seconds)`. Effects: `lowpass`, `highpass`, `delay` (echoes, sync to the
+  tempo), `reverb` (the room). Finishing: `master(track, loop=...)`.
+- `common.music` chooses notes and timing. `Scale(root, mode)` with `.note(degree)`, `.hz(degree)`
+  and `.chord(degree, size)`; `SCALES` (with the mood of each); `PROGRESSIONS`; `tempo_choices`,
+  `loop_bpm`, `beat_times`, `quantize`; and `STYLES`, the presets for event styles.
+
+#### Style catalogue
+
+Pick the style that fits what the viewer *sees*, and say why in the pitch's Sound line.
+
+| Style | Sounds like | Fits visuals that… | Build it with |
+|---|---|---|---|
+| **Mallet garden** | Warm marimba, bright pentatonic | have discrete events: tips, collisions, crossings | `STYLES["mallet_garden"]` (`lab/2026/1011.py`, `lab/2026/1006.py`) |
+| **Music box** | High glassy bells, dreamy Lydian, long room | are crystalline: tilings, symmetry, snowflakes, stars | `STYLES["music_box"]` |
+| **Harp** | Plucked strings, Japanese Hirajōshi scale | are curves or strings, sweeps through a shape | `STYLES["harp"]` |
+| **Gamelan** | Bells in the Balinese pelog scale, dark and long | are mysterious, interlocking, ornamental | `STYLES["gamelan"]` |
+| **Drone & pad** | A slow chord that breathes, no beat | are continuous fields: fluids, waves, quantum, fog, flow | `pad` chords from `Scale.chord` + `PROGRESSIONS`; a visual quantity (energy, spread, speed) drives `lowpass` cutoff or loudness |
+| **Harmonic series** | Pure tones at f₀·k, the maths made audible | contain literal frequencies: Fourier terms, epicycles, standing waves, harmonics | `bell`/`pad` at `f0 * k` for the picture's own integers k, louder for larger amplitudes |
+| **Phase music** | One short pattern on two voices at slightly different speeds (Steve Reich) | are loops with integer speeds drifting in and out of step | the same 4–8 note figure on two voices whose cycle counts per loop differ by 1 |
+| **Soft pulse** | Light kick, ticks and a plucked bass on a steady beat | are rhythmic, geometric, building | a tempo from `tempo_choices`, `kick` on beats, `tick` off-beats, `delay` synced to the beat |
+| **Rise & resolve** | Tension builds, then one consonant chord lands | are one-shots that converge, assemble or resolve | `riser` (and dissonant `pad`s, e.g. `whole_tone`) up to the moment of resolution, then a home chord (`Scale.chord(0)`) that rings out |
+
+Moods of the scales: `major_pentatonic` bright and safe (can't sound wrong), `minor_pentatonic`
+wistful, `major` plain happy, `minor` serious, `dorian` mellow, `lydian` dreamy or spacey,
+`mixolydian` relaxed, `whole_tone` uncanny and weightless, `hirajoshi` contemplative, `pelog`
+mysterious. Combine freely: an event style may swap its scale, or add a quiet pad underneath.
+
+Example: 1012 *Quantum Revival* is Rise & resolve. A dissonant whole-tone pad while the wave
+is chaotic; clean intervals (fifth, octave) struck at the ¼, ⅓ and ½ fractional revivals; the
+home chord exactly at the full revival.
+
+#### Mapping the maths to sound
+
+- **When:** onsets come from the closed forms: crossings, peaks, alignments, zeroes, revivals,
+  found analytically or by sampling the function finely (as `soundtrack` in 1011 does with
+  `find_peaks`). Never from the rendered pixels.
+- **What:** size or energy → loudness and register (big = low and loud); position on screen →
+  pan (x from −1 to 1) and sometimes pitch (higher on screen = higher note); a symmetry order or
+  count → melody length or number of voices; a continuous quantity → `lowpass` cutoff, pad
+  loudness or slow pitch.
+- **Tempo:** for a pulse, pick a tempo with a whole number of bars per loop (`tempo_choices(15)`
+  gives 64, 80, 96, 112 or 128 BPM). Free-timed sonification can be pulled onto that grid
+  with `quantize(..., amount=0.5–1)`: snapped is groovier, free is more organic.
+- **Density:** 2–7 notes per second overall, at most three things sounding at once, and some
+  silence. One clear melodic voice beats many busy ones.
+- **Register:** the melody between MIDI 55 and 84, bass notes two octaves below
+  (`octave=-2`), and nothing under ~40 Hz (phone speakers can't play it; `master` cuts it).
+
+#### Loop or one-shot audio
+
+- **Loop:** onsets are loop-periodic (the same integer cycles as the picture), and every
+  `add`, `delay`, `reverb` and filter stays at its default `circular=True`, so tails wrap into
+  the start and the sound loops as seamlessly as the frames. Finish with `master(track)`; it
+  logs a seam report and warns if the wrap jumps.
+- **One-shot:** pass `circular=False` everywhere and finish with `master(track, loop=False)`.
+  Shape it with the video: start sounding in the first second, build with the development,
+  land the last important note on the resolving image, and let it ring out over the final rest.
+
+#### Mixing
+
+Build with the voices, `pan`, a `delay` if it helps, then the room (`reverb`, or the style's
+`style.room(track, rng)`), then `master` **last**: a 35 Hz high-pass, gain towards −14 LUFS
+(Instagram's loudness), and a soft limiter keeping peaks under −1 dBFS. If `master` warns that
+the track is well under target, it is too sparse or spiky: add sustain (longer notes, more
+room, a quiet pad) rather than more gain. Keep bass notes centred, and darken bright voices
+with `lowpass` if the spectrogram shows a lot above 8 kHz.
+
+#### Template
+
+```python
+from common import audio
+from common.music import STYLES, Scale
+
+STYLE = "music_box"  # common.music.STYLES
+BASS_LINE = (0, 4, 3, 2, 1)  # scale degrees, two octaves down
+
+
+def soundtrack(events, rng):
+    """Which visual events sound, how they map to pitch, loudness and pan."""
+    style = STYLES[STYLE]
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    track = audio.silence(DURATION)
+    for when, degree, size, x in events:  # computed from the same closed forms as the frames
+        note = style.voice(scale.hz(degree), velocity=0.3 + 0.5 * size)
+        audio.add(track, audio.pan(note, 0.7 * x), when)
+    for i, when in enumerate(downbeats):
+        bass = scale.hz(BASS_LINE[i % len(BASS_LINE)], octave=-2)
+        audio.add(track, style.bass(bass, 0.55, length=4.0), when)
+    return audio.master(style.room(track, rng))  # one-shot: circular=False, loop=False
+```
+
+Caption: add one short paragraph saying what the viewer hears and why ("Whenever two tides
+fall into step, a marimba bar is struck…"), "Sound synthesized in NumPy." on the Made-with
+line, and `#sonification`.
+
 ---
 
 ## Phase 3: Execution & Verification
@@ -355,6 +481,41 @@ afterwards with `Remove-Item Env:RP_FPS`.
 6. **Hygiene.** No `ModuleNotFoundError` or unhandled exceptions; importing the module creates no
    stray `outputs/` folder; another seed (`--seed 123 --name test_seed`) still looks good.
 
+Steps 7–9 come after the user has approved the picture.
+
+7. **Audition the music without re-rendering.** `--audio-only [TAG]` keeps the frames and the
+   silent master of the last full run in that folder (same `--name`, seed and `RP_FPS`), skips
+   `render_frames`, and re-runs only the soundtrack and the mux, in a few seconds. Make two or
+   three contrasting candidates: change `STYLE` (or the scale, the mapping) and/or
+   `--audio-seed` between runs, with a different tag each time:
+
+   ```bash
+   uv run python main.py lab.<YYYY>.<MMDD> --seed 42 --audio-only music_box
+   uv run python main.py lab.<YYYY>.<MMDD> --seed 42 --audio-only harp
+   uv run python main.py lab.<YYYY>.<MMDD> --seed 42 --audio-only drone --audio-seed 7
+   ```
+
+   Each run writes `<name>_<TAG>.mp4`, `.wav` and `_spectrogram.png`. Send the user the MP4s
+   with one line each on what they'll hear, and let them pick. Then make the winner the
+   script's default and run `--audio-only` once more without a tag: that rewrites
+   `<name>.mp4` (and `.wav`) with it.
+
+8. **Probe the audio.** An AAC stream at 48 kHz, stereo, as long as the video; then the
+   loudness, about −14 LUFS integrated with the peak under −1 dB:
+
+   ```bash
+   ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate,channels \
+       -show_entries format=duration -of default=nw=1 outputs/<YYYYMMDD>/<YYYYMMDD>.mp4
+   ffmpeg -hide_banner -nostats -i outputs/<YYYYMMDD>/<YYYYMMDD>.wav \
+       -af ebur128=peak=true -f null - 2>&1 | tail -12
+   ```
+
+9. **Look at the sound.** You can't listen, so open `<name>_spectrogram.png`: the level over
+   time on top, a log-frequency spectrogram below. Check that notes start in the first second,
+   the density matches the motion, there are no long holes or a wall of sound, nothing
+   piles up below 60 Hz or glares above 8 kHz, and a one-shot rings out at the end. For loops,
+   `master`'s "Loop seam" log line must not be a warning.
+
 Never run two generators that target the same output folder at once: the second run's
 `ImageProcessingSettings` wipes the first's frames mid-write.
 
@@ -367,4 +528,6 @@ When starting a session with an AI coding agent, use the following starter promp
 > *"I want a new Instagram Reel for @random_plots in `lab/2026/<MMDD>.py`. Give me 4 concepts spanning different mathematical ideas."*
 
 That is all it takes: "Reel" already implies 60 fps, ~15 s, 1080×1920, one mathematical idea,
-a render of about a minute, and pitches in the Phase 1 format.
+a render of about a minute, and pitches in the Phase 1 format. Once the video is approved:
+
+> *"Now give it music: audition two or three styles."*
