@@ -28,6 +28,11 @@ estimate, iterate on `RP_FPS=10` previews, and report the full render time. The 
 templates and verification steps are in the doc's "Video Spec", "Rendering Fast" and "Loop or
 One-Shot" sections. Stills only when asked.
 
+**Posting schedule.** `SCHEDULE.md` lists every planned Reel through 2026-12-31: date,
+math category, script path, title and status. "The next one" / "next Reel" means the earliest
+open slot there. Pitch only within that slot's category, and update the row's status as work
+progresses. The `next-reel` skill (`.claude/skills/next-reel/`) has the steps.
+
 **The video comes first; music is second.** Add a soundtrack only once the picture is approved,
 computed from the same maths and never changing a frame. Pick a style from the doc's
 "Soundtrack" catalogue (`common.music.STYLES` and friends), audition 2–3 candidates with

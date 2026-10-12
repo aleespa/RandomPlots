@@ -228,10 +228,10 @@ def riser(
     sr: int = SAMPLE_RATE,
 ) -> np.ndarray:
     """
-    A swell of tension for one-shots: a sine gliding exponentially from `start`
-    to `end` Hz under a bed of airy noise, growing louder over `duration` s and
-    stopping dead, so whatever lands next (a chord, a bass note) resolves it.
-    Mono.
+    A swell of tension: a sine gliding exponentially from `start` to `end` Hz
+    under a bed of airy noise, growing louder over `duration` s and stopping
+    dead (a 12 ms release, so it doesn't click), so whatever lands next (a
+    chord, a bass note) resolves it. Mono.
     """
     t = _seconds(duration, sr)
     u = t / duration
@@ -240,7 +240,8 @@ def riser(
     sos = butter(2, (2000.0, 9000.0), btype="bandpass", fs=sr, output="sos")
     air = sosfilt(sos, rng.standard_normal(len(t)))
     air /= max(np.abs(air).max(), 1e-12)
-    return velocity * u**2 * (0.6 * glide + 0.4 * air)
+    release = np.clip((duration - t) / 0.012, 0.0, 1.0)
+    return velocity * u**2 * release * (0.6 * glide + 0.4 * air)
 
 
 # --- Placement and mixing ------------------------------------------------------
