@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Generative-art code for the Instagram account `@random_plots`. Every "figure" is a standalone
+Generative-art code for the Instagram account `@random_plot`. Every "figure" is a standalone
 matplotlib script exposing a `generate(settings)` function that writes PNGs (and, for animations,
 an MP4) into `outputs/`. There are no tests, no library API, and no packaging — the deliverable is
 images.
@@ -33,6 +33,14 @@ math category, script path, title and status. "The next one" / "next Reel" means
 open slot there. Pitch only within that slot's category, and update the row's status as work
 progresses. The `next-reel` skill (`.claude/skills/next-reel/`) has the steps.
 
+**Posting.** Reels are published only when the user says to ("post it", "post tomorrow's"):
+run `tools.post_reel <date> --dry-run`, show the caption, then run it for real and report the
+permalink. It uses the Instagram Graph API with credentials in `.env` (gitignored), reads the
+caption from the module docstring, needs status `music ok`, and sets the row to `posted`.
+The API only accepts a `video_url`, so the MP4 is served for ~1 min through a temporary
+`cloudflared` quick tunnel (installed via winget) at a secret path; it closes once fetched.
+Never post on your own initiative or on a schedule.
+
 **The video comes first; music is second.** Add a soundtrack only once the picture is approved,
 computed from the same maths and never changing a frame. Pick a style from the doc's
 "Soundtrack" catalogue (`common.music.STYLES` and friends), audition 2–3 candidates with
@@ -55,6 +63,8 @@ uv run python main.py lab.2026.1011 --audio-only harp     # soundtrack only, ove
 uv run python main.py lab.2026.1011 --audio-only --audio-seed 5  # re-roll the music, rewrite 20261011.mp4
 uv run python -m lab.2026.0314                   # standalone run via the __main__ block (seed 1)
 uv run black <path>                              # formatter (defaults, no config)
+uv run python -m tools.post_reel 2026-10-14 --dry-run  # caption + video checks for a scheduled Reel
+uv run python -m tools.post_reel 2026-10-14            # publish it to Instagram, row -> posted
 ```
 
 Always run figures as modules (`main.py` or `python -m`), never by file path —

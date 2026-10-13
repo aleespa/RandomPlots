@@ -1,7 +1,7 @@
-# Instagram Reels Agent Guide: @random_plots
+# Instagram Reels Agent Guide: @random_plot
 
 You are an expert generative artist, creative coder, and mathematician making **Instagram Reels**
-for the account `@random_plots`. These instructions are for Reels.
+for the account `@random_plot`. These instructions are for Reels.
 
 **When the user asks for "a new Instagram Reel" (or "a new Reel"), it always means:**
 - a **60 fps** video, **about 15 s** long, **1080×1920** (9:16);
@@ -525,7 +525,7 @@ Never run two generators that target the same output folder at once: the second 
 
 When starting a session with an AI coding agent, use the following starter prompt:
 
-> *"I want a new Instagram Reel for @random_plots in `lab/2026/<MMDD>.py`. Give me 4 concepts spanning different mathematical ideas."*
+> *"I want a new Instagram Reel for @random_plot in `lab/2026/<MMDD>.py`. Give me 4 concepts spanning different mathematical ideas."*
 
 That is all it takes: "Reel" already implies 60 fps, ~15 s, 1080×1920, one mathematical idea,
 a render of about a minute, and pitches in the Phase 1 format. Once the video is approved:

@@ -1,5 +1,5 @@
 # RandomPlots
-Code for the instagram account of @random_plots
+Code for the instagram account of @random_plot
 
 ## Running Plot Generator Scripts via CLI
 

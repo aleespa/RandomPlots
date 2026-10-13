@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-RandomPlots creates generative art for `@random_plots` using Python and Matplotlib.
+RandomPlots creates generative art for `@random_plot` using Python and Matplotlib.
 
 - `lab/<YYYY>/<MMDD>.py`: dated experimental sketches; place new figures here.
 - `static/` and `animations/`: named, reusable figure generators.
