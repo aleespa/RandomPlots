@@ -63,10 +63,32 @@ When implementing the selected concept, follow the repository's strict architect
 - **ALWAYS** start the file with a module docstring written as the Instagram caption for the
   post: the figure's title on the first line, then two or three short paragraphs a general
   reader can follow (what they are seeing, the idea behind it, why it is interesting), a
-  "Made with ..." line, and a line of hashtags. Keep it short -- roughly 120 words before the
-  hashtags. Formulas are welcome (plain Unicode maths, e.g. `∂ω/∂t + u·∇ω = ν∇²ω + f`), but
-  no code identifiers or knob names -- implementation detail belongs in the `generate()`
-  docstring. The caption is copied verbatim into the post, so write it ready to publish.
+  "Made with ..." line, and a line of **at most five** hashtags. Keep it short -- roughly 120
+  words before the hashtags. Formulas are welcome (plain Unicode maths, e.g.
+  `∂ω/∂t + u·∇ω = ν∇²ω + f`), but no code identifiers or knob names -- implementation detail
+  belongs in the `generate()` docstring. The caption is published as is (by
+  `tools/post_reel.py`, which joins the hard line wraps), so write it ready to publish and
+  follow the discoverability rules below.
+- **Caption discoverability** (Instagram, as of Oct 2026):
+  - **Five hashtags, maximum.** Since Dec 2025 Instagram caps feed posts and Reels at five; more
+    are ignored or look like spam, and `post_reel.py` refuses to post more. Hashtags are topic
+    labels for search now, not a reach multiplier (hashtags can no longer be followed), so pick
+    precise ones, not popular ones. Use this mix, most specific first:
+    1. the exact idea, as people would name it: `#fractalflame`, `#talboteffect`,
+       `#primespiral`, `#joukowski`
+    2. its field: `#fractal`, `#quantummechanics`, `#numbertheory`, `#fluiddynamics`
+    3. `#mathart`
+    4. `#generativeart` (or `#creativecoding` when the code is the point)
+    5. `#randomplots`, the account's own tag
+  - Avoid generic tags that say nothing about the post (`#animation`, `#physics`, `#art`,
+    `#mathisbeautiful`, `#sonification`). Don't move hashtags to the first comment: they count
+    against the same five. Vary slots 1–2 every post; an identical block on every post reads as
+    spam.
+  - **Keywords matter more than hashtags.** Instagram search indexes the caption text. Only the
+    first ~125 characters show before "more", so the title plus the first sentence must name
+    the subject in plain searchable words ("fractal", "prime numbers", "a quantum particle in a
+    box", "air flowing past a wing"), not just a poetic title. Use the main keyword two or three
+    times in the caption, naturally, and keep it consistent with what the video shows.
 - Code skeletons are in [Templates](#6-templates).
 
 ### 3. Video Spec
@@ -176,7 +198,7 @@ copies); import them, and extend the shared module when a new helper is worth re
 <Two or three short paragraphs for a general reader: what they see, the idea, why it's interesting.>
 
 Made with Python, NumPy & OpenCV.
-#generativeart #mathart #randomplots #creativecoding #animation
+#<exactidea> #<field> #mathart #generativeart #randomplots
 """
 
 import gc

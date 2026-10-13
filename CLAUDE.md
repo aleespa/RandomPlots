@@ -15,7 +15,7 @@ When brainstorming or implementing new figures, follow the pitch → code → ve
 caption format, and the code templates in [`docs/AGENT_INSTRUCTIONS.md`](docs/AGENT_INSTRUCTIONS.md)
 (it also covers HDR/looping guidance for animations). In short: every figure script starts with a
 module docstring that is the ready-to-post Instagram caption (title, plain-language paragraphs,
-"Made with" line, hashtags); the technical description goes in the `generate()` docstring. New work
+"Made with" line, at most five specific hashtags; see the doc's "Caption discoverability"); the technical description goes in the `generate()` docstring. New work
 goes in `lab/<YYYY>/<MMDD>.py`, dated.
 
 **New figures are Instagram Reels. "A new Instagram Reel" (or "a new Reel") always means a 60 fps,

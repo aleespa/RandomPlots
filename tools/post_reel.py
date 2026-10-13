@@ -49,7 +49,7 @@ GRAPH = "https://graph.instagram.com"
 
 READY = "music ok"
 MAX_CAPTION = 2200
-MAX_HASHTAGS = 30
+MAX_HASHTAGS = 5  # Instagram's cap since Dec 2025
 MAX_BYTES = 300 * 1024**2
 
 
