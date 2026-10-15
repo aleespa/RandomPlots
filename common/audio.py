@@ -11,8 +11,9 @@ loop-periodic events loops as seamlessly as the frames. A one-shot passes
 `circular=False` (and `loop=False` to `master`) so tails are cut at the end
 instead of bleeding into the opening second.
 
-Voices return mono arrays (except `pad`, which is stereo); place them with
-`pan` and mix them in with `add`. Finish every track with `master`.
+Voices return mono arrays (except `pad`, `strings` and `choir`, which are
+stereo); place them with `pan` and mix them in with `add`. Finish every track
+with `master`.
 """
 
 from __future__ import annotations
@@ -193,6 +194,278 @@ def pad(
     return 0.35 * velocity * shape[:, None] * channels
 
 
+@_cached
+def piano(
+    freq: float, velocity: float = 0.6, length: float = 3.5, sr: int = SAMPLE_RATE
+) -> np.ndarray:
+    """
+    A soft acoustic piano note, by additive synthesis. Warm, intimate, familiar.
+
+    A hammer striking at 1/7 of the string excites harmonic k with amplitude
+    ~|sin(k pi / 7)| / k; string stiffness stretches the partials sharp
+    (inharmonicity, stronger up high). Each note is two strings a hair apart,
+    which gives the slow beating of a real piano, and decays in two stages: a
+    quick drop after the strike, then a long soft tail. Harder strokes are
+    brighter. Mono.
+    """
+    t = _seconds(length, sr)
+    ring = np.clip(3.2 * (262.0 / freq) ** 0.55, 0.7, 6.0)
+    stiffness = 4e-5 * (freq / 262.0) ** 1.2
+    note = np.zeros_like(t)
+    for k in range(1, 19):
+        partial = k * freq * np.sqrt(1.0 + stiffness * k * k)
+        if partial > 0.45 * sr:
+            break
+        gain = abs(np.sin(k * np.pi / 7.0)) / k**0.9 * velocity ** (0.35 * (k - 1))
+        tau = ring / (1.0 + 0.35 * (k - 1))
+        decay = 0.55 * np.exp(-t / (0.22 * tau)) + 0.45 * np.exp(-t / tau)
+        # two strings 0.45 per mille apart: their sum is one sine times a slow beat
+        beat = np.cos(np.pi * partial * 0.00045 * t)
+        note += gain * decay * beat * np.sin(2.0 * np.pi * partial * 1.000225 * t + k)
+    attack = 1.0 - np.exp(-t / 0.0015)
+    return 1.1 * velocity * attack * note
+
+
+@_cached
+def rhodes(
+    freq: float, velocity: float = 0.6, length: float = 3.0, sr: int = SAMPLE_RATE
+) -> np.ndarray:
+    """
+    An electric piano (Rhodes), by FM synthesis. Round, mellow, lo-fi and jazzy.
+
+    A sine carrier phase-modulated by a sine at the same frequency: the
+    modulation index starts high and decays, so the note opens with a soft
+    bark and settles into an almost pure tone. A faint high "tine" partial at
+    14x the fundamental gives the bell-like ding of the attack. Harder strokes
+    bark more. Mono.
+    """
+    t = _seconds(length, sr)
+    ring = np.clip(2.4 * (220.0 / freq) ** 0.4, 0.8, 4.0)
+    index = (0.4 + 2.2 * velocity) * np.exp(-t / 0.35) + 0.25
+    phase = 2.0 * np.pi * freq * t
+    note = np.sin(phase + index * np.sin(phase)) * np.exp(-t / ring)
+    if 14.0 * freq < 0.45 * sr:
+        note += 0.12 * velocity * np.sin(14.0 * phase) * np.exp(-t / 0.03)
+    attack = 1.0 - np.exp(-t / 0.002)
+    return 0.75 * velocity * attack * note
+
+
+@_cached
+def vibraphone(
+    freq: float,
+    velocity: float = 0.6,
+    length: float = 4.0,
+    tremolo: float = 5.0,
+    sr: int = SAMPLE_RATE,
+) -> np.ndarray:
+    """
+    A vibraphone: tuned aluminium bars with a motor-driven tremolo. Cool, jazzy.
+
+    Like the marimba, the bars ring at about 1x, 4x and 10x the fundamental,
+    but metal sustains much longer, and rotating discs under the bars make the
+    tone pulse at `tremolo` Hz (0 turns the motor off). Mono.
+    """
+    t = _seconds(length, sr)
+    ring = np.clip(3.2 * (440.0 / freq) ** 0.3, 1.2, 5.0)
+    note = np.zeros_like(t)
+    for ratio, gain, softness in ((1.0, 1.0, 0), (3.93, 0.22, 1), (9.4, 0.06, 2)):
+        if ratio * freq > 0.45 * sr:
+            continue
+        note += (
+            gain
+            * velocity**softness
+            * np.sin(2.0 * np.pi * ratio * freq * t)
+            * np.exp(-t / (ring / ratio**0.7))
+        )
+    pulse = 1.0 - 0.35 * (0.5 - 0.5 * np.cos(2.0 * np.pi * tremolo * t))
+    attack = 1.0 - np.exp(-t / 0.0012)
+    return 0.8 * velocity * attack * pulse * note
+
+
+@_cached
+def kalimba(
+    freq: float, velocity: float = 0.6, length: float = 2.0, sr: int = SAMPLE_RATE
+) -> np.ndarray:
+    """
+    A kalimba (thumb piano): a plucked steel tine on a wooden box. Bright, playful.
+
+    A clamped tine rings at its fundamental plus an inharmonic mode near 5.9x
+    that dies within a few tenths of a second, and the thumb's flick adds a
+    short metallic click. Short, dry and sweet. Mono.
+    """
+    t = _seconds(length, sr)
+    ring = np.clip(1.3 * (440.0 / freq) ** 0.5, 0.35, 2.2)
+    note = np.sin(2.0 * np.pi * freq * t) * np.exp(-t / ring)
+    for ratio, gain, tau in ((5.92, 0.28, 0.12), (2.0, 0.08, 0.3)):
+        if ratio * freq < 0.45 * sr:
+            note += (
+                gain
+                * velocity
+                * np.sin(2.0 * np.pi * ratio * freq * t)
+                * np.exp(-t / tau)
+            )
+    if 9.0 * freq < 0.45 * sr:
+        note += (
+            0.15 * velocity * np.sin(2.0 * np.pi * 9.0 * freq * t) * np.exp(-t / 0.006)
+        )
+    attack = 1.0 - np.exp(-t / 0.0008)
+    return 0.85 * velocity * attack * note
+
+
+@_cached
+def handpan(
+    freq: float, velocity: float = 0.6, length: float = 4.5, sr: int = SAMPLE_RATE
+) -> np.ndarray:
+    """
+    A handpan (hang drum): a tuned steel dome struck by hand. Meditative, warm.
+
+    Each tone field is tuned so its first overtones sit exactly on the octave
+    and the compound fifth (2x, 3x), which makes it sound like a soft
+    hand-struck bell that is perfectly in tune. A slow beat between two close
+    modes gives the shimmer; the overtones fade first. Mono.
+    """
+    t = _seconds(length, sr)
+    ring = np.clip(3.0 * (220.0 / freq) ** 0.3, 1.5, 4.5)
+    note = np.zeros_like(t)
+    for ratio, gain, softness, fade in (
+        (1.0, 1.0, 0, 1.0),
+        (1.0 + 0.35 / freq, 0.35, 0, 1.0),  # the shimmer: 0.35 Hz beat
+        (2.0, 0.45, 1, 1.6),
+        (3.0, 0.18, 1.5, 2.4),
+    ):
+        if ratio * freq > 0.45 * sr:
+            continue
+        note += (
+            gain
+            * velocity**softness
+            * np.sin(2.0 * np.pi * ratio * freq * t)
+            * np.exp(-t / (ring / fade))
+        )
+    attack = 1.0 - np.exp(-t / 0.004)  # a soft hand, not a mallet
+    return 0.65 * velocity * attack * note
+
+
+@_cached
+def flute(
+    freq: float, velocity: float = 0.6, length: float = 1.4, sr: int = SAMPLE_RATE
+) -> np.ndarray:
+    """
+    A breathy wooden or bamboo flute, held for `length` seconds. Airy, wistful.
+
+    A nearly pure tone (weak 2nd and 3rd harmonics) with a gentle vibrato that
+    fades in after the attack, plus breath noise filtered around the note.
+    The breath is pseudo-random but fixed per pitch, so the voice stays cached
+    and deterministic. Mono.
+    """
+    t = _seconds(length, sr)
+    vibrato = (
+        0.004 * np.clip((t - 0.25) / 0.4, 0.0, 1.0) * np.sin(2.0 * np.pi * 5.0 * t)
+    )
+    phase = 2.0 * np.pi * freq * np.cumsum(1.0 + vibrato) / sr
+    note = (
+        np.sin(phase) + 0.18 * velocity * np.sin(2 * phase) + 0.05 * np.sin(3 * phase)
+    )
+    noise = np.random.default_rng(int(freq * 100)).standard_normal(len(t))
+    band = (min(freq, 0.2 * sr), min(4.0 * freq, 0.45 * sr))
+    breath = sosfilt(butter(2, band, btype="bandpass", fs=sr, output="sos"), noise)
+    breath *= 0.12 * (0.6 + velocity) / max(np.abs(breath).max(), 1e-9)
+    shape = np.clip(t / 0.07, 0.0, 1.0) * np.clip((length - t) / 0.25, 0.0, 1.0)
+    return 0.6 * velocity * shape * (note + breath)
+
+
+def _ensemble(freq, duration, velocity, attack, release, partial_gain, voices, sr):
+    """Shared by `strings` and `choir`: detuned voices with vibrato, spread in stereo."""
+    t = _seconds(duration + release, sr)
+    channels = np.zeros((len(t), 2))
+    for v in range(voices):
+        spread = (v / (voices - 1) - 0.5) if voices > 1 else 0.0
+        cents = 9.0 * spread + 2.0 * np.sin(1.7 * v)
+        rate = 5.2 + 0.4 * np.sin(2.3 * v)
+        drift = 2.0 ** ((cents + 6.0 * np.sin(2.0 * np.pi * rate * t + v)) / 1200.0)
+        phase = 2.0 * np.pi * freq * np.cumsum(drift) / sr
+        voice = np.zeros_like(t)
+        for k in range(1, 28):
+            gain = partial_gain(k * freq)
+            if k * freq > 0.45 * sr:
+                break
+            if gain > 1e-3:
+                voice += gain * np.sin(k * phase + k * v)
+        channels[:, 0] += (0.5 - 0.6 * spread) * voice
+        channels[:, 1] += (0.5 + 0.6 * spread) * voice
+    swell = np.clip(t / max(attack, 1e-3), 0.0, 1.0)
+    fade = np.clip((duration + release - t) / max(release, 1e-3), 0.0, 1.0)
+    shape = (0.5 - 0.5 * np.cos(np.pi * swell)) * (0.5 - 0.5 * np.cos(np.pi * fade))
+    return velocity * shape[:, None] * channels / voices
+
+
+def strings(
+    freq: float,
+    duration: float,
+    velocity: float = 0.5,
+    attack: float = 0.8,
+    release: float = 1.5,
+    brightness: float = 0.5,
+    sr: int = SAMPLE_RATE,
+) -> np.ndarray:
+    """
+    A bowed string section (violins to cellos by pitch), held for `duration`.
+    Cinematic, emotional.
+
+    Four bowed voices, each a sawtooth-like stack of harmonics (gain 1/k,
+    rolled off above ~1.5-4 kHz by `brightness`) with its own slow vibrato and
+    a few cents of detune, spread across the stereo field. Use it like `pad`:
+    long chord tones, swells, the resolving chord of a one-shot. STEREO.
+    """
+    cutoff = 1500.0 + 2500.0 * brightness
+
+    def partial_gain(f):
+        return 1.0 / (f / freq) / (1.0 + (f / cutoff) ** 4)
+
+    return 0.95 * _ensemble(
+        freq, duration, velocity, attack, release, partial_gain, 4, sr
+    )
+
+
+VOWELS = {  # formant centre frequencies (Hz) and relative gains
+    "a": ((800, 1150, 2900), (1.0, 0.5, 0.25)),
+    "o": ((450, 800, 2830), (1.0, 0.35, 0.1)),
+    "u": ((325, 700, 2530), (1.0, 0.2, 0.06)),
+    "e": ((400, 1700, 2600), (1.0, 0.3, 0.2)),
+}
+
+
+def choir(
+    freq: float,
+    duration: float,
+    velocity: float = 0.5,
+    attack: float = 1.0,
+    release: float = 1.8,
+    vowel: str = "o",
+    sr: int = SAMPLE_RATE,
+) -> np.ndarray:
+    """
+    A small choir singing one vowel ("a", "o", "u", "e"), held for `duration`.
+    Sacred, vast, human.
+
+    Four voices with their own vibrato; each is a harmonic stack shaped by the
+    vowel's three formants (the resonances of the mouth that make an "ooh"
+    an "ooh"), so it sounds sung rather than synthetic at any pitch. Use it
+    like `pad`. STEREO.
+    """
+    centres, gains = VOWELS[vowel]
+
+    def partial_gain(f):
+        shape = sum(
+            g / (1.0 + ((f - c) / (60.0 + 0.08 * c)) ** 2)
+            for c, g in zip(centres, gains)
+        )
+        return shape / (f / freq) ** 0.5
+
+    return 1.3 * _ensemble(
+        freq, duration, velocity, attack, release, partial_gain, 4, sr
+    )
+
+
 def kick(velocity: float = 0.8, pitch: float = 48.0, sr: int = SAMPLE_RATE):
     """A soft electronic kick: a sine sweeping down to `pitch` Hz. Mono."""
     t = _seconds(0.6, sr)
@@ -270,11 +543,15 @@ def add(
         sound = sound[:, None]
     i = int(round(start * sr))
     if circular:
-        sound = sound[:n]
+        # Wrap the whole sound, however long: a tail longer than the loop
+        # folds round more than once rather than being cut off.
         i %= n
-        head = min(len(sound), n - i)
-        track[i : i + head] += sound[:head]
-        track[: len(sound) - head] += sound[head:]
+        done = 0
+        while done < len(sound):
+            j = (i + done) % n
+            take = min(n - j, len(sound) - done)
+            track[j : j + take] += sound[done : done + take]
+            done += take
         return
     if i < 0:
         sound, i = sound[-i:], 0

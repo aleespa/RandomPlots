@@ -14,6 +14,10 @@ The Instagram-login API only takes a `video_url`, so while a post is processing 
 served from this PC through a Cloudflare quick tunnel (`cloudflared`, no account needed) at a
 random, unguessable https URL. The tunnel closes as soon as Instagram has fetched the video.
 
+Quality: the master MP4 is uploaded untouched, even above Meta's 25 Mbps spec (Instagram
+accepts it and re-encodes everything anyway; any re-encode here measured worse). Only if
+Instagram rejects an over-spec file is a 24 Mbps HEVC copy built from the PNG frames.
+
 Credentials live in `.env` at the repo root (gitignored):
 
     IG_ACCESS_TOKEN=...      # long-lived token, scope instagram_business_content_publish
@@ -51,9 +55,14 @@ READY = "music ok"
 MAX_CAPTION = 2200
 MAX_HASHTAGS = 5  # Instagram's cap since Dec 2025
 MAX_BYTES = 300 * 1024**2
+MAX_VIDEO_BPS = 25_000_000  # Meta's Reels spec; over it still uploads, see publish_reel
 
 
 class GraphError(RuntimeError):
+    pass
+
+
+class ProcessingError(GraphError):
     pass
 
 
@@ -131,6 +140,24 @@ class Instagram:
         return self._user_id
 
     def publish_reel(self, video: Path, caption: str):
+        """Upload the master as is (best quality). Only if Instagram rejects it and it is
+        over the 25 Mbps spec, retry once with a compliant copy encoded from the frames.
+        """
+        try:
+            cid = self.create_container(video, caption)
+        except ProcessingError:
+            if video_bitrate(video) <= MAX_VIDEO_BPS:
+                raise
+            logger.warning(
+                "Instagram rejected the master; retrying with a 24 Mbps copy"
+            )
+            cid = self.create_container(compliant_copy(video), caption)
+
+        media_id = self.post(f"{self.user_id}/media_publish", creation_id=cid)["id"]
+        permalink = self.get(media_id, fields="permalink").get("permalink")
+        return media_id, permalink
+
+    def create_container(self, video: Path, caption: str):
         with tunnel(video) as video_url:
             container = self.post(
                 f"{self.user_id}/media",
@@ -142,10 +169,7 @@ class Instagram:
             cid = container["id"]
             logger.info(f"Container {cid} created, Instagram is fetching the video")
             self.wait_until_finished(cid)
-
-        media_id = self.post(f"{self.user_id}/media_publish", creation_id=cid)["id"]
-        permalink = self.get(media_id, fields="permalink").get("permalink")
-        return media_id, permalink
+        return cid
 
     def wait_until_finished(self, cid):
         deadline = time.monotonic() + 15 * 60
@@ -155,7 +179,7 @@ class Instagram:
             if code == "FINISHED":
                 break
             if code in ("ERROR", "EXPIRED"):
-                raise GraphError(f"Instagram could not process the video: {state}")
+                raise ProcessingError(f"Instagram could not process the video: {state}")
             if time.monotonic() > deadline:
                 raise GraphError(f"Processing timed out, last status: {state}")
             logger.info(f"Processing on Instagram's side: {code}")
@@ -361,6 +385,52 @@ def check_caption(caption: str):
     if len(tags) > MAX_HASHTAGS:
         problems.append(f"{len(tags)} hashtags (max {MAX_HASHTAGS})")
     return problems
+
+
+def video_bitrate(video: Path) -> int:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=bit_rate", "-of", "csv=p=0", str(video)],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    return int(out.stdout.strip() or 0)
+
+
+def compliant_copy(video: Path) -> Path:
+    """`<name>_ig.mp4`: HEVC capped at 24 Mbps, from the PNG frames when they exist (one
+    generation of loss instead of two), audio copied from the master."""
+    out = video.with_name(f"{video.stem}_ig.mp4")
+    frames = video.parent / "frames" / "frame%04d.png"
+    fps = probe_fps(video)
+    source = (
+        ["-framerate", fps, "-i", str(frames)]
+        if (video.parent / "frames" / "frame0000.png").exists()
+        else ["-i", str(video)]
+    )
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        *source, "-i", str(video),
+        "-map", "0:v:0", "-map", "1:a?", "-c:a", "copy",
+        "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
+        "-c:v", "libx265", "-preset", "slow", "-crf", "12",
+        "-x265-params",
+        "vbv-maxrate=24000:vbv-bufsize=24000:keyint=120:open-gop=0:log-level=error",
+        "-tag:v", "hvc1", "-color_primaries", "bt709", "-colorspace", "bt709",
+        "-color_trc", "bt709", "-color_range", "tv", "-movflags", "+faststart",
+        str(out),
+    ]  # fmt: skip
+    logger.info(f"Encoding {out.name} (about a minute)")
+    subprocess.run(cmd, check=True)
+    return out
+
+
+def probe_fps(video: Path) -> str:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=r_frame_rate", "-of", "csv=p=0", str(video)],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    return out.stdout.strip()
 
 
 def probe(video: Path):

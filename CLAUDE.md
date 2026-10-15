@@ -21,7 +21,7 @@ goes in `lab/<YYYY>/<MMDD>.py`, dated.
 **New figures are Instagram Reels. "A new Instagram Reel" (or "a new Reel") always means a 60 fps,
 ~15 s (900 frames), 1080×1920 video built on one mathematical idea, either a loop or a one-shot,
 whose full render takes about a minute (3 min at most).** Don't ask about format, frame rate, size
-or length. Start by pitching concepts (Phase 1 of the doc). Get there by making
+or length. Start by pitching one strong concept, not a menu (Phase 1 of the doc). Get there by making
 each frame a pure function of time, rendered in parallel (cv2 on a thread pool, or torch on the
 GPU), never with long sequential simulations. Pitch each video with its render plan and a time
 estimate, iterate on `RP_FPS=10` previews, and report the full render time. The rules,
@@ -65,6 +65,7 @@ uv run python -m lab.2026.0314                   # standalone run via the __main
 uv run black <path>                              # formatter (defaults, no config)
 uv run python -m tools.post_reel 2026-10-14 --dry-run  # caption + video checks for a scheduled Reel
 uv run python -m tools.post_reel 2026-10-14            # publish it to Instagram, row -> posted
+uv run python -m tools.instrument_sampler        # hear every soundtrack voice -> outputs/instrument_sampler.wav
 ```
 
 Always run figures as modules (`main.py` or `python -m`), never by file path —

@@ -106,6 +106,30 @@ STYLES = {
     "gamelan": Style(
         audio.bell, "pelog", range(60, 68), audio.marimba, 3.5, 0.4, 3500.0
     ),
+    # A soft piano in a plain major key, a warm hall: intimate, familiar.
+    "felt_piano": Style(
+        audio.piano, "major", range(57, 65), audio.piano, 2.4, 0.3, 4500.0
+    ),
+    # Electric piano in dorian, a small dark room: lo-fi, mellow, late-night.
+    "lofi_keys": Style(
+        audio.rhodes, "dorian", range(55, 63), audio.rhodes, 1.4, 0.22, 3500.0
+    ),
+    # Vibraphone with its motor on over a plucked bass: cool jazz.
+    "vibes": Style(
+        audio.vibraphone, "mixolydian", range(60, 68), audio.pluck, 2.0, 0.25
+    ),
+    # Thumb piano in the bright pentatonic, a dry room: playful, toy-like.
+    "kalimba": Style(
+        audio.kalimba, "major_pentatonic", range(62, 70), audio.marimba, 1.3, 0.2
+    ),
+    # Handpan in natural minor (the "Kurd" scale of most handpans): meditative.
+    "handpan": Style(
+        audio.handpan, "minor", range(57, 65), audio.handpan, 2.6, 0.32, 4500.0
+    ),
+    # Breathy flute in minor pentatonic, a long room: wistful, open-air.
+    "bamboo_flute": Style(
+        audio.flute, "minor_pentatonic", range(65, 72), audio.pluck, 2.8, 0.35, 4000.0
+    ),
 }
 
 

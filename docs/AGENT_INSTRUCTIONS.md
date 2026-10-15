@@ -10,7 +10,7 @@ for the account `@random_plot`. These instructions are for Reels.
 - **rendered in about a minute** on this machine (RTX 5060 8 GB, 20 CPU threads).
 
 Don't ask about format, frame rate, size or length; they're fixed here. Start with Phase 1 and
-pitch concepts. Make a still image only when the user explicitly asks for an image post instead
+pitch one concept. Make a still image only when the user explicitly asks for an image post instead
 of a Reel.
 
 Render speed is a design constraint, not an afterthought: if a concept can't render fast, it's
@@ -21,17 +21,28 @@ video without sound. Only then write the soundtrack, from the same maths, withou
 single frame (see [Soundtrack](#9-soundtrack)).
 
 Your workflow follows a strict 3-phase pipeline:
-1. **Phase 1: Pitch Ideas** (Brainstorm & categorize creative concepts)
-2. **Phase 2: Generate Code** (Implement selected idea according to repo conventions; video, then soundtrack)
+1. **Phase 1: Pitch One Idea** (Choose the single strongest concept and pitch it)
+2. **Phase 2: Generate Code** (Implement the approved idea according to repo conventions; video, then soundtrack)
 3. **Phase 3: Verify & Polish** (Preview, timed full render, probe, inspect frames, then audition the music)
 
 ---
 
 ## Phase 1: Idea Pitching Protocol
 
-When asked for a new Reel or for ideas, pitch **3 to 5 distinct concepts** covering different aesthetic and mathematical domains. Mix loops and one-shots across the set.
+When asked for a new Reel, pitch **one concept: the strongest candidate you can find**. Don't
+present a menu. Weigh the options yourself and bring only the winner; the user's time goes into
+one decision, not into reading five pitches. Judge candidates on:
 
-For each concept, provide:
+- **The hook**: something striking happens in the first second, and the motion keeps paying off
+  for 15 s.
+- **One clear idea** a general reader can follow from the caption, ideally with a surprise
+  ("the circle comes out as a wing").
+- **Render cost**: it fits the ~1 min budget as planned, not after a rescue.
+- **Freshness**: not a repeat of a recent Reel or of an earlier one in the same category.
+
+Vary the aesthetic, the palette and loop vs one-shot from one Reel to the next rather than
+within a set of pitches. Pitch it with:
+
 - **Title & 1-line Hook**: Catchy name and brief visual summary.
 - **Mathematical / Algorithmic Core**: The underlying math/physics (e.g., Strange Attractors, Reaction-Diffusion, Brownian Bridges, Hyperbolic Tilings, Vector Fields, Fourier Epicycles, Wave Interference, Phyllotaxis, Implicit Surfaces).
 - **Visual Aesthetic & Mood**: Dark (`'k'`) vs Warm Minimalist (`'#f4f0e7'`), line weight, density, texture (glow, stippling, contours, flow).
@@ -39,11 +50,13 @@ For each concept, provide:
 - **Shape of the video**: **loop** (ends exactly where it starts) or **one-shot** (a beginning, a development, an end: something builds, unfolds, transforms or resolves). Say what happens over the ~15 s.
 - **Render plan**: how a frame is computed (closed form in `t`, or a cheap state update), which engine (see the table in [Rendering fast](#4-rendering-fast)), and an **estimated full render time**. Only pitch concepts you expect to render in about a minute. Anything you estimate above ~3 min needs a cheaper formulation, or the user's explicit OK, before any code is written.
 - **Key Knobs to Tweak**: 2–3 parameters that drastically alter the visual outcome across seeds.
+- **Why this one**: one line on why it beats the alternatives you considered.
 - **Sound** (one line, secondary): a style from the [catalogue](#style-catalogue) and what in the
   maths drives it, e.g. *"Music box: a bell on every petal tip, pitch by petal direction."*
   It never decides which concept wins.
 
-*Wait for the user to select or combine ideas before writing code.*
+*Wait for the user's go-ahead before writing code. If they turn it down, pitch the next
+strongest single concept, taking their reason into account.*
 
 ---
 
@@ -349,11 +362,21 @@ so hundreds of notes are cheap. The user isn't a musician: make the musical choi
 from the catalogue below, and let them choose by listening.
 
 **The tools.**
-- `common.audio` makes sounds. Voices: `marimba` (warm wood), `bell` (glassy metal), `pluck`
-  (harp or koto string), `pad(freq, duration)` (soft sustained chord tone, stereo), `kick`,
-  `tick(rng)` (hi-hat or shaker), `riser(duration, rng)` (a build-up). Placement: `pan`,
-  `add(track, sound, seconds)`. Effects: `lowpass`, `highpass`, `delay` (echoes, sync to the
-  tempo), `reverb` (the room). Finishing: `master(track, loop=...)`.
+- `common.audio` makes sounds, all synthesized (no samples).
+  - Struck and plucked voices, `voice(freq, velocity)`, mono, cached: `marimba` (warm wood),
+    `bell` (glassy metal: glockenspiel, celesta), `pluck` (harp or koto string), `piano` (soft
+    acoustic piano), `rhodes` (electric piano, FM), `vibraphone` (metal bars with motor
+    tremolo), `kalimba` (thumb piano), `handpan` (hang drum), `flute` (breathy, held for
+    `length` s).
+  - Sustained chord voices, `voice(freq, duration)`, stereo: `pad` (soft synth), `strings`
+    (bowed section), `choir(..., vowel="o")` (sung "a", "o", "u" or "e").
+  - Percussion and effects: `kick`, `tick(rng)` (hi-hat or shaker), `riser(duration, rng)` (a
+    build-up).
+  - Placement: `pan`, `add(track, sound, seconds)`. Effects: `lowpass`, `highpass`, `delay`
+    (echoes, sync to the tempo), `reverb` (the room). Finishing: `master(track, loop=...)`.
+  - To hear every voice, `uv run python -m tools.instrument_sampler` writes
+    `outputs/instrument_sampler.wav`: each struck voice plays the same phrase, then `pad`,
+    `strings` and `choir` hold a chord.
 - `common.music` chooses notes and timing. `Scale(root, mode)` with `.note(degree)`, `.hz(degree)`
   and `.chord(degree, size)`; `SCALES` (with the mood of each); `PROGRESSIONS`; `tempo_choices`,
   `loop_bpm`, `beat_times`, `quantize`; and `STYLES`, the presets for event styles.
@@ -368,7 +391,14 @@ Pick the style that fits what the viewer *sees*, and say why in the pitch's Soun
 | **Music box** | High glassy bells, dreamy Lydian, long room | are crystalline: tilings, symmetry, snowflakes, stars | `STYLES["music_box"]` |
 | **Harp** | Plucked strings, Japanese Hirajōshi scale | are curves or strings, sweeps through a shape | `STYLES["harp"]` |
 | **Gamelan** | Bells in the Balinese pelog scale, dark and long | are mysterious, interlocking, ornamental | `STYLES["gamelan"]` |
-| **Drone & pad** | A slow chord that breathes, no beat | are continuous fields: fluids, waves, quantum, fog, flow | `pad` chords from `Scale.chord` + `PROGRESSIONS`; a visual quantity (energy, spread, speed) drives `lowpass` cutoff or loudness |
+| **Felt piano** | A soft piano in a plain major key, warm hall | are intimate, tender, human-scale: one thing growing, a single path, a story | `STYLES["felt_piano"]` |
+| **Lo-fi keys** | Electric piano (Rhodes) in dorian, small dark room | are calm, nocturnal, slowly drifting: night palettes, neon, rain | `STYLES["lofi_keys"]`; add a soft `kick`/`tick` beat for a lo-fi groove |
+| **Vibes** | Vibraphone with tremolo over a plucked bass, cool jazz | are playful-sophisticated: rolling geometry, swinging motion, clockwork | `STYLES["vibes"]` |
+| **Kalimba** | Thumb piano in the bright pentatonic, dry | are small, bouncy, toy-like: dots, hops, collisions, cellular automata | `STYLES["kalimba"]` |
+| **Handpan** | Hang drum in natural minor, warm and round | are meditative, circular, breathing: mandalas, orbits, slow rotations | `STYLES["handpan"]` |
+| **Bamboo flute** | A breathy flute in minor pentatonic, long room | are airy and organic: wind, flow lines, growth, landscapes | `STYLES["bamboo_flute"]`; one slow melodic line, few notes (they're held) |
+| **Cinematic swell** | A bowed string section or a choir holding chords that grow | are one-shots with a big arc: reveals, zooms out, something vast assembling | `strings` or `choir` chords (`Scale.chord`) instead of `pad`; louder and brighter (`brightness`, more voices) as the build grows, a struck voice on top for events |
+| **Drone & pad** | A slow chord that breathes, no beat | are continuous fields: fluids, waves, quantum, fog, flow | `pad` chords from `Scale.chord` + `PROGRESSIONS`; a visual quantity (energy, spread, speed) drives `lowpass` cutoff or loudness. `choir(..., vowel="u")` makes it human and soft |
 | **Harmonic series** | Pure tones at f₀·k, the maths made audible | contain literal frequencies: Fourier terms, epicycles, standing waves, harmonics | `bell`/`pad` at `f0 * k` for the picture's own integers k, louder for larger amplitudes |
 | **Phase music** | One short pattern on two voices at slightly different speeds (Steve Reich) | are loops with integer speeds drifting in and out of step | the same 4–8 note figure on two voices whose cycle counts per loop differ by 1 |
 | **Soft pulse** | Light kick, ticks and a plucked bass on a steady beat | are rhythmic, geometric, building | a tempo from `tempo_choices`, `kick` on beats, `tick` off-beats, `delay` synced to the beat |
@@ -377,7 +407,12 @@ Pick the style that fits what the viewer *sees*, and say why in the pitch's Soun
 Moods of the scales: `major_pentatonic` bright and safe (can't sound wrong), `minor_pentatonic`
 wistful, `major` plain happy, `minor` serious, `dorian` mellow, `lydian` dreamy or spacey,
 `mixolydian` relaxed, `whole_tone` uncanny and weightless, `hirajoshi` contemplative, `pelog`
-mysterious. Combine freely: an event style may swap its scale, or add a quiet pad underneath.
+mysterious. Combine freely: an event style may swap its scale or its voice (any struck voice
+fits `Style`), or add a quiet pad, `strings` or `choir` underneath. Vary the instrument from
+one Reel to the next as you vary the palette: check which styles the last few Reels used
+(their `STYLE` constant) before choosing. A video can offer tags for every style in
+`STYLES` (as 1018 and 1021 do: an `--audio-only` tag naming a style overrides `STYLE`), so a
+new style is auditioned with no code change.
 
 Example: 1012 *Quantum Revival* is Rise & resolve. A dissonant whole-tone pad while the wave
 is chaotic; clean intervals (fifth, octave) struck at the ¼, ⅓ and ½ fractional revivals; the
@@ -444,8 +479,8 @@ def soundtrack(events, rng):
 ```
 
 Caption: add one short paragraph saying what the viewer hears and why ("Whenever two tides
-fall into step, a marimba bar is struck…"), "Sound synthesized in NumPy." on the Made-with
-line, and `#sonification`.
+fall into step, a marimba bar is struck…"), and "Sound synthesized in NumPy." on the Made-with
+line. `#sonification` only if it earns one of the five hashtag slots.
 
 ---
 
@@ -547,7 +582,7 @@ Never run two generators that target the same output folder at once: the second 
 
 When starting a session with an AI coding agent, use the following starter prompt:
 
-> *"I want a new Instagram Reel for @random_plot in `lab/2026/<MMDD>.py`. Give me 4 concepts spanning different mathematical ideas."*
+> *"I want a new Instagram Reel for @random_plot in `lab/2026/<MMDD>.py`. Pitch me your strongest concept."*
 
 That is all it takes: "Reel" already implies 60 fps, ~15 s, 1080×1920, one mathematical idea,
 a render of about a minute, and pitches in the Phase 1 format. Once the video is approved:

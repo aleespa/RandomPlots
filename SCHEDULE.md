@@ -38,14 +38,14 @@ counts stay balanced.
 | Date | Day | Category | Script | Title | Status |
 |---|---|---|---|---|---|
 | 2026-10-12 | Mon | Waves & Quantum | `lab/2026/1012.py` | Quantum Revival | posted |
-| 2026-10-14 | Wed | Fractals | `lab/2026/1014.py` | Flame Metamorphosis | music ok |
-| 2026-10-15 | Thu | Number Theory | `lab/2026/1015.py` | Prime Spirals | music ok |
-| 2026-10-16 | Fri | Fluids & Flow Fields | `lab/2026/1016.py` | Joukowski's Wing | in progress |
-| 2026-10-18 | Sun | Tilings & Geometry | `lab/2026/1018.py` |  | todo |
-| 2026-10-19 | Mon | Chaos & Attractors | `lab/2026/1019.py` |  | todo |
-| 2026-10-21 | Wed | Graphs & Networks | `lab/2026/1021.py` |  | todo |
-| 2026-10-22 | Thu | Complex Analysis | `lab/2026/1022.py` |  | todo |
-| 2026-10-23 | Fri | Cellular Automata | `lab/2026/1023.py` |  | todo |
+| 2026-10-14 | Wed | Fractals | `lab/2026/1014.py` | Flame Metamorphosis | posted |
+| 2026-10-15 | Thu | Number Theory | `lab/2026/1015.py` | Prime Spirals | posted |
+| 2026-10-16 | Fri | Fluids & Flow Fields | `lab/2026/1016.py` | Joukowski's Wing | music ok |
+| 2026-10-18 | Sun | Tilings & Geometry | `lab/2026/1018.py` | The Einstein Tile | music ok |
+| 2026-10-19 | Mon | Chaos & Attractors | `lab/2026/1019.py` | Magnet Fall | music ok |
+| 2026-10-21 | Wed | Graphs & Networks | `lab/2026/1021.py` | One Way Through | music ok |
+| 2026-10-22 | Thu | Complex Analysis | `lab/2026/1022.py` | On the Critical Line | music ok |
+| 2026-10-23 | Fri | Cellular Automata | `lab/2026/1023.py` | Lenia Bloom | pitched |
 | 2026-10-25 | Sun | Curves & Differential Geometry | `lab/2026/1025.py` |  | todo |
 | 2026-10-26 | Mon | Probability & Randomness | `lab/2026/1026.py` |  | todo |
 | 2026-10-28 | Wed | Topology & Higher Dimensions | `lab/2026/1028.py` |  | todo |

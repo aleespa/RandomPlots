@@ -1,6 +1,6 @@
 ---
 name: next-reel
-description: Continue the Reel schedule. Use when the user asks for "the next reel/one", "the next post", "continue the schedule", or a Reel for a scheduled date. Finds the next open slot in SCHEDULE.md, pitches within its category, and keeps the row's status current.
+description: Continue the Reel schedule. Use when the user asks for "the next reel/one", "the next post", "continue the schedule", or a Reel for a scheduled date. Finds the next open slot in SCHEDULE.md, pitches one strong concept within its category, and keeps the row's status current.
 ---
 
 # Next Reel from the schedule
@@ -26,16 +26,25 @@ Read the module docstring titles (the first lines) of the recent scripts in `lab
 (about the last 30), plus every earlier row of the same category in `SCHEDULE.md`. Don't
 pitch an idea that is already there or very close to one.
 
-## 3. Pitch (Phase 1 of the doc)
+## 3. Pitch one concept (Phase 1 of the doc)
 
-Pitch **3–5 concepts, all inside the slot's category**. Use the category's examples in the
-Categories table as a starting point, not a limit. Phase 1's "different domains" rule applies
-*within* the category: vary the sub-topic, aesthetic, palette and loop vs one-shot. Then set
-the row's status to `pitched`.
+Pitch **a single concept: the strongest you can find inside the slot's category**. No menu,
+no runners-up. Do the comparing yourself, using the category's examples in the Categories
+table as a starting point (not a limit), and keep only the candidate that best meets Phase 1's
+criteria: a hook in the first second, one clear idea with a surprise, a render that fits the
+~1 min budget as planned, and nothing close to what step 2 found. Against the recent Reels,
+vary the sub-topic, the aesthetic and palette (dark backgrounds read well in the feed), and
+loop vs one-shot.
+
+Use Phase 1's pitch fields, including the one-line **Why this one**. Keep it short enough to
+read in a minute. Then set the row's status to `pitched`.
+
+If the user turns it down, take their reason, drop that direction, and pitch the next
+strongest single concept.
 
 ## 4. Build and verify (Phases 2–3)
 
-Once the user picks a concept, put the title in the row and set the status to `in progress`.
+Once the user approves the concept, put the title in the row and set the status to `in progress`.
 Write the script at the row's path (the posting date, even if today is a different day),
 iterate with `RP_FPS=10` previews, then do the full timed render and verification.
 
