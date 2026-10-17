@@ -411,7 +411,7 @@ mysterious. Combine freely: an event style may swap its scale or its voice (any 
 fits `Style`), or add a quiet pad, `strings` or `choir` underneath. Vary the instrument from
 one Reel to the next as you vary the palette: check which styles the last few Reels used
 (their `STYLE` constant) before choosing. A video can offer tags for every style in
-`STYLES` (as 1018 and 1021 do: an `--audio-only` tag naming a style overrides `STYLE`), so a
+`STYLES` (as 1017 and 1019 do: an `--audio-only` tag naming a style overrides `STYLE`), so a
 new style is auditioned with no code change.
 
 Example: 1012 *Quantum Revival* is Rise & resolve. A dissonant whole-tone pad while the wave
