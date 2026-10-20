@@ -130,6 +130,10 @@ STYLES = {
     "bamboo_flute": Style(
         audio.flute, "minor_pentatonic", range(65, 72), audio.pluck, 2.8, 0.35, 4000.0
     ),
+    # 8-bit console: a pulse-wave lead over the triangle bass, almost no room.
+    "chiptune": Style(
+        audio.chip, "major", range(64, 72), audio.chip_bass, 0.5, 0.08, 6000.0
+    ),
 }
 
 

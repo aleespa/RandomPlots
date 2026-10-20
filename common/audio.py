@@ -373,6 +373,74 @@ def flute(
     return 0.6 * velocity * shape * (note + breath)
 
 
+@_cached
+def chip(
+    freq: float,
+    velocity: float = 0.6,
+    length: float = 0.22,
+    duty: float = 0.25,
+    sr: int = SAMPLE_RATE,
+) -> np.ndarray:
+    """
+    A pulse-wave lead from an 8-bit game console (NES, Game Boy). Retro, bright.
+
+    A band-limited pulse of width `duty` (0.5 is a square, hollow; 0.25 the
+    classic nasal NES lead; 0.125 thin and buzzy): harmonic k at amplitude
+    |sin(k pi duty)| / k, so it never aliases. A hard attack, a short hold at
+    a slight decay, then a quick gate release, held `length` seconds. Mono.
+    """
+    t = _seconds(length + 0.03, sr)
+    note = np.zeros_like(t)
+    for k in range(1, 80):
+        if k * freq > 0.45 * sr:
+            break
+        note += np.sin(k * np.pi * duty) / k * np.sin(2.0 * np.pi * k * freq * t)
+    gate = np.clip((length + 0.03 - t) / 0.03, 0.0, 1.0)
+    shape = np.clip(t / 0.002, 0.0, 1.0) * np.exp(-t / (2.5 * length)) * gate
+    return 0.55 * velocity * shape * note
+
+
+@_cached
+def chip_bass(
+    freq: float, velocity: float = 0.6, length: float = 0.4, sr: int = SAMPLE_RATE
+) -> np.ndarray:
+    """
+    The NES triangle channel: a triangle wave stepped to 16 levels (its 4-bit
+    DAC), which gives the soft buzz of 8-bit basses. No volume control on the
+    real chip, so velocity only scales it here; gated after `length`. Mono.
+    """
+    t = _seconds(length + 0.02, sr)
+    phase = (freq * t) % 1.0
+    wave = 4.0 * np.abs(phase - 0.5) - 1.0
+    wave = np.round(wave * 7.5) / 7.5
+    gate = np.clip((length + 0.02 - t) / 0.02, 0.0, 1.0)
+    return 0.7 * velocity * np.clip(t / 0.003, 0.0, 1.0) * gate * wave
+
+
+@_cached
+def chip_noise(
+    velocity: float = 0.5,
+    decay: float = 0.05,
+    pitch: float = 8000.0,
+    sr: int = SAMPLE_RATE,
+) -> np.ndarray:
+    """
+    The NES noise channel: a 15-bit linear-feedback shift register clocked at
+    `pitch` Hz (high: hiss, hi-hats, sand; low: rumble, snares, explosions),
+    decaying over `decay` s. Deterministic, so no rng is needed. Mono.
+    """
+    t = _seconds(decay * 6.0, sr)
+    steps = int(len(t) * pitch / sr) + 2
+    bits = np.empty(steps)
+    register = 1
+    for i in range(steps):
+        feedback = (register ^ (register >> 1)) & 1
+        register = (register >> 1) | (feedback << 14)
+        bits[i] = register & 1
+    noise = 2.0 * bits[(t * pitch).astype(int)] - 1.0
+    return 0.4 * velocity * noise * np.exp(-t / decay)
+
+
 def _ensemble(freq, duration, velocity, attack, release, partial_gain, voices, sr):
     """Shared by `strings` and `choir`: detuned voices with vibrato, spread in stereo."""
     t = _seconds(duration + release, sr)

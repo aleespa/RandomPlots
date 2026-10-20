@@ -370,6 +370,8 @@ from the catalogue below, and let them choose by listening.
     `length` s).
   - Sustained chord voices, `voice(freq, duration)`, stereo: `pad` (soft synth), `strings`
     (bowed section), `choir(..., vowel="o")` (sung "a", "o", "u" or "e").
+  - 8-bit voices: `chip(freq, velocity, length, duty)` (pulse-wave lead), `chip_bass` (NES
+    triangle), `chip_noise(velocity, decay, pitch)` (LFSR noise: hi-hats, snares, hiss).
   - Percussion and effects: `kick`, `tick(rng)` (hi-hat or shaker), `riser(duration, rng)` (a
     build-up).
   - Placement: `pan`, `add(track, sound, seconds)`. Effects: `lowpass`, `highpass`, `delay`
@@ -397,6 +399,7 @@ Pick the style that fits what the viewer *sees*, and say why in the pitch's Soun
 | **Kalimba** | Thumb piano in the bright pentatonic, dry | are small, bouncy, toy-like: dots, hops, collisions, cellular automata | `STYLES["kalimba"]` |
 | **Handpan** | Hang drum in natural minor, warm and round | are meditative, circular, breathing: mandalas, orbits, slow rotations | `STYLES["handpan"]` |
 | **Bamboo flute** | A breathy flute in minor pentatonic, long room | are airy and organic: wind, flow lines, growth, landscapes | `STYLES["bamboo_flute"]`; one slow melodic line, few notes (they're held) |
+| **Chiptune** | An 8-bit console: pulse-wave lead (`chip`), stepped-triangle bass (`chip_bass`), LFSR noise drums (`chip_noise`), dry | are pixelated, grid-based, game-like: cellular automata, sandpiles, mazes, pixel art | `STYLES["chiptune"]` on a steady tempo; fast chord arpeggios, `chip(duty=0.125)` for Game Boy, a rising arpeggio as a "level clear" ending (`lab/2026/1109.py`) |
 | **Cinematic swell** | A bowed string section or a choir holding chords that grow | are one-shots with a big arc: reveals, zooms out, something vast assembling | `strings` or `choir` chords (`Scale.chord`) instead of `pad`; louder and brighter (`brightness`, more voices) as the build grows, a struck voice on top for events |
 | **Drone & pad** | A slow chord that breathes, no beat | are continuous fields: fluids, waves, quantum, fog, flow | `pad` chords from `Scale.chord` + `PROGRESSIONS`; a visual quantity (energy, spread, speed) drives `lowpass` cutoff or loudness. `choir(..., vowel="u")` makes it human and soft |
 | **Harmonic series** | Pure tones at f₀·k, the maths made audible | contain literal frequencies: Fourier terms, epicycles, standing waves, harmonics | `bell`/`pad` at `f0 * k` for the picture's own integers k, louder for larger amplitudes |

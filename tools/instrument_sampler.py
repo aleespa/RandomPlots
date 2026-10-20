@@ -26,6 +26,8 @@ STRUCK = (
     "kalimba",
     "handpan",
     "flute",
+    "chip",
+    "chip_bass",
 )
 SUSTAINED = ("pad", "strings", "choir")
 SLOT, HOLD = 3.0, 4.0  # seconds per struck voice, per sustained voice
