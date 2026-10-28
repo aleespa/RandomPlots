@@ -1,11 +1,15 @@
 # Reel schedule
 
-Posting days: **every day except Wednesday** (Mon, Tue, Thu, Fri, Sat, Sun), through
-2026-12-31 (69 Reels). The first four (2026-10-12 to 10-16) went out on the earlier
-Mon, Wed, Thu, Fri, Sun plan; the six-day week starts on 2026-10-17.
+Posting days: **every day** from 2026-10-28, through 2026-12-31 (77 Reels). The first four (2026-10-12 to 10-16) went out on the earlier
+Mon, Wed, Thu, Fri, Sun plan; a six-day week (no Wednesdays) ran from 2026-10-17 to 10-27.
 Each Reel lives in `lab/2026/<MMDD>.py`, named after its posting date.
 2026-10-20 is the account's 400th post, a special Reel outside the category rotation; every
 Reel from there on moved one slot later, keeping its category (the rotation continues unbroken).
+Nothing was posted on 2026-10-22 and 10-23, so those slots were dropped and every Reel from
+there on moved two slots later (scripts and outputs renamed), again keeping its category.
+On 2026-10-28 the schedule went daily: every Reel from there on moved to the next free day
+in order (scripts and outputs renamed again), keeping its category, and the open slots
+were filled to 2026-12-31 continuing the rotation.
 
 Status values: `todo` → `pitched` → `in progress` (picture being iterated) → `video ok`
 (picture approved) → `music ok` (soundtrack chosen) → `posted`. Fill in the title once the
@@ -49,74 +53,82 @@ counts stay balanced.
 | 2026-10-18 | Sun | Chaos & Attractors | `lab/2026/1018.py` | Magnet Fall | posted |
 | 2026-10-19 | Mon | Graphs & Networks | `lab/2026/1019.py` | One Way Through | posted |
 | 2026-10-20 | Tue | Special: Post #400 | `lab/2026/1020.py` | Made of Code | posted |
-| 2026-10-22 | Thu | Complex Analysis | `lab/2026/1022.py` | On the Critical Line | music ok |
-| 2026-10-23 | Fri | Cellular Automata | `lab/2026/1023.py` | Coral Static | music ok |
-| 2026-10-24 | Sat | Curves & Differential Geometry | `lab/2026/1024.py` | Jacobi's Star | music ok |
-| 2026-10-25 | Sun | Probability & Randomness | `lab/2026/1025.py` | Buffon's Needles | music ok |
-| 2026-10-26 | Mon | Topology & Higher Dimensions | `lab/2026/1026.py` | You Can't Comb a Hairy Ball | music ok |
-| 2026-10-27 | Tue | Pattern Formation | `lab/2026/1027.py` | Seven Neighbours | music ok |
-| 2026-10-29 | Thu | Optics & Billiards | `lab/2026/1029.py` | Two Mirrors | music ok |
-| 2026-10-30 | Fri | Fourier & Harmonics | `lab/2026/1030.py` | Harmony, Drawn | music ok |
-| 2026-10-31 | Sat | Waves & Quantum | `lab/2026/1031.py` | The Sound Barrier | music ok |
+| 2026-10-24 | Sat | Complex Analysis | `lab/2026/1024.py` | On the Critical Line | posted |
+| 2026-10-25 | Sun | Cellular Automata | `lab/2026/1025.py` | Coral Static | posted |
+| 2026-10-26 | Mon | Curves & Differential Geometry | `lab/2026/1026.py` | Jacobi's Star | posted |
+| 2026-10-27 | Tue | Probability & Randomness | `lab/2026/1027.py` | Buffon's Needles | posted |
+| 2026-10-28 | Wed | Topology & Higher Dimensions | `lab/2026/1028.py` | You Can't Comb a Hairy Ball | posted |
+| 2026-10-29 | Thu | Pattern Formation | `lab/2026/1029.py` | Seven Neighbours | music ok |
+| 2026-10-30 | Fri | Optics & Billiards | `lab/2026/1030.py` | Two Mirrors | music ok |
+| 2026-10-31 | Sat | Fourier & Harmonics | `lab/2026/1031.py` | Harmony, Drawn | music ok |
 
 ## November 2026
 
 | Date | Day | Category | Script | Title | Status |
 |---|---|---|---|---|---|
-| 2026-11-01 | Sun | Fractals | `lab/2026/1101.py` | The Map of All Julia Sets | music ok |
-| 2026-11-02 | Mon | Number Theory | `lab/2026/1102.py` | Every Road Leads to 1 | music ok |
-| 2026-11-03 | Tue | Fluids & Flow Fields | `lab/2026/1103.py` | Clouds That Break Like Waves | music ok |
+| 2026-11-01 | Sun | Waves & Quantum | `lab/2026/1101.py` | The Sound Barrier | music ok |
+| 2026-11-02 | Mon | Fractals | `lab/2026/1102.py` | The Map of All Julia Sets | music ok |
+| 2026-11-03 | Tue | Number Theory | `lab/2026/1103.py` | Every Road Leads to 1 | music ok |
+| 2026-11-04 | Wed | Fluids & Flow Fields | `lab/2026/1104.py` | Clouds That Break Like Waves | music ok |
 | 2026-11-05 | Thu | Tilings & Geometry | `lab/2026/1105.py` | Five Squares at Every Corner | music ok |
 | 2026-11-06 | Fri | Chaos & Attractors | `lab/2026/1106.py` | A Million Forecasts | music ok |
 | 2026-11-07 | Sat | Graphs & Networks | `lab/2026/1107.py` | Exactly One Half | music ok |
 | 2026-11-08 | Sun | Complex Analysis | `lab/2026/1108.py` | Why Every Equation Has a Root | music ok |
 | 2026-11-09 | Mon | Cellular Automata | `lab/2026/1109.py` | A Quarter of a Million Grains | music ok |
 | 2026-11-10 | Tue | Curves & Differential Geometry | `lab/2026/1110.py` |  | todo |
-| 2026-11-12 | Thu | Probability & Randomness | `lab/2026/1112.py` |  | todo |
-| 2026-11-13 | Fri | Topology & Higher Dimensions | `lab/2026/1113.py` |  | todo |
-| 2026-11-14 | Sat | Pattern Formation | `lab/2026/1114.py` |  | todo |
-| 2026-11-15 | Sun | Optics & Billiards | `lab/2026/1115.py` |  | todo |
-| 2026-11-16 | Mon | Fourier & Harmonics | `lab/2026/1116.py` |  | todo |
-| 2026-11-17 | Tue | Waves & Quantum | `lab/2026/1117.py` |  | todo |
-| 2026-11-19 | Thu | Fractals | `lab/2026/1119.py` |  | todo |
-| 2026-11-20 | Fri | Number Theory | `lab/2026/1120.py` |  | todo |
-| 2026-11-21 | Sat | Fluids & Flow Fields | `lab/2026/1121.py` |  | todo |
-| 2026-11-22 | Sun | Tilings & Geometry | `lab/2026/1122.py` |  | todo |
-| 2026-11-23 | Mon | Chaos & Attractors | `lab/2026/1123.py` |  | todo |
-| 2026-11-24 | Tue | Graphs & Networks | `lab/2026/1124.py` |  | todo |
-| 2026-11-26 | Thu | Complex Analysis | `lab/2026/1126.py` |  | todo |
-| 2026-11-27 | Fri | Cellular Automata | `lab/2026/1127.py` |  | todo |
-| 2026-11-28 | Sat | Curves & Differential Geometry | `lab/2026/1128.py` |  | todo |
-| 2026-11-29 | Sun | Probability & Randomness | `lab/2026/1129.py` |  | todo |
-| 2026-11-30 | Mon | Topology & Higher Dimensions | `lab/2026/1130.py` |  | todo |
+| 2026-11-11 | Wed | Probability & Randomness | `lab/2026/1111.py` |  | todo |
+| 2026-11-12 | Thu | Topology & Higher Dimensions | `lab/2026/1112.py` |  | todo |
+| 2026-11-13 | Fri | Pattern Formation | `lab/2026/1113.py` |  | todo |
+| 2026-11-14 | Sat | Optics & Billiards | `lab/2026/1114.py` |  | todo |
+| 2026-11-15 | Sun | Fourier & Harmonics | `lab/2026/1115.py` |  | todo |
+| 2026-11-16 | Mon | Waves & Quantum | `lab/2026/1116.py` |  | todo |
+| 2026-11-17 | Tue | Fractals | `lab/2026/1117.py` |  | todo |
+| 2026-11-18 | Wed | Number Theory | `lab/2026/1118.py` |  | todo |
+| 2026-11-19 | Thu | Fluids & Flow Fields | `lab/2026/1119.py` |  | todo |
+| 2026-11-20 | Fri | Tilings & Geometry | `lab/2026/1120.py` |  | todo |
+| 2026-11-21 | Sat | Chaos & Attractors | `lab/2026/1121.py` |  | todo |
+| 2026-11-22 | Sun | Graphs & Networks | `lab/2026/1122.py` |  | todo |
+| 2026-11-23 | Mon | Complex Analysis | `lab/2026/1123.py` |  | todo |
+| 2026-11-24 | Tue | Cellular Automata | `lab/2026/1124.py` |  | todo |
+| 2026-11-25 | Wed | Curves & Differential Geometry | `lab/2026/1125.py` |  | todo |
+| 2026-11-26 | Thu | Probability & Randomness | `lab/2026/1126.py` |  | todo |
+| 2026-11-27 | Fri | Topology & Higher Dimensions | `lab/2026/1127.py` |  | todo |
+| 2026-11-28 | Sat | Pattern Formation | `lab/2026/1128.py` |  | todo |
+| 2026-11-29 | Sun | Optics & Billiards | `lab/2026/1129.py` |  | todo |
+| 2026-11-30 | Mon | Fourier & Harmonics | `lab/2026/1130.py` |  | todo |
 
 ## December 2026
 
 | Date | Day | Category | Script | Title | Status |
 |---|---|---|---|---|---|
-| 2026-12-01 | Tue | Pattern Formation | `lab/2026/1201.py` |  | todo |
-| 2026-12-03 | Thu | Optics & Billiards | `lab/2026/1203.py` |  | todo |
-| 2026-12-04 | Fri | Fourier & Harmonics | `lab/2026/1204.py` |  | todo |
-| 2026-12-05 | Sat | Waves & Quantum | `lab/2026/1205.py` |  | todo |
-| 2026-12-06 | Sun | Fractals | `lab/2026/1206.py` |  | todo |
-| 2026-12-07 | Mon | Number Theory | `lab/2026/1207.py` |  | todo |
-| 2026-12-08 | Tue | Fluids & Flow Fields | `lab/2026/1208.py` |  | todo |
-| 2026-12-10 | Thu | Tilings & Geometry | `lab/2026/1210.py` |  | todo |
-| 2026-12-11 | Fri | Chaos & Attractors | `lab/2026/1211.py` |  | todo |
-| 2026-12-12 | Sat | Graphs & Networks | `lab/2026/1212.py` |  | todo |
-| 2026-12-13 | Sun | Complex Analysis | `lab/2026/1213.py` |  | todo |
-| 2026-12-14 | Mon | Cellular Automata | `lab/2026/1214.py` |  | todo |
-| 2026-12-15 | Tue | Curves & Differential Geometry | `lab/2026/1215.py` |  | todo |
-| 2026-12-17 | Thu | Probability & Randomness | `lab/2026/1217.py` |  | todo |
-| 2026-12-18 | Fri | Topology & Higher Dimensions | `lab/2026/1218.py` |  | todo |
-| 2026-12-19 | Sat | Pattern Formation | `lab/2026/1219.py` |  | todo |
-| 2026-12-20 | Sun | Optics & Billiards | `lab/2026/1220.py` |  | todo |
-| 2026-12-21 | Mon | Fourier & Harmonics | `lab/2026/1221.py` |  | todo |
-| 2026-12-22 | Tue | Waves & Quantum | `lab/2026/1222.py` |  | todo |
-| 2026-12-24 | Thu | Fractals | `lab/2026/1224.py` |  | todo |
-| 2026-12-25 | Fri | Number Theory | `lab/2026/1225.py` |  | todo |
-| 2026-12-26 | Sat | Fluids & Flow Fields | `lab/2026/1226.py` |  | todo |
-| 2026-12-27 | Sun | Tilings & Geometry | `lab/2026/1227.py` |  | todo |
-| 2026-12-28 | Mon | Chaos & Attractors | `lab/2026/1228.py` |  | todo |
-| 2026-12-29 | Tue | Graphs & Networks | `lab/2026/1229.py` |  | todo |
-| 2026-12-31 | Thu | Complex Analysis | `lab/2026/1231.py` |  | todo |
+| 2026-12-01 | Tue | Waves & Quantum | `lab/2026/1201.py` |  | todo |
+| 2026-12-02 | Wed | Fractals | `lab/2026/1202.py` |  | todo |
+| 2026-12-03 | Thu | Number Theory | `lab/2026/1203.py` |  | todo |
+| 2026-12-04 | Fri | Fluids & Flow Fields | `lab/2026/1204.py` |  | todo |
+| 2026-12-05 | Sat | Tilings & Geometry | `lab/2026/1205.py` |  | todo |
+| 2026-12-06 | Sun | Chaos & Attractors | `lab/2026/1206.py` |  | todo |
+| 2026-12-07 | Mon | Graphs & Networks | `lab/2026/1207.py` |  | todo |
+| 2026-12-08 | Tue | Complex Analysis | `lab/2026/1208.py` |  | todo |
+| 2026-12-09 | Wed | Cellular Automata | `lab/2026/1209.py` |  | todo |
+| 2026-12-10 | Thu | Curves & Differential Geometry | `lab/2026/1210.py` |  | todo |
+| 2026-12-11 | Fri | Probability & Randomness | `lab/2026/1211.py` |  | todo |
+| 2026-12-12 | Sat | Topology & Higher Dimensions | `lab/2026/1212.py` |  | todo |
+| 2026-12-13 | Sun | Pattern Formation | `lab/2026/1213.py` |  | todo |
+| 2026-12-14 | Mon | Optics & Billiards | `lab/2026/1214.py` |  | todo |
+| 2026-12-15 | Tue | Fourier & Harmonics | `lab/2026/1215.py` |  | todo |
+| 2026-12-16 | Wed | Waves & Quantum | `lab/2026/1216.py` |  | todo |
+| 2026-12-17 | Thu | Fractals | `lab/2026/1217.py` |  | todo |
+| 2026-12-18 | Fri | Number Theory | `lab/2026/1218.py` |  | todo |
+| 2026-12-19 | Sat | Fluids & Flow Fields | `lab/2026/1219.py` |  | todo |
+| 2026-12-20 | Sun | Tilings & Geometry | `lab/2026/1220.py` |  | todo |
+| 2026-12-21 | Mon | Chaos & Attractors | `lab/2026/1221.py` |  | todo |
+| 2026-12-22 | Tue | Graphs & Networks | `lab/2026/1222.py` |  | todo |
+| 2026-12-23 | Wed | Complex Analysis | `lab/2026/1223.py` |  | todo |
+| 2026-12-24 | Thu | Cellular Automata | `lab/2026/1224.py` |  | todo |
+| 2026-12-25 | Fri | Curves & Differential Geometry | `lab/2026/1225.py` |  | todo |
+| 2026-12-26 | Sat | Probability & Randomness | `lab/2026/1226.py` |  | todo |
+| 2026-12-27 | Sun | Topology & Higher Dimensions | `lab/2026/1227.py` |  | todo |
+| 2026-12-28 | Mon | Pattern Formation | `lab/2026/1228.py` |  | todo |
+| 2026-12-29 | Tue | Optics & Billiards | `lab/2026/1229.py` |  | todo |
+| 2026-12-30 | Wed | Fourier & Harmonics | `lab/2026/1230.py` |  | todo |
+| 2026-12-31 | Thu | Waves & Quantum | `lab/2026/1231.py` |  | todo |

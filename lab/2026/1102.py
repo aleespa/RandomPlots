@@ -1,41 +1,30 @@
 """
-Every Road Leads to 1
+The Map of All Julia Sets
 
-Pick any whole number. If it is even, halve it. If it is odd, triple it and
-add one. Repeat. Start from 7 and you go 22, 11, 34, 17, 52, 26, 13, 40,
-20, 10, 5, 16, 8, 4, 2, 1. Start from 27 and you climb as high as 9232
-before falling, 111 steps later, to the same 1.
+At the top, the Mandelbrot set, with a small dot walking round its edge.
+Below, the fractal that dot points to: as it moves, the shape below turns
+into a rabbit, a basilica, a seahorse's tail, and every time the dot steps
+outside the black shape, it bursts into dust.
 
-Here are the roads of every number up to 30,000, drawn backwards from where
-they all end. Each road bends a little one way when it halves and the
-other way when it triples, and since every road that reaches 1 shares its
-last stretch with others, they merge into a single plant, rooted at 1.
+Both come from one rule: take a number z, square it, add c, repeat. For each
+c, the points z that never fly away form a Julia set. The Mandelbrot set is
+the map of all of them: pick c inside the black shape and its Julia set is
+one connected piece; pick c outside and it shatters into infinitely many
+specks. And near the edge, each Julia set looks like the Mandelbrot set right
+where the dot is standing.
 
-Every number ever tested, up to about 2^71, ends at 1. Nobody has proved
-that all of them do. It is the Collatz conjecture, posed in 1937, and Paul
-Erdős said mathematics is not yet ready for problems like it.
-
-Listen as it grows: a bell for each new layer of roads, higher the wider
-the plant has spread, over strings that swell as it fills in, and the
-home chord the moment the last road arrives.
-
-Made with Python & OpenCV. Sound synthesized in NumPy.
-#collatz #numbertheory #unsolvedproblems #mathart #randomplots
+Made with Python & Numba.
+#juliaset #mandelbrot #fractal #mathart #randomplots
 """
 
 import gc
 
-import io
-
 import cv2
 import numpy as np
 from loguru import logger
-from matplotlib import mathtext
-from matplotlib.font_manager import FontProperties
+from numba import njit
 
-from common import audio
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale
 from common.video import (
     FPS,
     HEIGHT,
@@ -43,398 +32,190 @@ from common.video import (
     frame_count,
     palette_lut,
     render_frames,
-    smoothstep,
 )
 
-DURATION = 18.0
+DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The tree -----------------------------------------------------------------------
-LIMIT = 30000  # every starting number up to this
-EVEN_TURN, ODD_TURN = 8.65, -16.0  # degrees per halving / per tripling step
+# --- The walk -----------------------------------------------------------------------
+STRAY, WEAVES = (
+    0.03,
+    5,
+)  # c = boundary(θ) + STRAY sin(WEAVES θ) along the outward normal
+MAX_ITER = 256
+BAILOUT = 1000.0  # as in the Java original
+SETTLED = 1e-12  # an orbit back within this (squared) of a checkpoint is inside
+BAND = 1.75  # units above and below the Julia centre that are computed
 
-# --- Motion -------------------------------------------------------------------------
-GROW = (0.8, 11.0)  # s: the growth front runs from STALK to the deepest node
-GROW_EASE = 2.0  # > 1 lingers on the first, labelled steps
-STALK = 4  # depth shown from the start: 1, 2, 4, 8, 16
-SWAY = 0.12  # degrees per step: a wave travelling up every strand
-SWAY_WAVE, SWAY_PERIOD = 0.045, 6.0  # rad per step, s
-SETTLE = (14.0, 17.5)  # s: the sway fades to a stop
-
-# --- Camera -------------------------------------------------------------------------
-MARGIN = 0.86  # of the frame the tree may fill
-MAX_ZOOM = 130.0  # px per step, at the start
-CAMERA_SMOOTH = 0.6  # s
+# --- Layout -------------------------------------------------------------------------
+JULIA_CENTRE = (WIDTH / 2, 0.62 * HEIGHT)  # px
+JULIA_SCALE = 330.0  # px per unit
+MAP_CENTRE, MAP_SCALE = (WIDTH / 2, 0.17 * HEIGHT), 200.0  # the Mandelbrot inset
+MAP_OFFSET = -0.6  # the inset's centre, real axis
 
 # --- Look ---------------------------------------------------------------------------
-PALETTE = ["#2a9aa0", "#3cc4a4", "#9be8b8", "#f4f8c8"]  # root to tips
-LINE_LEVEL = 0.9
-LINE_SCALE = 0.08  # line width at 2x, px per px-per-step (1 to 8)
-LABEL_ZOOM = (14.0, 30.0)  # px per step: labels fade in over this range
-LABEL_HEIGHT, LABEL_MAX = 0.2, 26.0  # px of a digit per px-per-step, and at most
-LABEL_BASE = 96.0  # pt: font size the LaTeX labels are typeset at
-LABEL_CROWD = (30, 90)  # labelled nodes: labels fade out over this range
-TIP_LEVEL = 1.0
-BLOOM_SHRINK, BLOOM_SIGMA, BLOOM_GAIN = 4, 4.0, 0.6
-COLOUR_BINS = 48
-
-# --- Sound -------------------------------------------------------------------------
-STYLE = "gamelan"  # common.music.STYLES; an --audio-only tag naming one overrides it
-NOTE_GAP = 0.22  # s: closest two layer notes may come
+PALETTE = ["#021a1a", "#0e6f6a", "#5fe3c0", "#f3fff8"]
+FILAMENT, HALO = 1.1, 9.0  # px: widths of the boundary glow
+HALO_GAIN, HAZE_GAIN = 0.35, 0.25
+MAP_LEVEL = 0.55  # the inset's brightness
+DOT, TRAIL, TRAIL_POINTS = 7, 0.06, 40  # px, loop fraction, samples
 
 
-def collatz_tree(limit: int):
+@njit(nogil=True, fastmath=True, cache=True)
+def escape(cx, cy, xs, ys, julia):
     """
-    The union of the Collatz roads of 1..limit, as a tree rooted at 1.
-    Returns (values, parent, depth); nodes are ordered so a parent always
-    comes before its children, and parent[0] = -1 for the root.
+    Escape time and distance estimate on the grid xs x ys (a port of
+    Julia.java's per-pixel early exit; single-threaded and GIL-free, since
+    whole frames run in parallel on the thread pool). julia: z0 = pixel,
+    fixed c; otherwise Mandelbrot: z0 = 0, c = pixel. Returns (smooth count,
+    distance), count -1 and distance 0 inside.
     """
-    index = {1: 0}
-    values, parent = [1], [-1]
-    for n in range(2, limit + 1):
-        path, v = [], n
-        while v not in index:
-            path.append(v)
-            v = v // 2 if v % 2 == 0 else 3 * v + 1
-        p = index[v]
-        for u in reversed(path):
-            index[u] = len(values)
-            values.append(u)
-            parent.append(p)
-            p = index[u]
-    values, parent = np.array(values, np.int64), np.array(parent)
-    depth = np.zeros(len(values), np.int64)
-    for i in range(1, len(values)):
-        depth[i] = depth[parent[i]] + 1
-    return values, parent, depth
+    rows, cols = len(ys), len(xs)
+    count = np.empty((rows, cols), np.float32)
+    distance = np.empty((rows, cols), np.float32)
+    for i in range(rows):
+        for j in range(cols):
+            if julia:
+                zx, zy, ax, ay = xs[j], ys[i], cx, cy
+                dx, dy = 1.0, 0.0
+            else:
+                zx, zy, ax, ay = 0.0, 0.0, xs[j], ys[i]
+                dx, dy = 0.0, 0.0
+            k = 0
+            m2 = zx * zx + zy * zy
+            px, py, checkpoint = zx, zy, 8
+            settled = False
+            while k < MAX_ITER and m2 <= BAILOUT:
+                # dz <- 2 z dz (+ 1 for the Mandelbrot set)
+                ndx = 2.0 * (zx * dx - zy * dy) + (0.0 if julia else 1.0)
+                dy = 2.0 * (zx * dy + zy * dx)
+                dx = ndx
+                zx, zy = zx * zx - zy * zy + ax, 2.0 * zx * zy + ay
+                m2 = zx * zx + zy * zy
+                k += 1
+                # Periodicity check: an orbit that returns to its last
+                # checkpoint has settled on a cycle and never escapes.
+                if (zx - px) ** 2 + (zy - py) ** 2 < SETTLED:
+                    settled = True
+                    break
+                if k == checkpoint:
+                    px, py, checkpoint = zx, zy, 2 * checkpoint
+            if settled or m2 <= BAILOUT:
+                count[i, j] = -1.0
+                distance[i, j] = 0.0
+            else:
+                m = np.sqrt(m2)
+                count[i, j] = k + 1.0 - np.log(np.log(m)) / np.log(2.0)
+                distance[i, j] = m * np.log(m) / max(np.sqrt(dx * dx + dy * dy), 1e-30)
+    return count, distance
 
 
-def latex_sprite(value: int) -> np.ndarray:
-    """The number typeset in Computer Modern ($n$) at LABEL_BASE pt, as a float mask."""
-    buffer = io.BytesIO()
-    prop = FontProperties(size=LABEL_BASE, math_fontfamily="cm")
-    mathtext.math_to_image(
-        f"${value}$", buffer, prop=prop, dpi=100 / 0.72, format="png"
-    )
-    grey = cv2.imdecode(
-        np.frombuffer(buffer.getvalue(), np.uint8), cv2.IMREAD_GRAYSCALE
-    )
-    mask = 1 - grey.astype(np.float32) / 255  # black ink on white
-    rows = np.flatnonzero(mask.max(1) > 0)
-    cols = np.flatnonzero(mask.max(0) > 0)
-    return mask[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1]
-
-
-def front(t):
-    """Depth of the growth front at time t (fractional: the last edge grows)."""
-    s = smoothstep(
-        np.clip((np.asarray(t, float) - GROW[0]) / (GROW[1] - GROW[0]), 0, 1)
-    )
-    return STALK + s**GROW_EASE * (front.deepest - STALK)
-
-
-def soundtrack(
-    style_name: str, rng: np.random.Generator, counts: np.ndarray, pans: np.ndarray
-) -> np.ndarray:
+def walk(t):
     """
-    A one-shot that grows with the tree (counts[d]: nodes at depth d;
-    pans[d]: where they sit across the frame, -1 to 1).
-
-    - The layers: each time the growth front reaches a new depth, the
-      style's voice strikes a note, pitched by how wide the tree has become
-      there (two scale degrees per doubling of the layer's node count) and
-      panned with the layer. The stalk on screen from the start (1, 2, 4, 8,
-      16) plays as a rising figure; after it every layer sounds until
-      they come faster than NOTE_GAP, then only the next one after the gap.
-    - The swell: a string chord under the growth, louder as the tree fills
-      in (the share of nodes already drawn).
-    - The root: when the last road arrives, the home chord, struck from the
-      bottom up over a low bass, with strings holding it while the plant
-      settles; two soft notes fall during the hold.
+    c at loop time t: on the main cardioid's edge, e^{iθ}/2 - e^{2iθ}/4,
+    nudged STRAY sin(WEAVES θ) along its outward normal -i e^{3iθ/2} (out of
+    the set, then back in). The nudge vanishes at the cusp, θ = 0, where the
+    normal flips, so the walk stays continuous and the loop closes.
     """
-    style = STYLES[style_name]
-    scale = Scale(int(rng.choice(style.roots)), style.mode)
-    sr = audio.SAMPLE_RATE
-    kw = dict(circular=False)
-    track = audio.silence(DURATION)
+    theta = 2 * np.pi * np.mod(np.asarray(t, float), 1.0)
+    w = np.exp(1j * theta)
+    normal = -1j * np.exp(1.5j * theta)
+    return w / 2 - w * w / 4 + STRAY * np.sin(WEAVES * theta) * normal
 
-    grid = np.linspace(0, DURATION, int(DURATION * 1000) + 1)
-    reach = front(grid)
-    last, notes = -np.inf, 0
-    for d in range(len(counts)):
-        if d <= STALK:  # the opening stalk, 1 2 4 8 16, rising one degree a node
-            when, degree = 0.1 + 0.18 * d, d
-        else:
-            crossed = np.flatnonzero(reach >= d)
-            if not len(crossed):
-                break
-            when = float(grid[crossed[0]])
-            if when - last < NOTE_GAP or when > GROW[1] - 0.3:
-                continue
-            degree = int(round(2 * np.log2(counts[d])))
-        velocity = 0.5 if when < 4.5 else 0.32
-        note = style.voice(scale.hz(degree % 7, degree // 7), velocity)
-        audio.add(track, audio.pan(note, 0.6 * pans[d]), when, **kw)
-        last, notes = when, notes + 1
 
-    # The swell, shaped by the share of the tree already drawn.
-    drawn = np.cumsum(counts) / counts.sum()
-    share = drawn[
-        np.clip(
-            np.floor(front(np.arange(len(track)) / sr)).astype(int), 0, len(counts) - 1
-        )
-    ]
-    swell = audio.silence(DURATION)
-    start = 0.5
-    for n in scale.chord(0, 4, octave=-1):
-        hz = float(audio.midi_to_hz(n))
-        audio.add(
-            swell, audio.strings(hz, GROW[1] - start, 0.22, 2.0, 1.0, 0.35), start, **kw
-        )
-    track += swell * (0.15 + 0.85 * share[:, None] ** 0.7)
-
-    home = GROW[1]
-    for k, n in enumerate(scale.chord(0, 4)):
-        note = style.voice(float(audio.midi_to_hz(n)), 0.5)
-        audio.add(track, audio.pan(note, 0.25 * (k - 1.5)), home + 0.09 * k, **kw)
-    bass = scale.hz(0, -2)
-    bass = 2 * bass if bass < 65 else bass  # phone speakers stop around 60 Hz
-    audio.add(track, style.bass(bass, 0.5, length=5.0), home, **kw)
-    for n in scale.chord(0, 3, octave=-1):
-        hz = float(audio.midi_to_hz(n))
-        audio.add(
-            track,
-            audio.strings(hz, DURATION - home - 2.5, 0.2, 0.6, 2.5, 0.3),
-            home - 0.2,
-            **kw,
-        )
-    for when, degree in ((13.6, 4), (15.4, 2)):
-        audio.add(
-            track, audio.pan(style.voice(scale.hz(degree), 0.25), 0.3), when, **kw
-        )
-
-    logger.info(
-        f"Soundtrack: {style_name}, root MIDI {scale.root}, {notes} layer notes"
+def glow(count, distance, scale):
+    """Light in [0, 1]: a crisp filament and halo from the distance, a faint haze."""
+    d = distance * scale  # px
+    light = np.exp(-d / np.float32(FILAMENT)) + np.float32(HALO_GAIN) * np.exp(
+        -d / np.float32(HALO)
     )
-    track = style.room(track, rng, circular=False)
-    return audio.master(audio.fade(track, 0.0, 1.5), loop=False)
+    haze = HAZE_GAIN * np.clip(count / 40.0, 0, 1) ** 1.5  # only close to the set
+    return np.clip(np.where(count < 0, 0.0, light + haze), 0, 1)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    The Collatz tree: every number up to LIMIT, joined to its successor
-    (n/2 or 3n+1), is a tree rooted at 1 (`collatz_tree`). Drawn from the
-    root out, after Edmund Harriss: each node is one unit step from its
-    successor, turned EVEN_TURN degrees if it is even and ODD_TURN if odd;
-    since odd steps are always followed by even ones the turns nearly
-    balance, so strands curl gently instead of spiralling. The whole tree is
-    rotated so the root-to-centroid direction points up.
+    Julia sets of z -> z^2 + c, with c walking the edge of the Mandelbrot
+    set's main cardioid (`walk`): c(θ) = e^{iθ}/2 - e^{2iθ}/4 plus
+    STRAY sin(WEAVES θ) along the outward normal, θ = 2πt, so it steps out of
+    the set WEAVES times per loop (Julia set dust) and back in (connected),
+    and the loop closes exactly.
 
-    A frame is a pure function of t: the growth front `front(t)` eases from
-    depth STALK to the deepest node over GROW, drawing every edge at
-    shallower depth and the front edges partway, with a bright dot at their
-    tips. A sway wave travels up all strands: the turn at depth d gets
-    SWAY sin(2π t / SWAY_PERIOD - SWAY_WAVE d) extra degrees, fading out
-    over SETTLE; since it depends on depth only, positions are a cumulative
-    sum layer by layer. The camera fits the rest-pose bounding box of the
-    visible depths (precomputed per depth, smoothed over CAMERA_SMOOTH).
-    Lines are drawn with cv2 at 2x in COLOUR_BINS depth groups coloured by
-    depth through PALETTE, downsampled with INTER_AREA and bloomed. While
-    the camera is close, nodes carry their numbers, typeset in Computer
-    Modern with matplotlib mathtext once and scaled per frame; they fade out
-    as the zoom drops below LABEL_ZOOM or the count passes LABEL_CROWD. Nothing
-    is random: --seed does not change the picture. The posted soundtrack is
-    gamelan with --seed 0 (the default).
+    Each frame computes the Julia set with `escape`, a numba port of the
+    user's Julia.java kernel (per-pixel early exit at |z|^2 > BAILOUT),
+    extended with the derivative dz for the distance estimate
+    |z| ln|z| / |dz| and a periodicity check (checkpoints at doubling
+    iterations) that stops settled interior orbits early. Only the band BAND
+    units round the Julia centre is computed, and whole frames run in
+    parallel on the thread pool. The boundary is drawn from the distance (a
+    FILAMENT-px line plus a HALO-px glow), the exterior gets a faint haze
+    that grows close to the set, the interior stays dark. The Mandelbrot inset
+    is computed once, drawn dim, with a dot at c and a fading trail of its past
+    positions. Nothing is random: --seed does not change the picture.
     """
     settings = settings or ImageProcessingSettings(1)
-    values, parent, depth = collatz_tree(LIMIT)
-    deepest = int(depth.max())
-    front.deepest = deepest
-    turn = np.radians(np.where(values % 2 == 0, EVEN_TURN, ODD_TURN))
-    turn[0] = 0.0
-    layers = [np.flatnonzero(depth == d) for d in range(deepest + 1)]
-    logger.info(
-        f"{len(values)} nodes, deepest {deepest} (from {values[depth.argmax()]})"
+    lut = (palette_lut(PALETTE, 1024)[:, ::-1] * 255).astype(np.float32)  # BGR
+    xs = (np.arange(WIDTH) - JULIA_CENTRE[0] + 0.5) / JULIA_SCALE
+    ys = (JULIA_CENTRE[1] - np.arange(HEIGHT) - 0.5) / JULIA_SCALE
+
+    band = slice(
+        max(0, int(JULIA_CENTRE[1] - BAND * JULIA_SCALE)),
+        min(HEIGHT, int(JULIA_CENTRE[1] + BAND * JULIA_SCALE)),
     )
 
-    def pose(sway):
-        """Node positions (complex, in steps) for per-depth extra turns `sway`."""
-        angle = np.zeros(len(values))
-        pos = np.zeros(len(values), complex)
-        for d in range(1, deepest + 1):
-            nodes = layers[d]
-            p = parent[nodes]
-            angle[nodes] = angle[p] + turn[nodes] + sway[d]
-            pos[nodes] = pos[p] + np.exp(1j * angle[nodes])
-        return pos
-
-    # Turn the tree so it fills the portrait frame best, root at the bottom.
-    rest = pose(np.zeros(deepest + 1))
-    best = 0.0
-    for a in np.radians(np.arange(0, 360, 1.0)):
-        r = rest * np.exp(1j * a)
-        if r.imag.mean() <= 0:
-            continue
-        fit = min(WIDTH / np.ptp(r.real), HEIGHT / np.ptp(r.imag))
-        if fit > best:
-            best, rotation = fit, np.exp(1j * a)
-
-    # Camera: bounding box of the visible depths at rest, smoothed in time.
-    rest = rest * rotation
-    lo = np.full((deepest + 1, 2), np.inf)
-    hi = np.full((deepest + 1, 2), -np.inf)
-    for d in range(deepest + 1):
-        pts = np.stack([rest[layers[d]].real, rest[layers[d]].imag], 1)
-        lo[d], hi[d] = pts.min(0), pts.max(0)
-    lo, hi = np.minimum.accumulate(lo), np.maximum.accumulate(hi)
-    times = np.arange(FRAME_COUNT) / FPS
-    d = np.clip(np.ceil(front(times)).astype(int), 0, deepest)
-    box_lo, box_hi = lo[d], hi[d]
-    span = np.maximum(box_hi - box_lo, 1e-6)
-    zoom = np.minimum(
-        MAX_ZOOM, np.minimum(MARGIN * WIDTH / span[:, 0], MARGIN * HEIGHT / span[:, 1])
+    # The inset, once.
+    half_w, half_h = 1.6, 1.15
+    mx = MAP_OFFSET + np.arange(-half_w * MAP_SCALE, half_w * MAP_SCALE) / MAP_SCALE
+    my = -np.arange(-half_h * MAP_SCALE, half_h * MAP_SCALE) / MAP_SCALE
+    count, distance = escape(0.0, 0.0, mx, my, False)
+    inside = (count < 0).astype(np.float32)
+    inset = np.maximum(
+        MAP_LEVEL * 0.35 * inside, MAP_LEVEL * glow(count, distance, MAP_SCALE)
     )
-    centre = (box_lo + box_hi) / 2
-    kernel = np.exp(
-        -0.5 * (np.arange(-3 * FPS, 3 * FPS + 1) / (CAMERA_SMOOTH * FPS)) ** 2
-    )
-    kernel /= kernel.sum()
+    top = int(MAP_CENTRE[1] - half_h * MAP_SCALE)
+    left = int(MAP_CENTRE[0] - half_w * MAP_SCALE)
+    inset_box = (slice(top, top + len(my)), slice(left, left + len(mx)))
 
-    def smooth(x):
-        padded = np.pad(x, (len(kernel) // 2,), mode="edge")
-        return np.convolve(padded, kernel, mode="valid")
+    def on_map(c):
+        x = MAP_CENTRE[0] + (np.real(c) - MAP_OFFSET) * MAP_SCALE
+        y = MAP_CENTRE[1] - np.imag(c) * MAP_SCALE
+        return x, y
 
-    zoom = np.exp(smooth(np.log(zoom)))
-    centre = np.stack([smooth(centre[:, 0]), smooth(centre[:, 1])], 1)
-
-    lut = palette_lut(PALETTE, COLOUR_BINS)[:, ::-1] * 255  # BGR
-    bins = np.minimum((depth * COLOUR_BINS) // (deepest + 1), COLOUR_BINS - 1)
-    edge_bins = [np.flatnonzero((bins == b) & (depth > 0)) for b in range(COLOUR_BINS)]
-
-    # LaTeX labels for every node that can be labelled before they crowd out.
-    order = np.argsort(depth, kind="stable")
-    shallow = depth <= depth[order[LABEL_CROWD[1]]]
-    sprites = {int(v): latex_sprite(int(v)) for v in values[shallow]}
-    digit = latex_sprite(8).shape[0]  # px
+    escape(0.3, 0.0, xs[:8], ys[:8], True)  # compile before timing
+    logger.info(f"c starts at {complex(walk(0.0)):.3f}; inset {inset.shape}")
 
     def render(frame: int) -> np.ndarray:
-        t = frame / FPS
-        amplitude = SWAY * (
-            1 - smoothstep(np.clip((t - SETTLE[0]) / (SETTLE[1] - SETTLE[0]), 0, 1))
-        )
-        k = np.arange(deepest + 1)
-        sway = np.radians(
-            amplitude * np.sin(2 * np.pi * t / SWAY_PERIOD - SWAY_WAVE * k)
-        )
-        pos = pose(sway) * rotation
-        x = WIDTH / 2 + (pos.real - centre[frame, 0]) * zoom[frame]
-        y = HEIGHT / 2 - (pos.imag - centre[frame, 1]) * zoom[frame]
-        xy = np.round(np.stack([x, y], 1) * 2 * 4).astype(
-            np.int32
-        )  # 2x, 2 bits subpixel
+        t = frame / FRAME_COUNT
+        c = complex(walk(t))
+        light = np.zeros((HEIGHT, WIDTH))
+        count, distance = escape(c.real, c.imag, xs, ys[band], True)
+        light[band] = glow(count, distance, JULIA_SCALE)
+        light[inset_box] = np.maximum(light[inset_box], inset)
+        image = lut[(light * 1023).astype(np.int32)]
 
-        # cv2 widths are whole pixels: draw at the next one up, dimmed by the
-        # fraction, so the line's weight follows the zoom smoothly.
-        exact = float(np.clip(LINE_SCALE * zoom[frame], 1, 8))
-        width = int(np.ceil(exact))
-        level = LINE_LEVEL * exact / width
-        reach = float(front(t))
-        whole = int(np.floor(reach))
-        canvas = np.zeros((2 * HEIGHT, 2 * WIDTH, 3), np.float32)
-        for b, nodes in enumerate(edge_bins):
-            nodes = nodes[depth[nodes] <= whole]
-            if not len(nodes):
-                continue
-            segments = np.stack([xy[parent[nodes]], xy[nodes]], 1)
-            cv2.polylines(
-                canvas,
-                list(segments),
-                False,
-                tuple(float(c) for c in level * lut[b] / 255),
-                width,
+        # The dot and its trail, at 4x subpixel precision.
+        past = walk(t - TRAIL * np.linspace(1, 0, TRAIL_POINTS))
+        px, py = on_map(past)
+        points = np.round(np.stack([px, py], 1) * 4).astype(np.int32)
+        for k in range(TRAIL_POINTS - 1):
+            level = 255.0 * (k + 1) / TRAIL_POINTS
+            cv2.line(
+                image,
+                tuple(map(int, points[k])),
+                tuple(map(int, points[k + 1])),
+                (level,) * 3,
+                2,
                 cv2.LINE_AA,
                 2,
             )
-
-        if whole < deepest:  # the growing edges and their tips
-            nodes = layers[whole + 1]
-            frac = reach - whole
-            start = xy[parent[nodes]]
-            tip = np.round(start + frac * (xy[nodes] - start)).astype(np.int32)
-            colour = tuple(float(c) for c in level * lut[bins[nodes[0]]] / 255)
-            cv2.polylines(
-                canvas,
-                list(np.stack([start, tip], 1)),
-                False,
-                colour,
-                width,
-                cv2.LINE_AA,
-                2,
-            )
-            for p in tip:
-                cv2.circle(
-                    canvas,
-                    tuple(map(int, p)),
-                    int(4 * max(2.0, 1.6 * exact)),
-                    (TIP_LEVEL,) * 3,
-                    -1,
-                    cv2.LINE_AA,
-                    2,
-                )
-
-        image = cv2.resize(canvas, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-        small = cv2.resize(
-            image,
-            (WIDTH // BLOOM_SHRINK, HEIGHT // BLOOM_SHRINK),
-            interpolation=cv2.INTER_AREA,
+        x, y = on_map(c)
+        cv2.circle(
+            image, (int(x * 4), int(y * 4)), DOT * 4, (255.0,) * 3, -1, cv2.LINE_AA, 2
         )
-        bloom = cv2.resize(
-            cv2.GaussianBlur(small, (0, 0), BLOOM_SIGMA), (WIDTH, HEIGHT)
-        )
-        image = image + BLOOM_GAIN * bloom
-
-        # Numbers on the nodes while the camera is close.
-        alpha = float(
-            np.clip(
-                (zoom[frame] - LABEL_ZOOM[0]) / (LABEL_ZOOM[1] - LABEL_ZOOM[0]), 0, 1
-            )
-        )
-        labelled = np.flatnonzero(depth <= whole)
-        alpha *= float(
-            np.clip(
-                (LABEL_CROWD[1] - len(labelled)) / (LABEL_CROWD[1] - LABEL_CROWD[0]),
-                0,
-                1,
-            )
-        )
-        if alpha > 0:
-            scale = min(LABEL_HEIGHT * zoom[frame], LABEL_MAX) / digit
-            for i in labelled:
-                mask = cv2.resize(
-                    sprites[values[i]],
-                    None,
-                    fx=scale,
-                    fy=scale,
-                    interpolation=cv2.INTER_AREA,
-                )
-                h, w = mask.shape
-                left = int(round(x[i] + 0.25 * zoom[frame]))
-                top = int(round(y[i] - h / 2))
-                if left < 0 or top < 0 or left + w > WIDTH or top + h > HEIGHT:
-                    continue
-                image[top : top + h, left : left + w] += (0.85 * alpha * mask)[
-                    ..., None
-                ]
-        return np.clip(image, 0, 1) * 255
+        return image
 
     render_frames(settings, render, FRAME_COUNT)
-    counts = np.bincount(depth)
-    middle, half = (lo[-1, 0] + hi[-1, 0]) / 2, (hi[-1, 0] - lo[-1, 0]) / 2
-    pans = np.array([(rest[layer].real.mean() - middle) / half for layer in layers])
-    tag = settings.audio_tag
-    style_name = tag if tag in STYLES else STYLE
-    track = soundtrack(style_name, settings.audio_rng, counts, pans)
-    settings.save_video(fps=FPS, crf=18, audio=track)
+    settings.save_video(fps=FPS, crf=18)
     gc.collect()
 
 

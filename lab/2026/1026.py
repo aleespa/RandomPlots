@@ -1,36 +1,34 @@
 """
-You Can't Comb a Hairy Ball
+Jacobi's Star
 
-The hairy ball theorem: you can never comb a hairy ball flat. However you
-brush the fur on a sphere, a cowlick is left over. Here cowlicks come and
-go, but never all of them.
+Geodesics on an ellipsoid: hundreds of paths leave one point of an
+egg-shaped surface in every direction, each as straight as a path on a curved
+surface can be. Where neighbouring paths meet again they fold into a glowing
+star with exactly four points. Then they keep going, and fold again, and again.
 
-At a whorl (pink) the hair swirls around a point; at a parting (teal) it
-arrives from two sides and leaves by the other two. They are born and vanish
-in pairs, one of each, so whorls minus partings never changes: on a sphere it
-is always 2, its Euler characteristic.
+These "straight lines" of a curved surface are called geodesics. On a sphere,
+all of them from one point meet again at the opposite pole, then back at the
+start, over and over. On an ellipsoid with three different axes each meeting
+point spreads out into a curve. Carl Jacobi claimed around 1842 that the first
+always has exactly four cusps; it was proved only in 2004. Every later curve
+here has four as well.
 
-Every cowlick on screen plays a note. When the last two whorls meet in one
-double cowlick, the music comes home.
-
-So somewhere on Earth, right now, the wind isn't blowing.
+Listen: each cusp strikes a vibraphone note as it lights, the four notes of
+one chord per curve, while soft glints follow each curve as it draws itself.
+Every new curve brings a new chord over swelling strings, until the paths
+stop and the music comes home.
 
 Made with Python, NumPy & PyTorch. Sound synthesized in NumPy.
-#hairyballtheorem #topology #mathart #generativeart #randomplots
+#geodesic #differentialgeometry #mathart #generativeart #randomplots
 """
 
 import gc
-import subprocess
-import tempfile
-from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from loguru import logger
-from PIL import Image, ImageFilter
+from scipy.interpolate import PchipInterpolator
 
-from colors.palettes import TWLAGN
 from common import audio
 from common.gpu import select_device, splat, wide_blur
 from common.image_processing import ImageProcessingSettings
@@ -45,464 +43,499 @@ from common.video import (
     smoothstep,
 )
 
-DURATION = 18.0
+DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- Cowlicks, as points of the stereographic plane (0 faces the camera) ------------
-CENTRE = 0.02 + 0.05j  # the crown pair circles this point...
-CROWN, CROWN_ANGLE = 0.36, 0.5  # ...this far out, and meets on it at t = 1/2
-SEPARATION = 0.26  # the widest a transient whorl and parting get apart
-# (birth, life, distance from CENTRE at birth and at death, angle off the crown
-# axis, orientation of the pair, its turn over the life), times as loop fractions
-PAIRS = [
-    (0.78, 0.40, 0.42, 0.28, 1.75, 0.4, 1.4),
-    (0.90, 0.38, 0.32, 0.45, -1.45, 2.2, -1.1),
-    (0.10, 0.27, 0.26, 0.42, 1.25, 1.1, 0.9),
-    (0.58, 0.30, 0.36, 0.22, -1.30, 0.6, 1.6),
-    (0.66, 0.30, 0.46, 0.36, 2.15, 2.7, -1.2),
-]
-SWIRL, BRUSH = 1.05, 0.6  # rad: every hair turned by SWIRL + BRUSH sin(2 pi t)
+# --- The surface and the paths ---------------------------------------------------
+# Semi-axes along x (screen right), y (up) and z (towards the viewer at the start).
+AXES = np.array([0.75, 1.0, 0.85])
+LAUNCH = np.radians(
+    30.0
+)  # the start point, this far above the equator in the y-z plane
+THREADS = 480  # geodesics, evenly spaced in launch direction
+STEP = 1.25e-3  # arc-length step of the integration, about one screen pixel
+GENERATIONS = 4  # conjugate loci shown: the star, then each later refocusing
+LIMIT = 13.0  # integrate this far: every thread reaches its last conjugate point
+OVERSHOOT = 1.02  # the fronts run this far past the last conjugate point
+STAR_SPACING = 0.75  # screen pixels between the points that draw a locus
 
-# --- Fur -------------------------------------------------------------------------------
-HAIRS = 110_000
-HAIR_LENGTH = 0.085  # in sphere radii
-STEPS, SAMPLES = 6, 6  # field evaluations along a hair, splatted points per step
-FLAT, STAND = 0.16, 1.25  # rad: a hair's lift off the skin, extra lift in a whorl
-TUFT = 0.075  # chord radius of a whorl's tuft
-DROOP = 0.55  # a hair bends back towards the skin by this fraction of its lift
-JITTER = 0.18  # rad: each hair's own deviation from the field
-CULL = -0.3  # hairs rooted further behind the limb than this are skipped
-
-# --- Camera & light ----------------------------------------------------------------
-RADIUS_PX = 460
-CENTRE_X, CENTRE_Y = WIDTH / 2, 1010
-YAW, PITCH, TILT = 0.30, 0.14, -0.10  # rad: wobble amplitudes and a constant tilt
-LIGHT = np.array([-0.45, 0.55, 0.70])  # in view space, towards the light
+# --- Timing (s) --------------------------------------------------------------------
+FRONT_END = 13.0  # the fronts stop here...
+ACCEL = 1.0  # ...speeding up to (1 + ACCEL) times their starting speed...
+BRAKE = 1.5  # ...and braking to a stop over the last BRAKE seconds
+HOLD = 0.8  # the camera holds on the burst, then turns to face each locus as it lights
+DRIFT = np.radians(12.0)  # and turns on this much more after the last, by REST
+REST = 14.0
+FADE = (12.0, 13.5)  # the threads dim to THREAD_REST once the fronts stop
+THREAD_REST = 0.5
 
 # --- Look --------------------------------------------------------------------------
-BACKGROUND = "#07060b"
-BODY = "#1c1528"
-FUR = TWLAGN + TWLAGN[:1]  # a cyclic gradient, coloured by hair direction
-SHEEN_COLOUR = "#ffeef4"
-HAIR_LIGHT, AMBIENT, DIFFUSE = 0.42, 0.2, 0.9
-SHEEN, SHINE = 0.55, 40.0  # Kajiya-Kay highlight strength and sharpness
+SCALE = 600.0  # screen pixels per unit length
+BACKGROUND = "#05070f"
+THREAD_COLOURS = ("#ffb347", "#ff6b6b", "#8a6bff", "#ffb347")  # round the directions
+STAR_COLOURS = ("#ffd27a", "#7fd0ff", "#ff8fc8", "#7dffc4")  # one per generation
+SURFACE_COLOUR = "#2a3f6e"
+SURFACE_FILL, SURFACE_RIM = 0.10, 0.55  # face-on and silhouette brightness
+THREAD_WEIGHT = 0.12  # light per path sample
+HEAD_GAIN, HEAD_LENGTH = 6.0, 0.06  # the bright front of each thread
+TRAIL_FLOOR, TRAIL_LENGTH = 0.15, 0.8  # behind it, the thread dims to this
+BACK_SIDE = 0.3  # brightness of what is behind the surface
+STAR_WEIGHT = 1.2
+FLASH_GAIN, FLASH_LENGTH = 4.0, 0.05  # a locus point flares as the front reaches it
 EXPOSURE = 1.6
-BLOOM_SIGMA, BLOOM_FACTOR, BLOOM_GAIN = 12.0, 4, 0.35
-WHORL_COLOUR, PARTING_COLOUR = "#f6b8de", "#6ee0e4"
-RING_RADIUS, RING_WIDTH, RING_GAIN = 34.0, 2.2, 0.9  # px
-RING_SHADE = 0.75  # a dark band under each ring, 2.5x as wide, darkens the fur
-RING_POP = 0.1  # a transient pair's rings are at full strength this far apart
-# (as a fraction of SEPARATION)
+BLOOM_SIGMA, BLOOM_FACTOR, BLOOM_GAIN = 18.0, 4, 0.6
 
-# --- Tally, typeset by LaTeX (needs latex and dvipng on PATH, e.g. MiKTeX) ---------
-TEXT_TOP, TEXT_HEIGHT = 200, 240  # px: the band the tally is centred in
-TEXT_DPI = 450  # the size: 10 pt type at this resolution
-TEXT_COLOUR, DIM_COLOUR = "#f2efe8", "#b9bcc8"
-TALLY = r"""\documentclass{article}
-\usepackage{amsmath}
-\usepackage{xcolor}
-\definecolor{whorl}{HTML}{%s}
-\definecolor{parting}{HTML}{%s}
-\definecolor{ink}{HTML}{%s}
-\definecolor{dim}{HTML}{%s}
-\pagestyle{empty}
-\begin{document}
-\color{ink}$\displaystyle
-\underset{\textcolor{dim}{\text{whorls}}}{\textcolor{whorl}{%d}}
--\underset{\textcolor{dim}{\text{partings}}}{\textcolor{parting}{%d}}
-=\underset{\textcolor{dim}{\text{always}}}{2}$
-\end{document}
-"""
-
-# --- Sound ---------------------------------------------------------------------------
-STYLE = "handpan"  # common.music.STYLES; an --audio-only tag naming one overrides it
-BARS = 6  # the loop is BARS bars of 4/4: 80 BPM at 18 s
-PROGRESSION = (0, 3, 4, 0, 5, 4)  # a chord a bar; the home chord as the crowns meet
-SLOTS = 8  # notes a bar at most: one per cowlick on screen, left to right
-GROOVE = ("lofi_keys",)  # styles that also get a soft kick and shaker
+# --- Sound -------------------------------------------------------------------------
+STYLE = "vibes"  # common.music.STYLES; an --audio-only tag naming one overrides it
+PROGRESSION = (0, 5, 1, 4)  # chord degree under each locus: I, vi, ii, V, then home
+GLINT_RATE = 4.0  # quiet notes per second while the loci light fastest
 
 
 def _rgb(colour: str) -> np.ndarray:
     return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
 
 
-def cowlicks(t: float):
-    """
-    The zeros (whorls) and poles (partings) of the field at loop time t, as
-    lists of (point of the plane, strength in [0, 1]).
-    """
-    axis = CROWN_ANGLE + np.pi * t
-    a = CROWN * np.cos(np.pi * t) * np.exp(1j * axis)
-    whorls, partings = [(CENTRE + a, 1.0), (CENTRE - a, 1.0)], []
-    for pair in PAIRS:
-        birth, life, angle, turn = pair[0], pair[1], pair[5], pair[6]
-        u = ((t - birth) % 1.0) / life
-        if not 0 < u < 1:
-            continue
-        gap = SEPARATION * np.sin(np.pi * u) ** 2
-        half = 0.5 * gap * np.exp(1j * (angle + turn * u))
-        strength = float(smoothstep(gap / (RING_POP * SEPARATION)))
-        whorls.append((pair_centre(pair, u) + half, strength))
-        partings.append((pair_centre(pair, u) - half, strength))
-    return whorls, partings
+def start_point() -> np.ndarray:
+    """The launch point: LAUNCH above the equator, in the y-z plane, facing the viewer."""
+    return np.array([0.0, AXES[1] * np.sin(LAUNCH), AXES[2] * np.cos(LAUNCH)])
 
 
-def pair_centre(pair, u: float) -> complex:
-    """Where a transient pair is centred at the fraction u of its life."""
-    birth, life, start, end, side = pair[:5]
-    # The crown axis turns by pi a loop, so measured at the pair's own
-    # (unwrapped) time it is the same line on both sides of the seam.
-    return CENTRE + (start + (end - start) * smoothstep(u)) * np.exp(
-        1j * (CROWN_ANGLE + np.pi * (birth + u * life) + side)
+def geodesics(start: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Unit-speed geodesics from `start` in THREADS evenly spaced directions, by RK4
+    in arc length up to LIMIT, with the scalar Jacobi equation m'' + K m = 0
+    (m(0) = 0, m'(0) = 1) integrated alongside. Returns the positions
+    (THREADS, steps + 1, 3) and m (THREADS, steps + 1).
+    """
+    inv2 = 1.0 / AXES**2
+    inv4 = inv2**2
+    product = np.prod(AXES**2)
+
+    normal = start * inv2
+    normal /= np.linalg.norm(normal)
+    e1 = np.array([1.0, 0.0, 0.0])  # tangent: the normal has no x part
+    e2 = np.cross(normal, e1)
+    theta = 2 * np.pi * np.arange(THREADS) / THREADS
+    x = np.repeat(start[None], THREADS, 0)
+    v = np.cos(theta)[:, None] * e1 + np.sin(theta)[:, None] * e2
+    m = np.zeros(THREADS)
+    w = np.ones(THREADS)
+
+    def deriv(x, v, m, w):
+        g = (x**2 * inv4).sum(1)  # |grad F|^2 / 4
+        acc = -((v**2 * inv2).sum(1) / g)[:, None] * x * inv2  # normal to the surface
+        curvature = 1.0 / (product * g**2)  # Gaussian curvature K
+        return v, acc, w, -curvature * m
+
+    steps = int(round(LIMIT / STEP))
+    positions = np.empty((THREADS, steps + 1, 3), np.float32)
+    jacobi = np.empty((THREADS, steps + 1))
+    positions[:, 0], jacobi[:, 0] = x, m
+    h = STEP
+    for j in range(1, steps + 1):
+        k1 = deriv(x, v, m, w)
+        k2 = deriv(*(s + 0.5 * h * d for s, d in zip((x, v, m, w), k1)))
+        k3 = deriv(*(s + 0.5 * h * d for s, d in zip((x, v, m, w), k2)))
+        k4 = deriv(*(s + h * d for s, d in zip((x, v, m, w), k3)))
+        x, v, m, w = (
+            s + h / 6 * (a + 2 * b + 2 * c + d)
+            for s, a, b, c, d in zip((x, v, m, w), k1, k2, k3, k4)
+        )
+        # back onto the surface, unit speed along it
+        x = x / np.sqrt((x**2 * inv2).sum(1))[:, None]
+        n = x * inv2
+        n /= np.linalg.norm(n, axis=1)[:, None]
+        v = v - (v * n).sum(1)[:, None] * n
+        v /= np.linalg.norm(v, axis=1)[:, None]
+        positions[:, j], jacobi[:, j] = x, m
+    return positions, jacobi
+
+
+def conjugate_points(positions: np.ndarray, jacobi: np.ndarray, k: int):
+    """The k-th zero of m along each geodesic: its arc length and position."""
+    rows = np.arange(len(jacobi))
+    changes = np.cumsum(
+        np.signbit(jacobi[:, 1:-1]) != np.signbit(jacobi[:, 2:]), axis=1
     )
+    if (changes[:, -1] < k).any():
+        raise ValueError(f"raise LIMIT: not every geodesic reaches conjugate point {k}")
+    j = 1 + np.argmax(changes >= k, axis=1)
+    fraction = jacobi[rows, j] / (jacobi[rows, j] - jacobi[rows, j + 1])
+    distance = (j + fraction) * STEP
+    point = positions[rows, j] + fraction[:, None] * (
+        positions[rows, j + 1] - positions[rows, j]
+    )
+    return distance, point
 
 
-def to_sphere(z: complex) -> np.ndarray:
-    """Inverse stereographic projection from the back pole (0, 0, -1)."""
-    r2 = abs(z) ** 2
-    return np.array([2 * z.real, 2 * z.imag, 1 - r2]) / (1 + r2)
+def cusps(distance: np.ndarray) -> np.ndarray:
+    """Threads whose conjugate distance is a local extremum: the locus's cusps."""
+    before, after = np.roll(distance, 1), np.roll(distance, -1)
+    extremum = ((distance > before) & (distance > after)) | (
+        (distance < before) & (distance < after)
+    )
+    return np.flatnonzero(extremum)
 
 
-def rotation(t: float) -> np.ndarray:
-    """World to view: a gentle closed wobble of the ball."""
-    yaw = YAW * np.sin(2 * np.pi * t)
-    pitch = TILT + PITCH * np.sin(4 * np.pi * t + 0.7)
-    cy, sy, cp, sp = np.cos(yaw), np.sin(yaw), np.cos(pitch), np.sin(pitch)
-    turn_y = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
-    turn_x = np.array([[1, 0, 0], [0, cp, -sp], [0, sp, cp]])
-    return turn_x @ turn_y
+def densify(point: np.ndarray, distance: np.ndarray):
+    """A closed locus resampled every STAR_SPACING pixels, with its distances."""
+    following, further = np.roll(point, -1, 0), np.roll(distance, -1)
+    length = np.linalg.norm(following - point, axis=1) * SCALE
+    count = np.maximum(1, np.ceil(length / STAR_SPACING)).astype(int)
+    segment = np.repeat(np.arange(len(point)), count)
+    f = (np.arange(count.sum()) - np.repeat(np.cumsum(count) - count, count)) / count[
+        segment
+    ]
+    dense = point[segment] * (1 - f)[:, None] + following[segment] * f[:, None]
+    dense /= np.sqrt((dense**2 / AXES**2).sum(1))[:, None]  # back onto the surface
+    return dense, distance[segment] * (1 - f) + further[segment] * f
 
 
-class Tally:
-    """whorls - partings = 2, each number labelled underneath, typeset by LaTeX; cached per count."""
-
-    def __init__(self):
-        self.cache = {}
-
-    def draw(self, whorls: int, partings: int) -> np.ndarray:
-        """An RGBA float image (TEXT_HEIGHT, WIDTH, 4), premultiplied, with a dark halo."""
-        key = whorls, partings
-        if key in self.cache:
-            return self.cache[key]
-        colours = (WHORL_COLOUR, PARTING_COLOUR, TEXT_COLOUR, DIM_COLOUR)
-        source = TALLY % (*(c[1:].upper() for c in colours), whorls, partings)
-        with tempfile.TemporaryDirectory() as folder:
-            (Path(folder) / "tally.tex").write_text(source)
-            for command in (
-                ["latex", "-interaction=nonstopmode", "-halt-on-error", "tally.tex"],
-                ["dvipng", "-D", str(TEXT_DPI), "-T", "tight", "-bg", "Transparent"]
-                + ["--truecolor", "-o", "tally.png", "tally.dvi"],
-            ):
-                subprocess.run(command, cwd=folder, check=True, capture_output=True)
-            glyphs = np.asarray(
-                Image.open(Path(folder) / "tally.png").convert("RGBA"), np.float32
-            )
-        h, w = glyphs.shape[:2]
-        top, left = (TEXT_HEIGHT - h) // 2, (WIDTH - w) // 2
-        text = np.zeros((TEXT_HEIGHT, WIDTH, 4), np.float32)
-        text[top : top + h, left : left + w] = glyphs / 255
-
-        ink = Image.fromarray((255 * text[..., 3]).astype(np.uint8))
-        halo = np.asarray(ink.filter(ImageFilter.GaussianBlur(12)), np.float32) / 255
-        shade = 0.8 * np.minimum(1.0, 2.5 * halo)
-        alpha = text[..., 3:] + (1 - text[..., 3:]) * shade[..., None]
-        rgb = text[..., :3] * text[..., 3:] + (1 - text[..., 3:]) * shade[
-            ..., None
-        ] * _rgb(BACKGROUND)
-        self.cache[key] = np.concatenate([rgb, alpha], -1)
-        return self.cache[key]
-
-
-def on_screen(t: float, z: complex):
-    """Screen x in [-1, 1] (the ball's width) and depth (> 0 facing us) of a plane point."""
-    p = rotation(t) @ to_sphere(z)
-    return float(p[0]), float(p[2])
-
-
-def soundtrack(style_name: str, rng: np.random.Generator) -> np.ndarray:
+def front_table(end: float) -> tuple[np.ndarray, np.ndarray]:
     """
-    A loop of BARS bars, one chord each (PROGRESSION), played by the cowlicks.
+    The arc length reached by the fronts, sampled finely in seconds: speeding
+    up by (1 + ACCEL) until FRONT_END, braking over the last BRAKE seconds, and
+    reaching `end` exactly as they stop.
+    """
+    t = np.linspace(0.0, FRONT_END, 4001)
+    speed = (1 + ACCEL * t / FRONT_END) * (
+        1 - smoothstep((t - (FRONT_END - BRAKE)) / BRAKE)
+    )
+    reached = np.concatenate(
+        [[0.0], np.cumsum((speed[1:] + speed[:-1]) / 2 * np.diff(t))]
+    )
+    return t, end * reached / reached[-1]
 
-    - Bass and a quiet pad hold each bar's chord (plus a soft kick and
-      shaker for the GROOVE styles).
-    - The arpeggio: at each of SLOTS eighth notes in a bar, the cowlicks
-      facing the camera, sorted left to right, play in turn: whorls climb the
-      chord (root, third, fifth, ...), partings sit a step above a chord tone,
-      an octave up, so tension grows with the number of pairs. A bar with
-      fewer cowlicks than slots leaves the rest silent. Panned by screen x,
-      quieter for a newborn pair.
-    - A pair is born with its two notes struck together (a soft second) and
-      dies on a single note an octave over the chord's root (the unison).
-    - At t = 1/2 the crown pair meets in its double zero: the low root and
-      the home chord rolled.
-    Everything is circular; onsets come from the same closed forms as the
-    frames.
+
+def facing_angles(normal: np.ndarray) -> tuple[float, float]:
+    """Tilt and spin of `_rotation` that turn `normal` straight at the viewer."""
+    normal = normal / np.linalg.norm(normal)
+    return float(np.arcsin(normal[1])), float(np.arctan2(-normal[0], normal[2]))
+
+
+def _rotation(tilt: float, spin: float) -> np.ndarray:
+    """World -> camera: a spin about the vertical axis, then a tilt."""
+    a, b = tilt, spin
+    rx = np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+    ry = np.array([[np.cos(b), 0, np.sin(b)], [0, 1, 0], [-np.sin(b), 0, np.cos(b)]])
+    return rx @ ry
+
+
+def sound_events(loci, front_s, front_t, view) -> list[dict]:
+    """
+    For the soundtrack, from the same closed forms as the frames: for each
+    locus, when each of its points lights (the fronts reach its distance), where
+    it is on screen then (x, -1 to 1), and which of its threads are cusps.
+    """
+    events = []
+    half_width = WIDTH / 2 / SCALE
+    for distance, point in loci:
+        when = np.interp(distance, front_s, front_t)
+        x = np.array([(view(t) @ q)[0] for t, q in zip(when, point)]) / half_width
+        events.append(dict(when=when, x=np.clip(x, -1, 1), cusps=cusps(distance)))
+    return events
+
+
+def soundtrack(events: list[dict], style_name: str, rng: np.random.Generator):
+    """
+    A one-shot following the loci.
+
+    - The burst: the root over a low root.
+    - Strings hold a chord under each locus (PROGRESSION: I, vi, ii, V),
+      changing as its first point lights, louder and brighter each time, with
+      a low note on each change.
+    - Each cusp strikes a note as it lights: the four notes of that locus's
+      seventh chord, low to high in the order its cusps light, panned to the
+      cusp on screen, louder generation by generation.
+    - Quiet glints while the loci light, their rate following how many locus
+      points light per second against a typical moment (capped at GLINT_RATE),
+      on the locus's chord tones an
+      octave up, panned to a point lighting then.
+    - As the fronts stop (FRONT_END), the home chord: low root, rolled chord
+      and strings that ring out.
     """
     style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
     track = audio.silence(DURATION)
-    bar = DURATION / BARS
-    slot = bar / SLOTS
+    kw = dict(circular=False)
 
-    def chord_at(seconds):
-        return PROGRESSION[int(seconds // bar) % BARS]
+    def register(chord):  # whole octaves so the chord sits in MIDI 57..84
+        chord = list(chord)
+        while max(chord) > 84:
+            chord = [n - 12 for n in chord]
+        while min(chord) < 57:
+            chord = [n + 12 for n in chord]
+        return chord
 
-    for b, degree in enumerate(PROGRESSION):
-        bass = scale.hz(degree, -2)
-        bass = 2 * bass if bass < 65 else bass  # phone speakers stop around 60 Hz
-        audio.add(track, style.bass(bass, 0.5, length=bar + 1.0), b * bar)
-        for note in scale.chord(degree, 3, octave=-1):
-            pad = audio.pad(
-                float(audio.midi_to_hz(note)), bar, 0.18, 0.8, 1.2, brightness=0.25
+    def struck(midi, velocity, x=0.0):
+        return audio.pan(style.voice(float(audio.midi_to_hz(midi)), velocity), x)
+
+    def low(degree):  # the chord root folded into MIDI 36..47
+        return float(audio.midi_to_hz(36 + (scale.note(degree) - 36) % 12))
+
+    # The burst.
+    audio.add(track, struck(register([scale.note(0)])[0], 0.45), 0.0, **kw)
+    audio.add(track, style.bass(low(0), 0.45, length=3.0), 0.0, **kw)
+
+    # Strings under each locus, and a low note as each begins.
+    bounds = [0.0] + [float(e["when"].min()) for e in events] + [FRONT_END]
+    degrees = (0,) + tuple(PROGRESSION)
+    for i, degree in enumerate(degrees):
+        begin, finish = bounds[i], bounds[i + 1]
+        swell = (i + 1) / len(degrees)
+        for midi in scale.chord(degree, 3):
+            f = float(audio.midi_to_hz(48 + (midi - 48) % 12))
+            tone = audio.strings(
+                f, finish - begin + 0.3, 0.2 + 0.3 * swell, 0.6, 0.8, 0.25 + 0.5 * swell
             )
-            audio.add(track, pad, b * bar)
-        if style_name in GROOVE:
-            for beat in range(4):
-                when = b * bar + beat * bar / 4
-                if beat % 2 == 0:
-                    audio.add(track, audio.kick(0.35), when)
-                audio.add(track, audio.tick(rng, 0.12, 0.06), when + bar / 8)
+            audio.add(track, tone, max(begin - 0.3, 0.0), **kw)
+        if i:
+            audio.add(track, style.bass(low(degree), 0.5, length=3.0), begin, **kw)
 
-    notes = 0
-    for k in range(BARS * SLOTS):
-        seconds = k * slot
-        t = seconds / DURATION
-        whorls, partings = cowlicks(t)
-        voices = []
-        for kind, marks in ((0, whorls), (1, partings)):
-            for z, strength in marks:
-                x, depth = on_screen(t, z)
-                if depth > 0.1:
-                    voices.append((x, kind, strength))
-        voices.sort()
-        j = k % SLOTS
-        if j >= len(voices):
-            continue
-        x, kind, strength = voices[j]
-        rank = sum(1 for v in voices[:j] if v[1] == kind)
-        degree = chord_at(seconds) + 2 * rank + kind
-        note = style.voice(scale.hz(degree, kind), 0.3 + 0.2 * strength)
-        audio.add(track, audio.pan(note, 0.8 * x), seconds)
-        notes += 1
+    # The cusps, and the glints.
+    step = 0.05
+    bins = np.arange(0.0, DURATION + step, step)
+    counts = [np.histogram(e["when"], bins)[0] for e in events]
+    # near a cusp hundreds of points light at once: scale by a typical moment
+    typical = np.median(np.concatenate([c[c > 0] for c in counts]))
+    glints = 0
+    for k, (e, count) in enumerate(zip(events, counts)):
+        chord = register(scale.chord(PROGRESSION[k % len(PROGRESSION)], 4))
+        order = e["cusps"][np.argsort(e["when"][e["cusps"]])]
+        for rank, c in enumerate(order):
+            note = struck(chord[rank % 4], 0.32 + 0.06 * k, 0.8 * e["x"][c])
+            audio.add(track, note, e["when"][c], **kw)
+        for b in np.flatnonzero(count):
+            for when in bins[b] + step * rng.uniform(
+                size=rng.poisson(GLINT_RATE * step * min(1.0, count[b] / typical))
+            ):
+                lighting = np.flatnonzero(
+                    (e["when"] >= bins[b]) & (e["when"] < bins[b + 1])
+                )
+                x = e["x"][rng.choice(lighting)]
+                midi = chord[rng.integers(4)] + 12
+                midi = midi - 12 if midi > 84 else midi
+                audio.add(
+                    track, struck(midi, rng.uniform(0.08, 0.16), 0.8 * x), when, **kw
+                )
+                glints += 1
 
-    for pair in PAIRS:
-        birth, life = pair[:2]
-        for when, born in ((birth, True), ((birth + life) % 1.0, False)):
-            seconds = when * DURATION
-            x = on_screen(when, pair_centre(pair, 0.0 if born else 1.0))[0]
-            degree = chord_at(seconds)
-            if born:
-                for step in (4, 5):
-                    note = style.voice(scale.hz(degree + step), 0.32)
-                    audio.add(track, audio.pan(note, 0.8 * x), seconds)
-            else:
-                note = style.voice(scale.hz(degree, 1), 0.36)
-                audio.add(track, audio.pan(note, 0.8 * x), seconds)
-
-    meet = DURATION / 2
-    audio.add(track, style.bass(scale.hz(0, -1), 0.45, length=4.0), meet)
-    for i, degree in enumerate((0, 2, 4, 7)):
-        note = style.voice(scale.hz(degree), 0.36)
-        audio.add(track, audio.pan(note, 0.3 * (i - 1.5)), meet + 0.06 * i)
+    # Home, as the fronts stop.
+    audio.add(track, style.bass(low(0), 0.6, length=4.0), FRONT_END, **kw)
+    for i, midi in enumerate(register(scale.chord(0, 4))):
+        audio.add(
+            track, struck(midi, 0.42, 0.4 * (i - 1.5)), FRONT_END + 0.07 * i, **kw
+        )
+    for midi in scale.chord(0, 3):
+        f = float(audio.midi_to_hz(48 + (midi - 48) % 12))
+        tone = audio.strings(f, DURATION - FRONT_END - 1.0, 0.5, 0.6, 1.2, 0.75)
+        audio.add(track, tone, FRONT_END - 0.3, **kw)
 
     logger.info(
-        f"Soundtrack: {style_name}, root MIDI {scale.root}, {notes} cowlick notes"
+        f"Soundtrack: {style_name}, root MIDI {scale.root}, "
+        f"{sum(len(e['cusps']) for e in events)} cusp notes, {glints} glints"
     )
-    return audio.master(style.room(track, rng))
+    track = style.room(track, rng, circular=False)
+    audio.fade(track, 0.0, 0.5)
+    return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    The hairy ball theorem (Poincare-Hopf on the sphere), as fur combed by a
-    tangent field whose zeros are placed by hand.
+    Geodesics from one point of a triaxial ellipsoid and their successive
+    conjugate loci, starting with Jacobi's four-cusped star.
 
-    The field lives on the stereographic plane z = (X + iY) / (1 + Z) (the
-    pole facing the camera at 0, the far pole at infinity):
-        V(z) = e^{i(SWIRL + BRUSH sin 2 pi t)} prod (z - a_i) / prod (z - b_j),
-    pushed forward to the sphere by the (conformal) inverse projection. A
-    zero a_i is an index +1 singularity (a whorl, spiralling by the turn), a
-    pole b_j an index -1 one (a parting, saddle-shaped). There are always two
-    more zeros than poles, so at the far pole V ~ z^2 and the pushed-forward
-    field is smooth and non-zero there: the singularities on screen are all
-    of them, and their indices sum to 2 = chi(S^2) by construction. Only the
-    direction is used, computed as prod (z - a_i) prod conj(z - b_j), which
-    has the argument of V without dividing by zero.
+    The ellipsoid x^2/a^2 + y^2/b^2 + z^2/c^2 = 1 (AXES) is the level set F = 1.
+    A unit-speed geodesic has acceleration normal to it, x'' = -mu grad F, and
+    keeping x' tangent fixes mu = (x'^T H x') / |grad F|^2, which here is
+    x'' = -(sum x_i'^2/a_i^2) / (sum x_i^2/a_i^4) * x/a^2. THREADS of them leave
+    the start point (LAUNCH above the equator in the y-z plane, which holds no
+    umbilic) in evenly spaced directions and are integrated together by RK4 in
+    arc length (STEP), re-projected onto the surface each step. Alongside each,
+    the scalar Jacobi equation m'' + K m = 0 with the Gaussian curvature
+    K = 1 / (a^2 b^2 c^2 (sum x_i^2/a_i^4)^2) measures how far neighbouring
+    geodesics are apart; its k-th zero is the k-th conjugate point, where they
+    meet again. Those points, in launch order, trace the k-th conjugate locus
+    (GENERATIONS of them, resampled every STAR_SPACING pixels), and its cusps
+    are the directions where the k-th conjugate distance is stationary (logged:
+    Jacobi's statement says four for the first; here each later one has four
+    too).
 
-    Two zeros, the crown pair, sit at CENTRE +- CROWN cos(pi t) e^{i(.. + pi t)}:
-    their product depends on a^2, so the pair closes as a set although each
-    point swaps place, and they meet in a double zero (index 2) at t = 1/2.
-    Each of PAIRS adds a zero and a pole that are born at one point, drift
-    apart (up to SEPARATION, sin^2 in their life), and meet again, where the
-    factors (z - a)/(z - b) cancel exactly: the tally changes only by these
-    pair births and deaths. Every motion is periodic in t: an exact loop.
-    The seed only places the hairs; the posted render uses the default --seed 0.
+    Every frame is a closed form in t. The fronts sit at arc length front(t),
+    a table integrating a speed that grows by (1 + ACCEL) and brakes to a stop
+    at FRONT_END, OVERSHOOT past the last conjugate point. Each thread is
+    splatted on the GPU up to its front, brightest at the front (HEAD_GAIN,
+    HEAD_LENGTH) and dimming behind it to TRAIL_FLOOR, coloured by launch
+    direction, and dimmed where the surface faces away (BACK_SIDE); the bright
+    part fades as the fronts brake. A locus point lights once the fronts pass
+    its distance, with a short flare, in its generation's colour, so each locus
+    grows from its nearest cusps to its farthest. The camera (orthographic,
+    SCALE px per unit) is a spin about the vertical axis then a tilt; it holds
+    on the burst for HOLD, then turns, always the same way, to face each
+    locus's mean normal at the moment the fronts are halfway through it, and
+    drifts on by DRIFT to rest at REST (a monotone cubic through those
+    keyframes). The ellipsoid itself is a faint per-pixel ray cast with a
+    Fresnel-like rim. Light is tone-mapped (1 - exp(-EXPOSURE x)) and bloomed
+    with a wide, cheap blur.
 
-    Fur: HAIRS roots uniform on the unit sphere (settings.rng), each traced
-    STEPS steps along the field (with its own JITTER rotation), lifted off the
-    skin at FLAT, or up to FLAT + STAND inside a whorl's tuft, drooping back.
-    Seen in a wobbling orthographic view, hairs behind the ball are dropped;
-    the rest are splatted on the GPU as SAMPLES points per step, shaded with
-    Kajiya-Kay (diffuse sqrt(1 - (T.L)^2), highlight sqrt(1 - (T.H)^2)^SHINE),
-    darker at the root and on the ball's unlit side, coloured by the field's
-    direction in the plane (FUR, cyclic), so the colours run once around a
-    whorl and once backwards around a parting. Tone-mapped (1 - exp), bloomed,
-    over a dark shaded ball. Rings mark the singularities (pink whorls, teal
-    partings), growing with a transient pair's separation; the tally reads
-    whorls - partings = 2, typeset by LaTeX once per count (`Tally`).
-
-    Sound (`soundtrack`, STYLE handpan): the cowlicks on screen play the
-    arpeggio over a six-bar progression, pair births and deaths are struck,
-    and the home chord lands as the crown pair meets.
+    `sound_events` reads, for each locus, when its points light and where
+    they are on screen; `soundtrack` turns its cusps into the notes of a chord
+    and the lighting into glints over a string progression.
     """
     settings = settings or ImageProcessingSettings(1)
-    rng = settings.rng
     device = select_device()
+    inv2 = 1.0 / AXES**2
+
+    start = start_point()
+    positions, jacobi = geodesics(start)
+    loci = [conjugate_points(positions, jacobi, k) for k in range(1, GENERATIONS + 1)]
+    end = float(loci[-1][0].max() * OVERSHOOT)
+    table_t, table_s = front_table(end)
+
+    def front(seconds: float) -> float:
+        return float(np.interp(seconds, table_t, table_s))
+
+    # Camera keyframes: the start point, then each locus as the fronts cross it.
+    tilt, spin = facing_angles(start * inv2)
+    keys = [(0.0, tilt, spin), (HOLD, tilt, spin)]
+    for k, (distance, point) in enumerate(loci, 1):
+        lights = np.interp([distance.min(), distance.max()], table_s, table_t)
+        when = float(np.interp(np.median(distance), table_s, table_t))
+        a, b = facing_angles(
+            (point * inv2 / np.linalg.norm(point * inv2, axis=1)[:, None]).sum(0)
+        )
+        b = keys[-1][2] + (b - keys[-1][2]) % (2 * np.pi)  # always turning the same way
+        keys.append((when, a, b))
+        logger.info(
+            f"locus {k}: distances {distance.min():.2f}..{distance.max():.2f}, "
+            f"{len(cusps(distance))} cusps, lights {lights[0]:.1f}..{lights[1]:.1f} s"
+        )
+    keys += [
+        (REST, keys[-1][1], keys[-1][2] + DRIFT),
+        (DURATION, keys[-1][1], keys[-1][2] + DRIFT),
+    ]
+    times, tilts, spins = map(np.array, zip(*keys))
+    camera_tilt, camera_spin = PchipInterpolator(times, tilts), PchipInterpolator(
+        times, spins
+    )
+
+    # The paths up to the end, as tensors.
+    samples = int(np.ceil(end / STEP)) + 1
     to = dict(device=device, dtype=torch.float32)
+    path = torch.tensor(positions[:, :samples], **to)
+    normals = path * torch.tensor(inv2, **to)
+    normals /= normals.norm(dim=-1, keepdim=True)
+    arc = torch.arange(samples, **to) * STEP
+    lut = palette_lut(THREAD_COLOURS, 1024)
+    hue = (np.arange(THREADS) / THREADS * 1023).astype(int)
+    thread_rgb = torch.tensor(lut[hue], **to)
+    del positions, jacobi
+    gc.collect()
 
-    roots = rng.normal(size=(HAIRS, 3))
-    roots /= np.linalg.norm(roots, axis=1, keepdims=True)
-    roots = torch.tensor(roots, **to)
-    lengths = torch.tensor(rng.uniform(0.75, 1.2, HAIRS), **to) * HAIR_LENGTH
-    jitter = torch.polar(
-        torch.ones(HAIRS, **to), torch.tensor(rng.normal(0, JITTER, HAIRS), **to)
+    # The loci, resampled, with each point's distance and colour.
+    dense = [densify(point, distance) for distance, point in loci]
+    star = np.concatenate([p for p, _ in dense])
+    star_normals = star * inv2
+    star_normals /= np.linalg.norm(star_normals, axis=1)[:, None]
+    star_rgb = np.concatenate(
+        [
+            np.tile(_rgb(STAR_COLOURS[k % len(STAR_COLOURS)]), (len(p), 1))
+            for k, (p, _) in enumerate(dense)
+        ]
     )
-    brightness = torch.tensor(rng.uniform(0.6, 1.25, HAIRS), **to)
+    star, star_normals = torch.tensor(star, **to), torch.tensor(star_normals, **to)
+    star_distance = torch.tensor(np.concatenate([d for _, d in dense]), **to)
+    star_rgb = torch.tensor(star_rgb, **to)
 
-    light = torch.tensor(LIGHT / np.linalg.norm(LIGHT), **to)
-    half = light + torch.tensor([0.0, 0.0, 1.0], **to)
-    half = half / half.norm()
-    fur = torch.tensor(palette_lut(FUR, 512), **to)
-    sheen_rgb = torch.tensor(_rgb(SHEEN_COLOUR), **to)
+    # The screen in camera units, for the surface.
+    gx = (torch.arange(WIDTH, **to) + 0.5 - WIDTH / 2) / SCALE
+    gy = (HEIGHT / 2 - torch.arange(HEIGHT, **to) - 0.5) / SCALE
+    gy, gx = torch.meshgrid(gy, gx, indexing="ij")
+    inv2_t = torch.tensor(inv2, **to)
+    surface_rgb = torch.tensor(_rgb(SURFACE_COLOUR), **to)
     background = torch.tensor(_rgb(BACKGROUND), **to)
-    frac = (torch.arange(SAMPLES, **to) + 0.5) / SAMPLES
-    along = (torch.arange(STEPS, **to)[:, None] + frac[None, :]) / STEPS
-
-    # The ball's skin, lit from LIGHT, and pixel coordinates for the rings.
-    ys = (torch.arange(HEIGHT, **to)[:, None] + 0.5 - CENTRE_Y) / -RADIUS_PX
-    xs = (torch.arange(WIDTH, **to)[None, :] + 0.5 - CENTRE_X) / RADIUS_PX
-    r2 = xs * xs + ys * ys
-    nz = torch.sqrt((1 - r2).clamp_min(0))
-    lambert = (xs * light[0] + ys * light[1] + nz * light[2]).clamp_min(0)
-    edge = ((1 - torch.sqrt(r2)) * RADIUS_PX + 0.5).clamp(0, 1)
-    skin = _rgb(BODY)
-    base = background + edge[..., None] * (
-        torch.tensor(skin, **to) * (0.35 + 0.9 * lambert)[..., None] - background
-    )
-    px_x = torch.arange(WIDTH, **to)[None, :] + 0.5
-    px_y = torch.arange(HEIGHT, **to)[:, None] + 0.5
-    whorl_rgb = torch.tensor(_rgb(WHORL_COLOUR), **to)
-    parting_rgb = torch.tensor(_rgb(PARTING_COLOUR), **to)
     canvas = torch.zeros(HEIGHT, WIDTH, 3, **to)
-    tally = Tally()
 
-    def field(q, whorls, partings, turn):
-        """Unit tangent directions at sphere points q, and the field's unit value in the plane."""
-        x, y, w = q.unbind(-1)
-        z = torch.complex(x, y) / (1 + w).clamp_min(1e-4)
-        v = turn
-        for a, _ in whorls:
-            v = v * (z - complex(a))
-        for b, _ in partings:
-            v = v * torch.conj(z - complex(b))
-        v = v / v.abs().clamp_min(1e-30)
-        x, y = z.real, z.imag
-        r2 = x * x + y * y
-        e = torch.stack([1 + r2 - 2 * x * x, -2 * x * y, -2 * x], -1)
-        f = torch.stack([-2 * x * y, 1 + r2 - 2 * y * y, -2 * y], -1)
-        tangent = v.real[:, None] * e + v.imag[:, None] * f
-        return F.normalize(tangent, dim=-1), v
+    def facing_weight(z: torch.Tensor) -> torch.Tensor:
+        u = ((z + 0.15) / 0.3).clamp(0.0, 1.0)
+        return BACK_SIDE + (1 - BACK_SIDE) * u * u * (3 - 2 * u)
+
+    def surface(rotation: torch.Tensor) -> torch.Tensor:
+        """Ray cast of the ellipsoid along the view axis: a faint fill and rim."""
+        o = gx[..., None] * rotation[0] + gy[..., None] * rotation[1]
+        d = rotation[2]
+        a = (d**2 * inv2_t).sum()
+        b = (o * d * inv2_t).sum(-1)
+        c = (o**2 * inv2_t).sum(-1) - 1
+        disc = b * b - a * c
+        root = disc.clamp_min(0).sqrt()
+        hit = o + ((-b + root) / a)[..., None] * d
+        n = hit * inv2_t
+        facing = (n @ rotation[2]) / n.norm(dim=-1)
+        cover = (root / a * SCALE / 2).clamp(0, 1)  # soft silhouette, about a pixel
+        shade = SURFACE_FILL + SURFACE_RIM * (1 - facing.clamp(0, 1)) ** 3
+        return (cover * shade)[..., None] * surface_rgb
 
     def render(frame: int) -> torch.Tensor:
-        t = frame / FRAME_COUNT
-        whorls, partings = cowlicks(t)
-        turn_np = rotation(t)
-        turn = torch.tensor(turn_np, **to)
-        normals = roots @ turn.T
-        keep = normals[:, 2] > CULL
-        q, normals = roots[keep], normals[keep]
-        n = q.shape[0]
-
-        # Tufts: hairs stand up near a whorl.
-        stand = torch.zeros(n, **to)
-        for a, strength in whorls:
-            p = torch.tensor(to_sphere(a), **to)
-            stand = stand + strength * torch.exp(-((q - p) ** 2).sum(-1) / TUFT**2)
-        lift = FLAT + STAND * stand.clamp(max=1.0)
-
-        spin = np.exp(1j * (SWIRL + BRUSH * np.sin(2 * np.pi * t)))
-        spin = jitter[keep] * complex(spin)
-        step = lengths[keep] / STEPS
-        verts, height, value = [q], torch.zeros(n, **to), None
-        for j in range(STEPS):
-            direction, v = field(q, whorls, partings, spin)
-            if value is None:
-                value = v
-            angle = lift * (1 - DROOP * (j + 0.5) / STEPS)
-            q = F.normalize(q + (step * torch.cos(angle))[:, None] * direction, dim=-1)
-            height = height + step * torch.sin(angle)
-            verts.append(q * (1 + height)[:, None])
-        view = torch.stack(verts, 1) @ turn.T  # (n, STEPS + 1, 3)
-
-        # Points along each hair, and their shading.
-        start, segment = view[:, :-1], view[:, 1:] - view[:, :-1]
-        points = start[:, :, None] + segment[:, :, None] * frac[None, None, :, None]
-        tangent = F.normalize(segment, dim=-1)
-        tl, th = tangent @ light, tangent @ half
-        diffuse = torch.sqrt((1 - tl * tl).clamp_min(0))
-        highlight = torch.sqrt((1 - th * th).clamp_min(0)) ** SHINE
-        shadow = (0.15 + 0.85 * (normals @ light)).clamp(0.04, 1.0) * brightness[keep]
-        hue = (torch.angle(value) / (2 * np.pi)) % 1.0
-        colour = fur[(hue * (len(fur) - 1)).long()]  # (n, 3)
-        screen_len = RADIUS_PX * segment[..., :2].norm(dim=-1) / SAMPLES  # (n, STEPS)
-        weight = HAIR_LIGHT * screen_len * shadow[:, None]
-        ao = 0.15 + 0.85 * along  # (STEPS, SAMPLES)
-        rgb = (
-            colour[:, None, None, :]
-            * (AMBIENT + DIFFUSE * diffuse)[:, :, None, None]
-            * ao[None, :, :, None]
-            + SHEEN * (highlight[:, :, None] * along[None])[..., None] * sheen_rgb
-        ) * weight[:, :, None, None]
-
-        px, py, pz = points.unbind(-1)
-        hidden = (px * px + py * py < 1) & (pz < 0)
-        rgb = rgb * (~hidden)[..., None]
+        seconds = DURATION * frame / (FRAME_COUNT - 1)
+        rotation = torch.tensor(
+            _rotation(float(camera_tilt(seconds)), float(camera_spin(seconds))), **to
+        )
+        h = front(seconds)
+        level = 1 - (1 - THREAD_REST) * smoothstep(
+            (seconds - FADE[0]) / (FADE[1] - FADE[0])
+        )
+        moving = 1 - smoothstep((seconds - (FRONT_END - BRAKE)) / BRAKE)
         canvas.zero_()
+
+        reached = min(samples, int(h / STEP) + 2)
+        cam = path[:, :reached] @ rotation.T
+        behind = (h - arc[:reached]).clamp_min(0)
+        weight = (
+            THREAD_WEIGHT
+            * level
+            * (arc[:reached] <= h)
+            * (
+                TRAIL_FLOOR
+                + moving * (1 - TRAIL_FLOOR) * torch.exp(-behind / TRAIL_LENGTH)
+                + moving * HEAD_GAIN * torch.exp(-behind / HEAD_LENGTH)
+            )
+        )
+        weight = weight * facing_weight(normals[:, :reached] @ rotation[2])
         splat(
             canvas,
-            CENTRE_X + RADIUS_PX * px,
-            CENTRE_Y - RADIUS_PX * py,
-            rgb.reshape(-1, 3),
+            WIDTH / 2 + SCALE * cam[..., 0],
+            HEIGHT / 2 - SCALE * cam[..., 1],
+            (thread_rgb[:, None, :] * weight[..., None]).reshape(-1, 3),
         )
 
-        light_img = 1 - torch.exp(-EXPOSURE * canvas)
-        image = base * (1 - light_img) + light_img
-        image = image + BLOOM_GAIN * wide_blur(light_img, BLOOM_SIGMA, BLOOM_FACTOR)
+        past = h - star_distance
+        lit = past >= 0
+        if bool(lit.any()):
+            cam = star[lit] @ rotation.T
+            glow = STAR_WEIGHT * (1 + FLASH_GAIN * torch.exp(-past[lit] / FLASH_LENGTH))
+            glow = glow * facing_weight(star_normals[lit] @ rotation[2])
+            splat(
+                canvas,
+                WIDTH / 2 + SCALE * cam[:, 0],
+                HEIGHT / 2 - SCALE * cam[:, 1],
+                glow[:, None] * star_rgb[lit],
+            )
 
-        # Rings around the singularities on the visible side, on a dark band.
-        dark, glow = torch.zeros_like(image[..., 0]), torch.zeros_like(image)
-        for marks, ring_rgb in ((whorls, whorl_rgb), (partings, parting_rgb)):
-            for a, strength in marks:
-                p = turn_np @ to_sphere(a)
-                if p[2] <= 0:
-                    continue
-                cx, cy = CENTRE_X + RADIUS_PX * p[0], CENTRE_Y - RADIUS_PX * p[1]
-                radius = RING_RADIUS * (0.5 + 0.5 * strength)
-                d = torch.sqrt((px_x - cx) ** 2 + (px_y - cy) ** 2)
-                gain = strength * float(smoothstep(p[2] / 0.3))
-                ring = torch.exp(-(((d - radius) / RING_WIDTH) ** 2))
-                band = torch.exp(-(((d - radius) / (2.5 * RING_WIDTH)) ** 2))
-                dark = torch.maximum(dark, gain * band)
-                glow = glow + RING_GAIN * gain * ring[..., None] * ring_rgb
-        image = image * (1 - RING_SHADE * dark)[..., None] + glow
-
-        text = torch.tensor(tally.draw(len(whorls), len(partings)), **to)
-        band = image[TEXT_TOP : TEXT_TOP + TEXT_HEIGHT]
-        band.mul_(1 - text[..., 3:]).add_(text[..., :3])
+        light = 1 - torch.exp(-EXPOSURE * canvas)
+        image = background + surface(rotation) + light
+        image = image + BLOOM_GAIN * wide_blur(light, BLOOM_SIGMA, BLOOM_FACTOR)
         return image.clamp(0, 1) * 255.0
 
     render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
+
+    def view(seconds: float) -> np.ndarray:
+        return _rotation(float(camera_tilt(seconds)), float(camera_spin(seconds)))
+
     tag = settings.audio_tag
-    track = soundtrack(tag if tag in STYLES else STYLE, settings.audio_rng)
+    style_name = tag if tag in STYLES else STYLE
+    events = sound_events(loci, table_s, table_t, view)
+    track = soundtrack(events, style_name, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
