@@ -67,7 +67,7 @@ counts stay balanced.
 | Date | Day | Category | Script | Title | Status |
 |---|---|---|---|---|---|
 | 2026-11-01 | Sun | Waves & Quantum | `lab/2026/1101.py` | The Sound Barrier | music ok |
-| 2026-11-02 | Mon | Fractals | `lab/2026/1102.py` | The Map of All Julia Sets | music ok |
+| 2026-11-02 | Mon | Fractals | `lab/2026/1102.py` | The Map of All Julia Sets | posted |
 | 2026-11-03 | Tue | Number Theory | `lab/2026/1103.py` | Every Road Leads to 1 | music ok |
 | 2026-11-04 | Wed | Fluids & Flow Fields | `lab/2026/1104.py` | Clouds That Break Like Waves | music ok |
 | 2026-11-05 | Thu | Tilings & Geometry | `lab/2026/1105.py` | Five Squares at Every Corner | music ok |

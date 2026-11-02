@@ -13,7 +13,12 @@ one connected piece; pick c outside and it shatters into infinitely many
 specks. And near the edge, each Julia set looks like the Mandelbrot set right
 where the dot is standing.
 
-Made with Python & Numba.
+What you hear follows the dot. While it stays on the black shape a soft chord
+holds; when it steps outside, the chord fades and the sound scatters into
+specks, like the picture. Each time it passes a bulb whose Julia set has q
+arms, a note rings, higher for more arms.
+
+Made with Python & Numba. Sound synthesized in NumPy.
 #juliaset #mandelbrot #fractal #mathart #randomplots
 """
 
@@ -24,7 +29,9 @@ import numpy as np
 from loguru import logger
 from numba import njit
 
+from common import audio
 from common.image_processing import ImageProcessingSettings
+from common.music import STYLES, Scale
 from common.video import (
     FPS,
     HEIGHT,
@@ -41,7 +48,7 @@ FRAME_COUNT = frame_count(DURATION)
 STRAY, WEAVES = (
     0.03,
     5,
-)  # c = boundary(θ) + STRAY sin(WEAVES θ) along the outward normal
+)  # c = boundary(θ) + STRAY max(0, sin WEAVES θ)^2 along the outward normal
 MAX_ITER = 256
 BAILOUT = 1000.0  # as in the Java original
 SETTLED = 1e-12  # an orbit back within this (squared) of a checkpoint is inside
@@ -59,6 +66,13 @@ FILAMENT, HALO = 1.1, 9.0  # px: widths of the boundary glow
 HALO_GAIN, HAZE_GAIN = 0.35, 0.25
 MAP_LEVEL = 0.55  # the inset's brightness
 DOT, TRAIL, TRAIL_POINTS = 7, 0.06, 40  # px, loop fraction, samples
+
+# --- Sound -------------------------------------------------------------------------
+STYLE = "music_box"  # common.music.STYLES; an --audio-only tag naming one overrides it
+BULBS = 7  # a note where the walk passes the p/q bulb, for q up to this
+SAMPLES = 6000  # points along the walk tested for membership
+SMOOTH = 0.25  # s: membership majority window for the pad and dust
+DUST = 18.0  # specks per second while c is outside, at the most
 
 
 @njit(nogil=True, fastmath=True, cache=True)
@@ -113,14 +127,18 @@ def escape(cx, cy, xs, ys, julia):
 def walk(t):
     """
     c at loop time t: on the main cardioid's edge, e^{iθ}/2 - e^{2iθ}/4,
-    nudged STRAY sin(WEAVES θ) along its outward normal -i e^{3iθ/2} (out of
-    the set, then back in). The nudge vanishes at the cusp, θ = 0, where the
+    exactly, except WEAVES times per loop when it is pushed out along the
+    outward normal -i e^{3iθ/2} by STRAY max(0, sin WEAVES θ)^2 (out of the
+    set and back onto its edge; squared so the push starts and ends
+    smoothly). The push is outward only: an inward one would put the dot
+    visibly inside the cardioid. It vanishes at the cusp, θ = 0, where the
     normal flips, so the walk stays continuous and the loop closes.
     """
     theta = 2 * np.pi * np.mod(np.asarray(t, float), 1.0)
     w = np.exp(1j * theta)
     normal = -1j * np.exp(1.5j * theta)
-    return w / 2 - w * w / 4 + STRAY * np.sin(WEAVES * theta) * normal
+    push = np.maximum(np.sin(WEAVES * theta), 0.0) ** 2
+    return w / 2 - w * w / 4 + STRAY * push * normal
 
 
 def glow(count, distance, scale):
@@ -133,12 +151,109 @@ def glow(count, distance, scale):
     return np.clip(np.where(count < 0, 0.0, light + haze), 0, 1)
 
 
+def soundtrack(style_name: str, rng: np.random.Generator) -> np.ndarray:
+    """
+    A loop that follows c along the walk, from the same closed forms.
+
+    - Membership: c(t) is tested on SAMPLES points with the inset's own
+      `escape` (same MAX_ITER and BAILOUT), smoothed by a SMOOTH s majority. While c is inside (connected
+      Julia set) a soft pad holds the home chord; each inside span gets
+      its own pad, swelling in and fading out at the crossings.
+    - Dust: while c is outside, specks (the style's voice an octave up,
+      very quiet, scattered in time and pan with `rng`) fall at a rate
+      that grows the faster c escapes (DUST / s at most).
+    - Bulbs: where the cardioid parameter t passes p/q (q <= BULBS), the
+      edge touches the p/q bulb, whose Julia sets have q arms: the voice
+      strikes scale degree q - 2, softer for larger q, panned where the dot
+      is on screen. The q = 1 point (the cusp, t = 0) gets the bass.
+    All onsets are loop-periodic and every effect is circular, so the sound
+    loops with the frames.
+    """
+    style = STYLES[style_name]
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    track = audio.silence(DURATION)
+
+    t = np.arange(SAMPLES) / SAMPLES
+    c = walk(t)
+    count = np.array(
+        [
+            escape(0.0, 0.0, np.array([z.real]), np.array([z.imag]), False)[0][0, 0]
+            for z in c
+        ]
+    )
+    # Grazing the edge flickers in and out; a circular majority vote over
+    # SMOOTH s keeps the spans the ear can follow.
+    window = int(SMOOTH / DURATION * SAMPLES) | 1
+    vote = np.convolve(
+        np.r_[count[-window:], count, count[:window]] < 0,
+        np.ones(window) / window,
+        "same",
+    )[window:-window]
+    inside = vote > 0.5
+    dt = DURATION / SAMPLES
+
+    # Inside spans, wrapped round the loop: rotate so index 0 starts outside.
+    shift = int(np.argmin(inside)) if not inside.all() else 0
+    rolled = np.roll(inside, -shift)
+    edges = np.flatnonzero(np.diff(rolled.astype(int)))
+    starts, ends = edges[::2] + 1, edges[1::2] + 1
+    chord = [float(audio.midi_to_hz(n)) for n in scale.chord(0, 3, octave=-1)]
+    for a, b in zip(starts, ends):
+        when = ((a + shift) % SAMPLES) * dt
+        length = (b - a) * dt
+        for hz in chord:
+            note = audio.pad(hz, max(length - 0.4, 0.1), 0.16, 0.4, 0.8, 0.35)
+            audio.add(track, note, when)
+
+    # Dust while outside: rate from how fast the orbit of 0 escapes.
+    speed = np.where(inside, 0.0, 1.0 / np.maximum(count, 1.0))
+    speed = speed / max(speed.max(), 1e-9)
+    rate = DUST * np.sqrt(speed)
+    specks = 0
+    for i in np.flatnonzero(rng.random(SAMPLES) < rate * dt):
+        degree = int(rng.integers(0, 2 * len(scale.steps)))
+        note = style.voice(scale.hz(degree, 1), float(rng.uniform(0.05, 0.13)))
+        audio.add(
+            track,
+            audio.pan(note, float(rng.uniform(-0.8, 0.8))),
+            (i + rng.random()) * dt,
+        )
+        specks += 1
+
+    # Bulbs p/q: Julia sets with q arms.
+    bulbs = sorted(
+        {
+            (p / q, q)
+            for q in range(2, BULBS + 1)
+            for p in range(1, q)
+            if np.gcd(p, q) == 1
+        }
+    )
+    for frac, q in bulbs:
+        z = complex(walk(frac))
+        x = np.clip((z.real - MAP_OFFSET) / 1.6, -1, 1)
+        note = style.voice(scale.hz(q - 2), 0.6 - 0.05 * q)
+        audio.add(track, audio.pan(note, 0.8 * float(x)), frac * DURATION)
+    bass = scale.hz(0, -2)
+    bass = 2 * bass if bass < 65 else bass
+    audio.add(track, style.bass(bass, 0.5, length=4.0), 0.0)
+    audio.add(track, style.bass(bass * 1.5, 0.35, length=3.0), 0.5 * DURATION)
+
+    logger.info(
+        f"Soundtrack: {style_name}, root MIDI {scale.root}, {len(starts)} inside "
+        f"spans ({inside.mean():.0%} of the loop), {specks} specks, "
+        f"{len(bulbs)} bulb notes"
+    )
+    return audio.master(style.room(track, rng))
+
+
 def generate(settings: ImageProcessingSettings = None):
     """
     Julia sets of z -> z^2 + c, with c walking the edge of the Mandelbrot
     set's main cardioid (`walk`): c(θ) = e^{iθ}/2 - e^{2iθ}/4 plus
-    STRAY sin(WEAVES θ) along the outward normal, θ = 2πt, so it steps out of
-    the set WEAVES times per loop (Julia set dust) and back in (connected),
+    STRAY max(0, sin WEAVES θ)^2 along the outward normal, θ = 2πt, so it
+    rides the edge (connected Julia sets) and steps out of the set WEAVES
+    times per loop (Julia set dust),
     and the loop closes exactly.
 
     Each frame computes the Julia set with `escape`, a numba port of the
@@ -152,6 +267,8 @@ def generate(settings: ImageProcessingSettings = None):
     that grows close to the set, the interior stays dark. The Mandelbrot inset
     is computed once, drawn dim, with a dot at c and a fading trail of its past
     positions. Nothing is random: --seed does not change the picture.
+    The soundtrack (`soundtrack`) follows c: a pad while it is inside, dust
+    while outside, a note at each p/q bulb.
     """
     settings = settings or ImageProcessingSettings(1)
     lut = (palette_lut(PALETTE, 1024)[:, ::-1] * 255).astype(np.float32)  # BGR
@@ -215,7 +332,9 @@ def generate(settings: ImageProcessingSettings = None):
         return image
 
     render_frames(settings, render, FRAME_COUNT)
-    settings.save_video(fps=FPS, crf=18)
+    tag = settings.audio_tag
+    track = soundtrack(tag if tag in STYLES else STYLE, settings.audio_rng)
+    settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
 

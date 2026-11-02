@@ -29,6 +29,7 @@ import argparse
 import ast
 import datetime as dt
 import json
+import mimetypes
 import re
 import secrets
 import shutil
@@ -200,6 +201,7 @@ def file_handler(video: Path, secret: str):
     """Serve only `video`, only at /<secret>/<name>, with Range support."""
     size = video.stat().st_size
     route = f"/{secret}/{video.name}"
+    content_type = mimetypes.guess_type(video.name)[0] or "application/octet-stream"
 
     class Handler(BaseHTTPRequestHandler):
         def do_HEAD(self):
@@ -224,7 +226,7 @@ def file_handler(video: Path, secret: str):
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
             else:
                 self.send_response(200)
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", content_type)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
             self.end_headers()
