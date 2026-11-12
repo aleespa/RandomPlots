@@ -313,6 +313,11 @@ if __name__ == "__main__":
 - **Determinism**: Derive all random variations using `rng` (`settings.rng`), up front. Do not call `np.random.*` or `random.*` directly.
 - **Colour**: palettes from `colors.palettes` or a custom palette at the top of the file. cv2 images are **BGR**: convert `'#rrggbb'` with `common.video.hex_to_bgr`; build gradients with `common.video.palette_lut` (RGB, so render with `rgb=True` or flip).
 - **Memory Management**: matplotlib code calls `plt.close(fig)` and `gc.collect()` after every figure; video generators end with `gc.collect()`.
+- **Text is LaTeX**: any words or formulas on screen are typeset in Computer Modern with
+  `common.video.latex_mask(tex, size)` (matplotlib mathtext, no TeX install needed) and
+  composited with `blit_mask`, built once outside the frame function. Formulas in real
+  maths notation (`\frac`, `\sin`, `\cdots`), words in `\mathrm{...}`. Never PIL/DejaVu or
+  `cv2.putText`. Example: `lab/2026/1130.py`.
 - **Formatting**: `uv run black <file>` on new files.
 
 ### 8. HDR Video Guidance

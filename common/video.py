@@ -62,6 +62,51 @@ def palette_lut(colours: Sequence, size: int = 256) -> np.ndarray:
     return np.stack(lut, axis=1).astype(np.float32)
 
 
+def latex_mask(tex: str, size: float) -> np.ndarray:
+    r"""
+    On-screen text typeset as LaTeX: `tex` (mathtext, e.g. r"$\frac{\sin 3x}{3}$" or
+    r"$\mathrm{the\ jump{,}\ magnified}$") in Computer Modern at `size` px per em, as a
+    float32 alpha mask in [0, 1] cropped to the ink with a 2 px margin. Build masks once,
+    outside the frame function, and composite them with `blit_mask`. Words go in
+    \mathrm{...} with "\ " for spaces; write commas as {,} so math mode adds no gap.
+    Mathtext draws a bare ' as a prime; write apostrophes as \text{'}.
+    """
+    import io
+
+    from matplotlib import mathtext
+    from matplotlib.font_manager import FontProperties
+
+    buffer = io.BytesIO()
+    prop = FontProperties(size=size, math_fontfamily="cm")
+    mathtext.math_to_image(tex, buffer, prop=prop, dpi=72, format="png")
+    grey = cv2.imdecode(
+        np.frombuffer(buffer.getvalue(), np.uint8), cv2.IMREAD_GRAYSCALE
+    )
+    mask = 1 - grey.astype(np.float32) / 255  # black ink on white
+    rows = np.flatnonzero(mask.max(1) > 0)
+    cols = np.flatnonzero(mask.max(0) > 0)
+    return np.pad(mask[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1], 2)
+
+
+def blit_mask(image, mask, x, y, colour, alpha=1.0, anchor="left"):
+    """
+    Composite a text mask in place onto a float (H, W, 3) image at top-left (x, y), or
+    top-centre with anchor="centre"; `colour` is in the image's channel order. Clipped
+    to the frame.
+    """
+    h, w = mask.shape
+    if anchor == "centre":
+        x -= w // 2
+    x0, y0 = max(x, 0), max(y, 0)
+    x1, y1 = min(x + w, image.shape[1]), min(y + h, image.shape[0])
+    if x0 >= x1 or y0 >= y1:
+        return
+    a = alpha * mask[y0 - y : y1 - y, x0 - x : x1 - x, None]
+    region = image[y0:y1, x0:x1]
+    region *= 1 - a
+    region += a * np.asarray(colour, np.float32)
+
+
 def _to_bgr_uint8(image, rgb: bool) -> np.ndarray:
     """A frame as a uint8 BGR numpy array; tensors are moved off the GPU."""
     if not isinstance(image, np.ndarray):  # a torch tensor
