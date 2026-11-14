@@ -317,7 +317,7 @@ if __name__ == "__main__":
   `common.video.latex_mask(tex, size)` (matplotlib mathtext, no TeX install needed) and
   composited with `blit_mask`, built once outside the frame function. Formulas in real
   maths notation (`\frac`, `\sin`, `\cdots`), words in `\mathrm{...}`. Never PIL/DejaVu or
-  `cv2.putText`. Example: `lab/2026/1130.py`.
+  `cv2.putText`. Example: `lab/2026/1201.py`.
 - **Formatting**: `uv run black <file>` on new files.
 
 ### 8. HDR Video Guidance

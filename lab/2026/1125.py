@@ -1,281 +1,426 @@
 """
-The Star Hidden in an Ellipse
+Chaos From a Single Cell
 
-Ripples run inwards from the rim of an ellipse, every point moving straight
-along the ellipse's normal at the same speed. Near the middle they crumple into
-folds and sharp cusps, and every cusp slides along one glowing four-pointed
-star. Green is a ripple on its way in, coral is where it has turned inside out.
+One coloured square, and one rule. This is Rule 30, a cellular automaton: each row of
+cells is drawn from the row above it, and every new cell looks only at the three cells
+just above it and follows a table of eight cases (shown at the start). That's all.
+Repeat it row after row while the camera pulls back over 650 generations.
 
-That star is the ellipse's evolute, the curve of its centres of curvature: a
-ripple folds exactly where it has travelled one radius of curvature. Huygens
-invented evolutes in 1673 to build a better pendulum clock. By the four-vertex
-theorem, every smooth closed oval that isn't a circle has an evolute with at
-least four cusps; an ellipse has exactly four.
+Nothing here is random, yet one side settles into neat diagonal stripes while the rest
+boils into chaos that never repeats. The middle column, the teal lane, is so
+unpredictable that Stephen Wolfram's Mathematica once used it to make random numbers,
+and the cone snail Conus textile paints its shell with a rule much like this one.
+The four colours are the four cases that switch a cell on.
 
-Listen: every ripple leaves the rim with a soft pluck. The bright ones play a
-bamboo flute, held for exactly as long as their folds live: from the moment
-the cusps are born at the top and bottom points of the star until they meet
-again at its sides.
+Listen: an 8-bit tune read off the middle column. Each note's pitch comes from the last
+three bits it produced, and in the final bars the lead plays the column itself: a note
+for every 1, a rest for every 0.
 
-Made with Python, NumPy & PyTorch. Sound synthesized in NumPy.
-#evolute #differentialgeometry #mathart #generativeart #randomplots
+Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
+#rule30 #cellularautomata #wolfram #mathart #randomplots
 """
 
 import gc
 
+import cv2
 import numpy as np
-import torch
 from loguru import logger
 
 from common import audio
-from common.gpu import blur, gaussian_kernel, select_device, splat, wide_blur
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale
-from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
+from common.music import PROGRESSIONS, STYLES, Scale, beat
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames
 
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
 
-# --- Geometry (pixels; x right, y up, origin at the centre of the ellipse) ----------
-SEMI_X, SEMI_Y = 430.0, 600.0  # semi-axes: the major axis is vertical
-CENTRE = (WIDTH / 2, HEIGHT / 2)
-EMISSIONS = 45  # ripples per loop: three a second
-SPEED = 165.0  # px/s along the normals
-REACH = 1400.0  # px travelled before a ripple has faded away
-STRONG = 6  # bright ripples per loop
-STRONG_GAP = 6  # at least this many emissions between two bright ones
-POINTS = 12288  # points per ripple, uniform in arclength of the rim
+RULE = 30  # bit k of RULE is the new cell for the neighbourhood code k = 4l + 2c + r
 
-# --- Look ---------------------------------------------------------------------------
-BACKGROUND = "#040908"
-BEFORE, AFTER = "#3fe0a8", "#ff8a7a"  # jade until a point focuses, coral after
-FOLD_WIDTH = 0.12  # |J| over which the colour turns at a fold
-RIM_LIGHT = 1.0
-FOLD_BOOST, FOLD_CAP = 0.35, 3.0  # extra light near folds: min(cap, |J|^-boost)
-STAR_LIGHT = 0.12  # the evolute, always faintly there
-SPARK_LIGHT, SPARK_TRAIL = (
-    2.5,
-    45.0,
-)  # cusp sparks and their trail along the star (px of d)
-EXPOSURE, GAMMA = 1.3, 0.75
-SOFT = 0.7
-GLOWS = ((6.0, 2, 0.18), (30.0, 6, 0.10))  # (sigma px, shrink, gain)
-FADE_IN = 60.0  # px: a ripple brightens as it leaves the rim
-FADE_OUT = 0.5  # last fraction of REACH over which it dims away
-
-# --- Sound --------------------------------------------------------------------------
-STYLE = (
-    "bamboo_flute"  # common.music.STYLES; an --audio-only tag naming one overrides it
+# --- Look: printed on paper, inked like a cone shell ------------------------------
+PAPER = "#f4f0e7"
+CASE_INK = (
+    {  # the four neighbourhoods that switch a cell on (Rule 30: 001, 010, 011, 100)
+        1: "#24140d",  # 001: dark chocolate
+        2: "#6e2410",  # 010: sienna
+        3: "#a8460f",  # 011: copper
+        4: "#c98418",  # 100: ochre
+    }
 )
-MELODY = (4, 2, 3, 0, 1, -1, 2, 0)  # scale degrees, walked by the bright ripples
+LANE_ON, LANE_OFF = "#0e6a73", "#d7e4df"  # the middle column: on / off
+PARENT = "#4a3a30"  # the legend's "above" cells
+GAP = 0.09  # paper seam between cells, as a fraction of a cell (big cells only)
+GRAIN = 0.02  # paper grain, relative
+
+# --- Camera and growth --------------------------------------------------------------
+BPM = 128.0  # 8 bars in 15 s; the zoom lands on the downbeat of bar 8
+APEX_Y = 150.0  # px: the first cell's top edge
+FRONT_Y = 0.92 * HEIGHT  # px: where the newest row settles
+CELL_START, CELL_END = 72.0, 2.5  # px per cell
+HOLD = 0.6  # s at the start before the camera starts pulling back
+FRONT_TIME = 4.0  # s for the newest row to travel down to FRONT_Y
+ZOOM_END = 7 * 4 * 60.0 / BPM  # 13.125 s: the zoom stops, the picture rests
+SPOT = (11.6, 12.6)  # s: everything but the middle column dims
+SPOT_DIM = 0.2
+LANE_HALF = (
+    2.5,
+    6.0,
+)  # px: half-width of the middle-column lane, before / in the spotlight
+LEGEND_FADE = (2.0, 2.6)  # s
+FADE_OUT = 0.4  # s
+LEVELS = (128, 91, 64, 45, 32, 23, 16, 11, 8, 6, 4, 3, 2, 1)  # px per cell, textures
+
+# --- Sound -------------------------------------------------------------------------
+STYLE = "chiptune"  # common.music.STYLES; an --audio-only tag naming one overrides it
+MODE, CHORDS, DUTY = "dorian", "drift", 0.125  # Game Boy thin pulse
+MELODY = (0, 2, 4, 6, 7, 9, 11, 14)  # degrees above the bar's chord root, by 3 bits
 
 
-def _rgb(colour: str) -> np.ndarray:
-    return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
+def cell_size(seconds):
+    """px per cell: held, then a smooth log-zoom from CELL_START to CELL_END."""
+    u = np.clip((np.asarray(seconds) - HOLD) / (ZOOM_END - HOLD), 0.0, 1.0)
+    eased = u * u * (3 - 2 * u)
+    return np.exp(np.log(CELL_START) + (np.log(CELL_END) - np.log(CELL_START)) * eased)
 
 
-def rim():
+def generations(seconds):
+    """Rows grown by `seconds` (continuous, >= 1): the front's depth over the cell size."""
+    seconds = np.minimum(np.asarray(seconds, float), ZOOM_END)
+    u = np.clip(seconds / FRONT_TIME, 0.0, 1.0)
+    front = CELL_START + (FRONT_Y - APEX_Y - CELL_START) * (1 - (1 - u) ** 2)
+    return front / cell_size(seconds)
+
+
+def automaton(rows, half):
     """
-    POINTS points of the ellipse, uniform in arclength: position, outward unit
-    normal, signed radius of curvature, and the angle parameter theta.
+    Rule 30 from one live cell: (rows, 2 half + 1) uint8 holding, for each live cell,
+    the neighbourhood code (1..7) that switched it on, 0 where dead. The seed gets 2.
     """
-    theta = np.linspace(0.0, 2 * np.pi, 200_001)
-    speed = np.hypot(SEMI_X * np.sin(theta), SEMI_Y * np.cos(theta))
-    arc = np.concatenate([[0.0], np.cumsum(0.5 * (speed[1:] + speed[:-1]))])
-    arc *= 2 * np.pi / 200_000
-    perimeter = arc[-1]
-    s = (np.arange(POINTS) + 0.5) * perimeter / POINTS
-    th = np.interp(s, arc, theta)
-    pos = np.stack([SEMI_X * np.cos(th), SEMI_Y * np.sin(th)], 1)
-    normal = np.stack([SEMI_Y * np.cos(th), SEMI_X * np.sin(th)], 1)
-    normal /= np.linalg.norm(normal, axis=1, keepdims=True)
-    rho = (SEMI_X**2 * np.sin(th) ** 2 + SEMI_Y**2 * np.cos(th) ** 2) ** 1.5 / (
-        SEMI_X * SEMI_Y
+    codes = np.zeros((rows, 2 * half + 1), np.uint8)
+    live = np.zeros(2 * half + 3, np.uint8)  # one dead cell of padding on each side
+    live[half + 1] = 1
+    codes[0, half] = 2
+    for g in range(1, rows):
+        code = 4 * live[:-2] + 2 * live[1:-1] + live[2:]
+        on = (RULE >> code) & 1
+        codes[g] = code * on
+        live[1:-1] = on
+    return codes
+
+
+def bgr(colour):
+    return np.array([int(colour[i : i + 2], 16) for i in (5, 3, 1)], np.uint8)
+
+
+def build_levels(codes, half):
+    """
+    One texture per entry of LEVELS: the cells needed while that level is in use,
+    drawn p x p pixels each, coloured by case. A frame uses
+    the smallest p >= its cell size, so it is never shrunk by more than ~1.5x.
+    """
+    lut = np.zeros((9, 3), np.uint8)
+    lut[0] = bgr(PAPER)
+    for code, colour in CASE_INK.items():
+        lut[code] = bgr(colour)
+    lut[7], lut[8] = bgr(LANE_ON), bgr(LANE_OFF)
+    span = FRONT_Y - APEX_Y
+    levels = {}
+    for i, p in enumerate(LEVELS):
+        smaller = LEVELS[i + 1] if i + 1 < len(LEVELS) else CELL_END
+        rows = min(codes.shape[0], int(np.ceil(span / smaller)) + 2)
+        cols = min(rows, int(np.ceil(WIDTH / 2 / smaller)) + 2)
+        index = codes[:rows, half - cols : half + cols + 1].copy()
+        lane = index[:, cols]
+        index[:, cols] = np.where(lane > 0, 7, 8)
+        texture = np.repeat(np.repeat(lut[index], p, axis=0), p, axis=1)
+        levels[p] = (texture, cols)
+    return levels
+
+
+def build_legend():
+    """The rule table, Wolfram style, with its binary digits: BGR image + alpha."""
+    image = np.zeros((HEIGHT, WIDTH, 3), np.uint8)
+    image[:] = bgr(PAPER)
+    alpha = np.zeros((HEIGHT, WIDTH), np.float32)
+    cell, gap = 33, 20
+    left = (WIDTH - (8 * 3 * cell + 7 * gap)) // 2
+    top = int(0.845 * HEIGHT)
+    ink = tuple(int(v) for v in bgr(PARENT))
+    edge = tuple(int(v) for v in (0.6 * bgr(PARENT) + 0.4 * bgr(PAPER)))
+    font = cv2.FONT_HERSHEY_DUPLEX
+    for i, code in enumerate(range(7, -1, -1)):
+        x0 = left + i * (3 * cell + gap)
+        for j in range(3):
+            on = (code >> (2 - j)) & 1
+            box = (x0 + j * cell + 2, top + 2), (
+                x0 + (j + 1) * cell - 2,
+                top + cell - 2,
+            )
+            cv2.rectangle(image, *box, ink if on else edge, -1 if on else 2)
+        out = (RULE >> code) & 1
+        box = (x0 + cell + 2, top + cell + 8), (x0 + 2 * cell - 2, top + 2 * cell + 4)
+        colour = tuple(int(v) for v in bgr(CASE_INK[code])) if out else edge
+        cv2.rectangle(image, *box, colour, -1 if out else 2)
+        digit = str(out)
+        (w, _), _ = cv2.getTextSize(digit, font, 0.9, 2)
+        cv2.putText(
+            image,
+            digit,
+            (x0 + (3 * cell - w) // 2, top + 2 * cell + 48),
+            font,
+            0.9,
+            ink,
+            2,
+            cv2.LINE_AA,
+        )
+    title = "RULE 30"
+    (w, _), _ = cv2.getTextSize(title, font, 1.4, 2)
+    cv2.putText(
+        image, title, ((WIDTH - w) // 2, top - 34), font, 1.4, ink, 2, cv2.LINE_AA
     )
-    return pos, normal, rho, th, perimeter
+    diff = np.abs(image.astype(np.int16) - bgr(PAPER).astype(np.int16)).max(axis=2)
+    alpha[:] = (diff > 0).astype(np.float32)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), 0.6)
+    alpha = np.clip(alpha * 1.5, 0, 1)
+    y0, y1 = top - 90, top + 2 * cell + 70
+    return image[y0:y1].astype(np.float32), alpha[y0:y1, :, None], (y0, y1)
 
 
-def evolute():
+def soundtrack(centre, style_name, rng):
     """
-    POINTS points of the evolute P - rho N, uniform in its own arclength, with
-    the radius of curvature rho of the rim point each one belongs to.
-    """
-    theta = np.linspace(0.0, 2 * np.pi, 200_001)
-    a2s, b2c = SEMI_X**2 * np.sin(theta) ** 2, SEMI_Y**2 * np.cos(theta) ** 2
-    rho = (a2s + b2c) ** 1.5 / (SEMI_X * SEMI_Y)
-    c = SEMI_Y**2 - SEMI_X**2
-    ex = -c / SEMI_X * np.cos(theta) ** 3  # the ellipse's evolute (an "astroid")
-    ey = c / SEMI_Y * np.sin(theta) ** 3
-    arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(ex), np.diff(ey)))])
-    s = (np.arange(POINTS) + 0.5) * arc[-1] / POINTS
-    th = np.interp(s, arc, theta)
-    pts = np.stack([np.interp(th, theta, ex), np.interp(th, theta, ey)], 1)
-    return pts, np.interp(th, theta, rho), arc[-1]
-
-
-def ripple_amplitudes(rng):
-    """Weak ripples with a little variety, and STRONG bright ones spread round the loop."""
-    amp = rng.uniform(0.25, 0.45, EMISSIONS)
-    while True:
-        strong = np.sort(rng.choice(EMISSIONS, STRONG, replace=False))
-        gaps = np.diff(np.r_[strong, strong[0] + EMISSIONS])
-        if gaps.min() >= STRONG_GAP:
-            break
-    amp[strong] = rng.uniform(1.2, 1.4, STRONG)
-    return amp, strong
-
-
-def soundtrack(amp, strong, style_name, rng):
-    """
-    Bamboo flute over plucked drops; a loop, so every tail wraps.
-
-    Ripple e leaves the rim at e * DURATION / EMISSIONS: a soft high pluck,
-    velocity from its amplitude, panned alternately. A ripple travelled d
-    folds where d equals the local radius of curvature, so its cusps are born
-    at d = rho_min = SEMI_X^2 / SEMI_Y (the star's top and bottom tips) and
-    die at d = rho_max = SEMI_Y^2 / SEMI_X (its side tips). Each bright ripple
-    holds a flute note over exactly that span, pitched by MELODY. A quiet low
-    pad on the root and fifth keeps the room breathing.
+    A one-shot chiptune at BPM (8 bars), read off the middle column `centre` (its bits
+    by generation). At each step time tau, g = the newest row then (generations(tau));
+    the three newest middle bits c[g], c[g-1], c[g-2] form a number 0..7 that picks
+    the lead's degree above the bar's chord (MELODY), louder when c[g] = 1. Bars 1-4
+    in 8ths, 5-6 in 16ths as the growth races. Bar 7 (the spotlight on the column)
+    plays the column itself in 16ths: a note for each 1, a rest for each 0, from the
+    rows reached then. Triangle bass from bar 2, noise hi-hat whose level follows
+    the birth rate (log rows per second), kick and noise snare from bar 3. Bar 8, when
+    the zoom stops, is the home chord held with the bass, ringing to the end.
     """
     style = STYLES[style_name]
-    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    chip = style_name == "chiptune"
+    scale = Scale(int(rng.choice(style.roots)), MODE if chip else style.mode)
+    chords = PROGRESSIONS[CHORDS]
+    kw = dict(circular=False)
+    bar = 4 * beat(BPM)
     track = audio.silence(DURATION)
-    period = DURATION / EMISSIONS
-    rho_min, rho_max = SEMI_X**2 / SEMI_Y, SEMI_Y**2 / SEMI_X
-    born, held = rho_min / SPEED, (rho_max - rho_min) / SPEED
+    lead = audio.silence(DURATION)
 
-    for e in range(EMISSIONS):
-        degree = 7 + (e * 3) % 5
-        drop = audio.pluck(scale.hz(degree), 0.15 + 0.1 * float(amp[e]), 1.5)
-        side = 0.45 if e % 2 else -0.45
-        audio.add(track, audio.pan(audio.lowpass(drop, 3500.0), side), e * period)
+    def lead_note(midi, velocity, length):
+        freq = float(audio.midi_to_hz(midi))
+        if chip:
+            return audio.chip(freq, velocity, length, DUTY)
+        return style.voice(freq, velocity)
 
-    for k, e in enumerate(strong):
-        degree = MELODY[k % len(MELODY)]
-        if style.voice is audio.flute:
-            note = audio.flute(scale.hz(degree), 0.55, held)
-        else:
-            note = style.voice(scale.hz(degree), 0.55)
-        audio.add(track, audio.pan(note, 0.0), e * period + born)
+    def bass_note(freq, velocity, length):
+        if chip:
+            return audio.chip_bass(freq, velocity, length)
+        return style.bass(freq, velocity)
 
-    for semitones in (0, 7):
-        hz = float(audio.midi_to_hz(scale.root - 24 + semitones))
-        audio.add(track, audio.pad(hz, DURATION, 0.16, 2.0, 2.0, 0.3), 0.0)
+    def bit(g):
+        return int(centre[g]) if 0 <= g < len(centre) else 0
+
+    rate = np.gradient(generations(np.linspace(0, ZOOM_END, 400)), ZOOM_END / 399)
+    pour = np.log1p(np.maximum(rate, 0))
+    pour = (pour - pour.min()) / max(np.ptp(pour), 1e-9)
+
+    notes = 0
+    for b in range(7):
+        sub = 2 if b < 4 else 4
+        step = beat(BPM) / sub
+        root = chords[b % len(chords)]
+        for k in range(4 * sub):
+            when = b * bar + k * step
+            g = int(generations(when))
+            if b < 6:
+                value = 4 * bit(g) + 2 * bit(g - 1) + bit(g - 2)
+                degree = root + MELODY[value]
+                velocity = 0.26 + 0.14 * bit(g)
+                play = True
+            else:  # the column itself, one bit per 16th, newest rows first
+                value = bit(g - k)
+                degree = root + MELODY[(k * 3) % 8]
+                velocity = 0.36
+                play = value == 1
+            if play:
+                midi = scale.note(degree) + (12 if b >= 4 else 0)
+                note = lead_note(midi, velocity, 0.8 * step)
+                audio.add(lead, audio.pan(note, 0.2 * (-1) ** k), when, **kw)
+                notes += 1
+            level = float(np.interp(when, np.linspace(0, ZOOM_END, 400), pour))
+            hat = audio.chip_noise(0.06 + 0.22 * level, 0.025, 9000.0)
+            audio.add(track, audio.pan(hat, 0.3), when, **kw)
+        for q in range(8 if b >= 1 else 0):  # 8th-note bass, root / octave
+            when = b * bar + q * beat(BPM) / 2
+            octave = -2 if q % 2 == 0 else -1
+            bass = bass_note(scale.hz(root, octave), 0.55, 0.4 * beat(BPM))
+            audio.add(track, bass, when, **kw)
+        for q in range(4 if b >= 2 else 0):
+            when = b * bar + q * beat(BPM)
+            if q % 2 == 0:
+                audio.add(track, audio.kick(0.45, 72.0), when, **kw)
+            else:
+                audio.add(track, audio.chip_noise(0.45, 0.09, 2200.0), when, **kw)
+    lead = audio.delay(lead, 0.75 * beat(BPM), 0.25, 0.2, circular=False)
+    track += lead
+
+    # Bar 8: the zoom stops and the home chord rings.
+    land = 7 * bar
+    ring = DURATION - land - 0.15
+    for degree, side in ((0, 0.0), (2, -0.3), (4, 0.3), (7, 0.0)):
+        note = lead_note(scale.note(degree, 1), 0.3, ring)
+        audio.add(track, audio.pan(note, side), land, **kw)
+    audio.add(track, bass_note(scale.hz(0, -2), 0.65, ring), land, **kw)
+    audio.add(track, audio.kick(0.5, 60.0), land, **kw)
 
     logger.info(
-        f"Soundtrack: {style_name}, root MIDI {scale.root}, flute held {held:.2f} s "
-        f"from {born:.2f} s after each bright ripple"
+        f"Soundtrack: {style_name}, root MIDI {scale.root}, {notes} lead notes, "
+        f"home chord at {land:.3f} s"
     )
-    return audio.master(style.room(track, rng))
+    track = audio.lowpass(
+        style.room(track, rng, circular=False), 9000.0, circular=False
+    )
+    audio.fade(track, 0.0, FADE_OUT)
+    return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Parallel curves (wavefronts) of an ellipse, a loop.
+    Wolfram's elementary cellular automaton Rule 30 grown from a single live cell.
 
-    The rim is the ellipse (SEMI_X cos th, SEMI_Y sin th), sampled with POINTS
-    points uniform in arclength. A ripple that has travelled d inwards is
-    X = P - d N (N the outward unit normal): the parallel curve at distance
-    d, i.e. the wavefront of light leaving the rim along its normals. Its
-    length element is J = 1 - d / rho times the rim's (rho the radius of
-    curvature), so it folds into cusps where d = rho, and those cusps lie on
-    the evolute P - rho N, the four-cusped "astroid" of the ellipse.
+    Row g + 1 is computed from row g alone: the new cell at x is bit k of 30 (binary
+    00011110), where k = 4 l + 2 c + r reads the three cells above it. The whole
+    history, about 650 generations, is precomputed once (a few ms of NumPy) and each live
+    cell keeps the code k that switched it on (1, 2, 3 or 4): its colour (CASE_INK).
+    The middle column, the sequence Wolfram used as a random-number generator, is the
+    teal lane.
 
-    A ripple leaves the rim every DURATION / EMISSIONS s and moves at SPEED,
-    so ripple e has d = SPEED (tau - e DURATION / EMISSIONS); a ripple lives
-    REACH / SPEED < DURATION s, and emission indices are taken mod EMISSIONS,
-    so the loop closes exactly. `settings.rng` draws each ripple's amplitude
-    and which STRONG ripples are bright (that is all the seed changes).
+    Time drives a camera, not a simulation. The newest row's depth below the apex
+    eases from one cell to FRONT_Y - APEX_Y px over FRONT_TIME s while the cell size
+    holds at CELL_START for HOLD s, then log-zooms (smoothstep) to CELL_END by
+    ZOOM_END (the downbeat of bar 8); the generation count G(t) is depth / cell size.
+    Each frame is a pure function of t (one-shot, t = frame / (FRAME_COUNT - 1)):
+    pick the mip texture with the smallest p px/cell >= the cell size (LEVELS,
+    prebuilt), cv2.warpAffine it into place (bilinear), draw paper seams
+    between big cells in screen space (so they fade smoothly), reveal rows
+    up to G (the newest row fades in), and overlay the middle column as a 5 px lane (12 px in the spotlight)
+    once cells shrink below 6 px (its bits averaged per pixel row). The rule
+    table is shown at the bottom for the first 2.6 s; from SPOT everything but the
+    lane dims; a static paper grain (settings.rng) is multiplied in; the last FADE_OUT
+    s fade to paper. Rendered on the render_frames thread pool.
 
-    Rendering (torch, GPU when available): every live ripple's points are
-    splatted bilinearly with equal weight per unit of rim length, so the
-    brightness of a front is its ray density, proportional to 1 / |J|: the
-    folds blaze on their own and trace the evolute. Colour is jade where
-    J > 0 and coral where J < 0 (the point has passed its centre of
-    curvature), mixed over |J| < FOLD_WIDTH. Near a fold each point is further
-    brightened by min(FOLD_CAP, |J|^-FOLD_BOOST). The evolute itself (closed form
-    (-(a^2-b^2)/b cos^3 th, (a^2-b^2)/a sin^3 th)) is drawn faintly, and each
-    ripple lights the evolute points with rho <= d with an exp(-(d - rho) /
-    SPARK_TRAIL) tail: sparks riding its cusps along the star. A faint rim, two-scale bloom,
-    exponential tone mapping. The soundtrack is `soundtrack`; the posted
-    one used --seed 0 (audio seed 0).
+    Sound: `soundtrack`, from the same middle-column bits and G(t). The seed only sets
+    the paper grain and (through settings.audio_rng) the key; the posted soundtrack
+    uses --seed 0, the default.
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
-    amp, strong = ripple_amplitudes(rng)
-    logger.info(f"Bright ripples: {strong.tolist()}")
 
-    device = select_device()
-    f32 = dict(device=device, dtype=torch.float32)
-    pos, normal, rho, _, perimeter = rim()
-    weight = perimeter / POINTS  # rim length per point: a J = 1 front sums ~1 per px
-    px0 = torch.tensor(CENTRE[0] + pos[:, 0], **f32)
-    py0 = torch.tensor(CENTRE[1] - pos[:, 1], **f32)
-    nx = torch.tensor(normal[:, 0], **f32)
-    ny = torch.tensor(-normal[:, 1], **f32)
-    inv_rho = torch.tensor(1.0 / rho, **f32)
-    before = torch.tensor(_rgb(BEFORE), **f32)
-    after = torch.tensor(_rgb(AFTER), **f32)
-    background = torch.tensor(_rgb(BACKGROUND), **f32)
+    rows = int(np.ceil(generations(ZOOM_END))) + 3
+    half = rows + 2
+    codes = automaton(rows, half)
+    centre = (codes[:, half] > 0).astype(np.uint8)
+    logger.info(
+        f"Rule {RULE}: {rows} generations, middle column {centre.mean():.3f} ones"
+    )
 
-    soft = gaussian_kernel(SOFT, device)
-    rim_canvas = torch.zeros(HEIGHT, WIDTH, 3, **f32)
-    splat(
-        rim_canvas,
-        px0,
-        py0,
-        (RIM_LIGHT * weight) * before.expand(POINTS, 3).contiguous(),
-    )
-    star, star_rho, star_length = evolute()
-    star_weight = star_length / POINTS
-    sx = torch.tensor(CENTRE[0] + star[:, 0], **f32)
-    sy = torch.tensor(CENTRE[1] - star[:, 1], **f32)
-    star_rho = torch.tensor(star_rho, **f32)
-    white = torch.ones(3, **f32)
-    spark_colour = 0.5 * (before + after) + 0.5 * white
-    splat(
-        rim_canvas,
-        sx,
-        sy,
-        (STAR_LIGHT * star_weight) * spark_colour.expand(POINTS, 3).contiguous(),
-    )
-    canvas = torch.zeros(HEIGHT, WIDTH, 3, **f32)
-    period = DURATION / EMISSIONS
+    grain = rng.normal(0.0, 1.0, (HEIGHT, WIDTH)).astype(np.float32)
+    grain = cv2.GaussianBlur(grain, (0, 0), 0.9)
+    grain = 1.0 + GRAIN * grain / grain.std()
+    grain = grain[..., None]
+
+    if not settings.audio_only:
+        levels = build_levels(codes, half)
+        legend, legend_alpha, (ly0, ly1) = build_legend()
+        logger.info(
+            f"Textures: {sum(t.nbytes for t, _ in levels.values()) / 2**20:.0f} MB"
+        )
+    paper = bgr(PAPER).astype(np.float32)
+    lane_on = bgr(LANE_ON).astype(np.float32)
+    lane_off = bgr(LANE_OFF).astype(np.float32)
+    ones = np.concatenate([[0.0], np.cumsum(centre, dtype=np.float64)])
+    ys = np.arange(HEIGHT, dtype=np.float64)
+    cx = WIDTH / 2
 
     def render(frame):
-        tau = frame / FRAME_COUNT * DURATION
-        canvas.copy_(rim_canvas)
-        newest = int(np.floor(tau / period))
-        oldest = int(np.ceil((tau - REACH / SPEED) / period))
-        for e in range(oldest, newest + 1):
-            d = SPEED * (tau - e * period)
-            if d <= 0 or d >= REACH:
-                continue
-            level = float(amp[e % EMISSIONS])
-            level *= float(smoothstep(d / FADE_IN))
-            level *= float(smoothstep((1 - d / REACH) / FADE_OUT))
-            if level <= 0:
-                continue
-            jac = 1.0 - d * inv_rho
-            mix = (0.5 - 0.5 * torch.tanh(jac / FOLD_WIDTH))[:, None]
-            colour = (1 - mix) * before + mix * after
-            boost = jac.abs().clamp_min(1e-6) ** -FOLD_BOOST
-            colour = colour * boost.clamp_max(FOLD_CAP)[:, None]
-            splat(canvas, px0 - d * nx, py0 - d * ny, (level * weight) * colour)
-            # The cusps of this ripple sit where rho = d; light the star behind them.
-            behind = d - star_rho
-            trail = torch.exp(-behind / SPARK_TRAIL) * (behind >= 0)
-            trail = trail * (behind < 6 * SPARK_TRAIL)
-            spark = (SPARK_LIGHT * level * star_weight) * trail
-            splat(canvas, sx, sy, spark[:, None] * spark_colour)
-        light = blur(canvas, soft)
-        glow = sum(g * wide_blur(canvas, s, f) for s, f, g in GLOWS)
-        image = 1 - torch.exp(-EXPOSURE * (light + glow).clamp_min(0) ** GAMMA)
-        return (background + image).clamp(0, 1) * 255.0
+        seconds = frame / (FRAME_COUNT - 1) * DURATION
+        s = float(cell_size(seconds))
+        grown = float(generations(seconds))
+        p = next((q for q in reversed(LEVELS) if q >= s), LEVELS[0])
+        texture, cols = levels[p]
+        k = s / p
+        matrix = np.array(
+            [
+                [k, 0, cx - (cols + 0.5) * s + 0.5 * k - 0.5],
+                [0, k, APEX_Y + 0.5 * k - 0.5],
+            ]
+        )
+        image = cv2.warpAffine(
+            texture,
+            matrix,
+            (WIDTH, HEIGHT),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=tuple(float(v) for v in paper),
+        ).astype(np.float32)
 
-    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
+        # Paper seams between cells while they are big (antialiased, fading out).
+        strength = np.clip((GAP * s - 1.0) / 2.0, 0.0, 1.0)
+        if strength > 0:
+            f = ((np.arange(WIDTH) + 0.5 - cx) / s + 0.5) % 1.0
+            inside_x = np.clip((np.minimum(f, 1 - f) - GAP / 2) * s + 0.5, 0, 1)
+            f = ((ys + 0.5 - APEX_Y) / s) % 1.0
+            inside_y = np.clip((np.minimum(f, 1 - f) - GAP / 2) * s + 0.5, 0, 1)
+            keep = 1 - strength * (1 - np.outer(inside_y, inside_x).astype(np.float32))
+            image = paper + (image - paper) * keep[..., None]
+
+        # The spotlight: everything dims towards paper, then the lane is drawn on top.
+        spot = np.clip((seconds - SPOT[0]) / (SPOT[1] - SPOT[0]), 0, 1)
+        spot = spot * spot * (3 - 2 * spot)
+        if spot > 0:
+            image = paper + (image - paper) * (1 - SPOT_DIM * spot)
+
+        # The middle column as a lane ~5 px wide, bits averaged per pixel row.
+        lane = np.clip((6.0 - s) / 2.0, 0.0, 1.0)
+        if lane > 0 or spot > 0:
+            top = np.clip((ys - APEX_Y) / s, 0, grown)
+            bottom = np.clip((ys + 1 - APEX_Y) / s, 0, grown)
+            filled = np.interp(bottom, np.arange(len(ones)), ones) - np.interp(
+                top, np.arange(len(ones)), ones
+            )
+            value = filled / np.maximum(bottom - top, 1e-9)
+            colour = lane_off + (lane_on - lane_off) * value[:, None]
+            weight = max(lane, spot) * (ys >= APEX_Y)[:, None]
+            reach = LANE_HALF[0] + (LANE_HALF[1] - LANE_HALF[0]) * spot  # px
+            for x in range(int(cx - reach) - 1, int(cx + reach) + 2):
+                cover = np.clip(min(x + 1, cx + reach) - max(x, cx - reach), 0, 1)
+                if cover > 0:
+                    image[:, x] += weight * cover * (colour - image[:, x])
+
+        # Reveal rows up to the front; the newest one fades in.
+        r = (ys + 0.5 - APEX_Y) / s
+        if s >= 2.0:
+            alpha = np.clip(grown - np.floor(r), 0.0, 1.0)
+        else:
+            alpha = np.clip((grown - r) * s, 0.0, 1.0)
+        image = paper + (image - paper) * alpha[:, None, None].astype(np.float32)
+
+        show = 1.0 - np.clip(
+            (seconds - LEGEND_FADE[0]) / (LEGEND_FADE[1] - LEGEND_FADE[0]), 0, 1
+        )
+        if show > 0:
+            region = image[ly0:ly1]
+            region += show * legend_alpha * (legend - region)
+
+        image *= grain
+        fade = np.clip((DURATION - seconds) / FADE_OUT, 0.0, 1.0)
+        if fade < 1:
+            image = paper + (image - paper) * fade
+        return np.clip(image, 0, 255).astype(np.uint8)
+
+    render_frames(settings, render, FRAME_COUNT)
     tag = settings.audio_tag
-    track = soundtrack(amp, strong, tag if tag in STYLES else STYLE, settings.audio_rng)
+    track = soundtrack(centre, tag if tag in STYLES else STYLE, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

@@ -1,403 +1,409 @@
 """
-The Knight's Tour
+The Cat That Always Comes Back
 
-A chess knight visits all 64 squares of a chessboard exactly once, then jumps
-back to where it started: a closed knight's tour, a loop it can run forever.
+This is Arnold's cat map, the textbook example of chaos. Take a 322 × 322 pixel
+picture of a cat, shear it up, shear it sideways, and wrap whatever spills off
+one edge back in at the other: (x, y) → (2x + y, x + y) mod 322. Neighbouring
+pixels fly apart, and within a few steps the cat is pure static.
 
-Join every pair of squares a knight move apart and you get the knight's graph,
-the faint web behind the board. The tour is one loop through that network that
-touches every square once, a Hamiltonian cycle. Euler studied them in 1759; in
-1997 a computer counted all the closed tours: 13,267,364,410,532.
+Yet nothing is lost. There are only so many pixels, so the shuffle must
+repeat: after 12 steps the cat returns upside down, after 24 it is back
+exactly. This chaos is not randomness, just order scrambled beyond recognition.
 
-This one is special: turn the board upside down and it looks the same, so a
-second knight half a tour behind always mirrors the first.
+Listen: a slow chord brightens with the static, a soft piano note climbs with
+every step, and each return lands on a rolled chord, minor upside down, home
+when the cat is back.
 
-Listen: a slow chord moves every eight jumps, and a kalimba chimes when the
-knights land near the corners and edges, where squares have the fewest moves.
-
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#knightstour #graphtheory #mathart #generativeart #randomplots
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#arnoldscatmap #chaostheory #mathart #generativeart #randomplots
 """
 
 import gc
 
 import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
 from loguru import logger
 
 from common import audio
+from common.gpu import select_device
 from common.image_processing import ImageProcessingSettings
-from common.music import Scale
+from common.music import STYLES, Scale
 from common.video import (
     FPS,
     HEIGHT,
     WIDTH,
     blit_mask,
     frame_count,
-    hex_to_bgr,
     latex_mask,
-    palette_lut,
     render_frames,
     smoothstep,
 )
 
-DURATION = 15.0  # seconds, one loop
+DURATION = 15.0  # seconds, an exact loop
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The tour ----------------------------------------------------------------------
-N = 8  # board size
-KNIGHT = ((1, 2), (2, 1), (-1, 2), (-2, 1), (1, -2), (2, -1), (-1, -2), (-2, -1))
-HOPS = 32  # each knight makes half the tour per loop (the other half is its mirror)
-HOP_TIME = DURATION / HOPS  # 0.469 s per jump
-MOVE = 0.6  # fraction of a hop spent in the air; the rest is a pause on the square
-SEARCH_LIMIT = 200_000  # backtracking nodes before a restart with new tie-breaks
+# --- The map -----------------------------------------------------------------------
+N = 322  # grid size; the cat map M = [[2, 1], [1, 1]] has period 24 mod 322
+CAT = np.array([[2, 1], [1, 1]], dtype=np.int64)
+HOLD = 1.0  # s of rest on the cat and on the upside-down cat
+SLOW = 1.3  # steps near a return last up to 1 + SLOW times as long as the others
+SHEAR = 0.44  # fraction of a step each of the two shears takes
 
-# --- Layout (px) -------------------------------------------------------------------
-CELL = 112
-BOARD = N * CELL  # 896
-BOARD_X, BOARD_Y = (WIDTH - BOARD) // 2, (HEIGHT - BOARD) // 2
-PAD = 40  # the drawn region extends this far past the board (glow)
-TITLE_Y, SUBTITLE_Y = 300, 392
-FOOT_Y, FOOT2_Y = 1500, 1572
-
-# --- Look --------------------------------------------------------------------------
-BG_TOP, BG_BOTTOM = "#0b0d1c", "#04050a"
-SQUARES = ("#0d1022", "#12162c")  # dark and light squares, barely apart
-WEB = "#5260b0"  # the knight's graph, drawn faint
-WEB_ALPHA = 0.3
-TRAIL = ["#1a1d4a", "#2e4f96", "#5d93cf", "#a9d2f0", "#f4ecf6"]  # old -> fresh
-HEAD = "#ff8a5e"  # the knight, and the edge it is drawing
-TEXT, TEXT_DIM = "#ecebf4", "#9097bd"
-TAU = 7.0  # hops for a trail to fade by e
-FLOOR = 0.12  # brightness of the oldest trail
-CELL_GLOW = 1.4  # hops for a landed square to fade by e
-KNIGHT_R = 18.0  # px
-GLOW_SCALE, GLOW_SIGMA, GLOW = 4, 4.0, 1.1
+# --- Layout & look -----------------------------------------------------------------
+SS = 2  # supersampling
+SIDE = 1008  # px, the torus square
+LEFT, TOP = (WIDTH - SIDE) // 2, 380
+BG_TOP, BG_BOTTOM = "#141022", "#06050c"
+FRAME_LINE = "#3a3352"
+TEXT, TEXT_DIM, ACCENT = "#efe8dc", "#9a93b0", "#f2a03d"
 
 # --- Sound -------------------------------------------------------------------------
-ROOTS = range(50, 56)  # MIDI root of the chords (D3 .. G3)
-PROGRESSION = (0, 3, 5, 4)  # I IV vi V, one chord per 8 hops
-CHIME_DEGREE = 4  # landings on squares with at most this many knight moves chime
+LEADS = {"felt_piano": audio.piano, "harp": audio.pluck}  # --audio-only tag picks one
+LEAD = "felt_piano"
+ROOTS = (50, 52, 53)  # MIDI roots (D3, E3, F3) of the chords; the lead is an octave up
 
 
-def square_xy(square):
-    """Pixel centre of a square (0..63, row-major from the top-left)."""
-    r, c = divmod(square, N)
-    return BOARD_X + (c + 0.5) * CELL, BOARD_Y + (r + 0.5) * CELL
+def period(n: int = N) -> int:
+    """Smallest k with M^k = I mod n."""
+    power = np.eye(2, dtype=np.int64)
+    for k in range(1, 10 * n):
+        power = CAT @ power % n
+        if (power == np.eye(2, dtype=np.int64)).all():
+            return k
+    raise ValueError(n)
 
 
-def neighbours(square):
-    r, c = divmod(square, N)
-    return [
-        (r + dr) * N + c + dc
-        for dr, dc in KNIGHT
-        if 0 <= r + dr < N and 0 <= c + dc < N
-    ]
+STEPS = period()  # 24
+HALF = STEPS // 2  # M^12 = -I mod 322: the cat upside down
 
 
-def symmetric_tour(rng):
+def schedule():
     """
-    A closed knight's tour that maps onto itself under a half turn of the board
-    (square s -> 63 - s). Backtracking over the first half, p0 .. p31: each square
-    claims its mirror image too, and the half closes if p31 is a knight move from
-    63 - p0. The full tour is p0 .. p31, 63 - p0 .. 63 - p31. Moves are tried in
-    Warnsdorff order (fewest onward moves first), ties broken by random priorities.
+    Start time (s) of every step and its length. Time 0 is the middle of the rest on
+    the cat; the steps slow down near the two returns (k = 0, HALF, STEPS) and a rest
+    of HOLD sits at each.
     """
-    adjacency = [neighbours(s) for s in range(N * N)]
-    for attempt in range(100):
-        priority = rng.random(N * N)
-        start = int(rng.integers(N * N))
-        used = np.zeros(N * N, bool)
-        path = [start]
-        used[start] = used[63 - start] = True
-        nodes = 0
-
-        def options(square):
-            free = [q for q in adjacency[square] if not used[q]]
-            onward = [sum(not used[x] for x in adjacency[q]) for q in free]
-            return [q for _, _, q in sorted(zip(onward, priority[free], free))]
-
-        def extend():
-            nonlocal nodes
-            nodes += 1
-            if nodes > SEARCH_LIMIT:
-                return False
-            if len(path) == HOPS:
-                return (63 - path[0]) in adjacency[path[-1]]
-            for q in options(path[-1]):
-                path.append(q)
-                used[q] = used[63 - q] = True
-                if extend():
-                    return True
-                path.pop()
-                used[q] = used[63 - q] = False
-            return False
-
-        if extend():
-            logger.info(f"Symmetric tour found on attempt {attempt + 1}, {nodes} nodes")
-            return path + [63 - s for s in path]
-    raise RuntimeError("No symmetric tour found")
+    centres = np.arange(STEPS) + 0.5
+    near = np.minimum.reduce([abs(centres - r) for r in (0, HALF, STEPS)])
+    weight = 1 + SLOW * np.exp(-((near / 2.2) ** 2))
+    lengths = weight / weight.sum() * (DURATION - 2 * HOLD)
+    starts = np.empty(STEPS)
+    clock = HOLD / 2
+    for k in range(STEPS):
+        if k == HALF:
+            clock += HOLD
+        starts[k] = clock
+        clock += lengths[k]
+    return starts, lengths
 
 
-def hop_state(s):
-    """
-    Knight A's place at s hops into the loop: the hop index m and the eased
-    fraction u of that jump travelled (0 on take-off, 1 once landed).
-    """
-    m = int(np.floor(s)) % (2 * HOPS)
-    u = float(smoothstep((s - np.floor(s)) / MOVE))
-    return m, u
+def state(seconds, starts, lengths):
+    """(completed steps k, first shear s1, second shear s2) at a time in the loop."""
+    k = int(np.searchsorted(starts, seconds, side="right")) - 1
+    if k < 0:
+        return 0, 0.0, 0.0
+    tau = (seconds - starts[k]) / lengths[k]
+    if tau >= 1:  # resting after step k
+        return k + 1, 0.0, 0.0
+    s1 = float(smoothstep(tau / SHEAR))
+    s2 = float(smoothstep((tau - (1 - SHEAR)) / SHEAR))
+    return k, s1, s2
+
+
+def inverse_powers():
+    """M^-k mod N for k = 0 .. STEPS, as integer 2x2 matrices."""
+    inverse = np.array([[1, -1], [-1, 2]], dtype=np.int64) % N
+    out = [np.eye(2, dtype=np.int64)]
+    for _ in range(STEPS):
+        out.append(inverse @ out[-1] % N)
+    return np.array(out)
+
+
+def _rgb(colour: str):
+    return tuple(int(colour[i : i + 2], 16) for i in (1, 3, 5))
+
+
+def draw_cat(n: int = N) -> np.ndarray:
+    """The picture: a ginger cat's face on a dusk gradient, (n, n, 3) RGB uint8."""
+    big = 4  # draw at 4x and shrink, for clean edges at grid resolution
+    s = n * big / 322.0
+
+    def p(x, y):
+        return int(round(x * s)), int(round(y * s))
+
+    def r(a):
+        return int(round(a * s))
+
+    yy, xx = np.mgrid[0 : n * big, 0 : n * big] / (n * big)
+    top, bottom = np.array(_rgb("#2a7f8f")), np.array(_rgb("#3b1f5e"))
+    g = np.clip(0.65 * yy + 0.35 * xx, 0, 1)[..., None]
+    image = ((1 - g) * top + g * bottom).astype(np.uint8)
+    image = np.ascontiguousarray(image)
+    aa = cv2.LINE_AA
+
+    # A low moon behind, and a few stars.
+    cv2.circle(image, p(258, 62), r(40), _rgb("#f6e7b8"), -1, aa)
+    for x, y, a in (
+        (40, 40, 3),
+        (90, 22, 2),
+        (30, 120, 2),
+        (296, 150, 2),
+        (220, 20, 2),
+    ):
+        cv2.circle(image, p(x, y), r(a), _rgb("#fdf6dc"), -1, aa)
+
+    fur, dark, light = _rgb("#f08a24"), _rgb("#b4520f"), _rgb("#fbf1df")
+    pink, ink = _rgb("#f4a1ae"), _rgb("#1a1020")
+    # Ears.
+    for sign in (-1, 1):
+        outer = np.array(
+            [p(161 + sign * 112, 150), p(161 + sign * 92, 32), p(161 + sign * 36, 104)]
+        )
+        inner = np.array(
+            [p(161 + sign * 98, 132), p(161 + sign * 88, 56), p(161 + sign * 54, 106)]
+        )
+        cv2.fillPoly(image, [outer], fur, aa)
+        cv2.fillPoly(image, [inner], pink, aa)
+    # Head, cheeks and chin.
+    cv2.ellipse(image, p(161, 190), (r(118), r(100)), 0, 0, 360, fur, -1, aa)
+    cv2.ellipse(image, p(161, 248), (r(96), r(62)), 0, 0, 360, fur, -1, aa)
+    # Forehead stripes.
+    for dx, h in ((-26, 44), (0, 56), (26, 44)):
+        poly = np.array([p(161 + dx - 9, 96), p(161 + dx + 9, 96), p(161 + dx, 96 + h)])
+        cv2.fillPoly(image, [poly], dark, aa)
+    for sign in (-1, 1):  # cheek stripes
+        for dy in (0, 20):
+            poly = np.array(
+                [
+                    p(161 + sign * 118, 196 + dy),
+                    p(161 + sign * 116, 208 + dy),
+                    p(161 + sign * 78, 204 + dy),
+                ]
+            )
+            cv2.fillPoly(image, [poly], dark, aa)
+    # Muzzle.
+    for sign in (-1, 1):
+        cv2.ellipse(
+            image, p(161 + sign * 24, 238), (r(32), r(24)), 0, 0, 360, light, -1, aa
+        )
+    cv2.ellipse(image, p(161, 262), (r(30), r(18)), 0, 0, 360, light, -1, aa)
+    # Eyes: green, slit pupils, a highlight.
+    for sign in (-1, 1):
+        c = (161 + sign * 46, 172)
+        cv2.ellipse(image, p(*c), (r(25), r(29)), 0, 0, 360, ink, -1, aa)
+        cv2.ellipse(image, p(*c), (r(22), r(26)), 0, 0, 360, _rgb("#a6e05a"), -1, aa)
+        cv2.ellipse(image, p(*c), (r(5), r(22)), 0, 0, 360, ink, -1, aa)
+        cv2.circle(image, p(c[0] + 8, c[1] - 10), r(5), _rgb("#ffffff"), -1, aa)
+    # Nose and mouth.
+    nose = np.array([p(147, 218), p(175, 218), p(161, 234)])
+    cv2.fillPoly(image, [nose], pink, aa)
+    cv2.line(image, p(161, 234), p(161, 246), ink, r(2.5), aa)
+    cv2.ellipse(image, p(149, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
+    cv2.ellipse(image, p(173, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
+    # Whiskers.
+    for sign in (-1, 1):
+        for dy, ey in ((-6, -18), (2, 2), (10, 22)):
+            cv2.line(
+                image,
+                p(161 + sign * 50, 240 + dy),
+                p(161 + sign * 150, 240 + ey),
+                light,
+                r(2),
+                aa,
+            )
+    return cv2.resize(image, (n, n), interpolation=cv2.INTER_AREA)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    A closed knight's tour with half-turn symmetry, travelled forever by two knights
-    half a tour apart. A seamless 15 s loop.
+    Arnold's cat map on a 322 x 322 torus, as an exact loop. The picture is a grid of
+    N = 322 cells (a cat's face drawn with cv2). One step of the map is M = [[2, 1],
+    [1, 1]] = A·B with the shears B: (x, y) -> (x, y + x) and A: (x, y) -> (x + y, y),
+    mod N. M has period 24 mod 322 (Pisano-type period; 322 is the Lucas number L12)
+    and M^12 = -I, so the cat returns rotated by 180° halfway and exactly at the end.
 
-    The tour: a Hamiltonian cycle on the 8x8 knight's graph (168 edges, drawn faint)
-    found by backtracking with Warnsdorff ordering, constrained so that the tour is
-    invariant under the half turn s -> 63 - s (see symmetric_tour; tie-breaks and the
-    start square come from settings.rng, so every seed gives a different tour). The
-    second half of the tour is the mirror of the first, so knight B, 32 hops behind
-    knight A, is always A's mirror image.
+    Time: the loop's 15 s hold HOLD = 1 s on each return and spread the 24 steps over
+    the rest, longer near the returns (weight 1 + SLOW·exp(-(d/2.2)²), d = steps to
+    the nearest return). Within a step the two shears are animated continuously:
+    column i slides by s1·i cells, then row j by s2·j cells (smoothstep over SHEAR
+    of the step each), wrapping round the torus. A display point (u, v) in cell units
+    shows the cell x1 = ⌊u − s2⌊v⌋⌋, y1 = ⌊v − s1·x1⌋ of the image after k steps,
+    which is the cell M^-k (x1, y1) mod N of the original. Integer arithmetic, so
+    the map is exact and the loop closes bit for bit.
 
-    Time: t = frame / FRAME_COUNT in [0, 1), s = 32 t hops. Knight A is on hop
-    m = floor(s) from square p_m to p_{m+1}, with smoothstep easing over the first 60%
-    of each 0.469 s hop and a pause on the square after; B is on hop m + 32. After one
-    loop A stands where B started and vice versa, so the frame repeats exactly. Each
-    tour edge k has age (s - k - 0.6) mod 32 hops since a knight last drew it;
-    brightness FLOOR + (1 - FLOOR) exp(-age / 7) through an indigo-to-ice LUT. The edge
-    in flight is drawn coral from p_m to the knight. Landed squares glow and fade with
-    the same age. Knights are coral discs that swell mid-jump.
+    Rendering: one integer gather per 2x supersampled pixel of the square on the GPU
+    (torch), average-pooled to 1x and composited over a gradient with LaTeX text (a
+    step counter n, the map, a note at the halfway return), render_frames(parallel=
+    False). Nothing is random, so --seed does not change the picture.
 
-    Render: cv2 lines (LINE_AA, 4-bit subpixel) on a float32 crop of the board, plus a
-    glow (1/4-resolution Gaussian blur) of the light layer, over a precomputed
-    background (gradient, board, faint knight's graph, LaTeX text). Frames are pure
-    functions of t on the render_frames thread pool.
-
-    Sound (posted: --seed 0, no --audio-only tag, i.e. the "choir" variant of
-    ambient(), audio seed = seed, root F3): an ambient loop-periodic bed of pad and
-    "u" choir chords, I IV vi V in major, one chord per eight hops, with a kalimba
-    chime whenever the knights land on squares with at most four knight moves
-    (corner and edge regions): two tines for the pair of mirrored landings (pitch
-    by height on the board, pan by x), an octave doubled at the corners. Long
-    reverb and a hop-synced echo; circular throughout, master(loop=True).
+    Soundtrack (`soundtrack`, ambient Drone & pad with a felt-piano lead): pad and
+    "u" choir chords I, IV, vi, V on the step schedule, lowpass opening with the
+    scramble, one piano note per completed step (pitch by distance from the nearest
+    return), rolled vi / I chords plus a bell at the two returns, delay and a 5 s
+    reverb, all circular. `--audio-only harp` swaps the lead for a harp pluck. The
+    posted soundtrack is LEAD = "felt_piano" with --seed 0 (settings.audio_rng
+    picks root MIDI 52 and the room).
     """
     settings = settings or ImageProcessingSettings(1)
-    rng = settings.rng
+    device = select_device()
+    starts, lengths = schedule()
+    powers = torch.tensor(inverse_powers(), device=device)
+    logger.info(f"Cat map period mod {N}: {STEPS} steps, M^{HALF} = -I")
 
-    tour = symmetric_tour(rng)
-    points = np.array([square_xy(s) for s in tour])  # (64, 2) px, frame coords
-    degree = np.array([len(neighbours(s)) for s in range(N * N)])
+    def tensor(a, dtype=torch.float32):
+        return torch.tensor(np.asarray(a), device=device, dtype=dtype)
 
-    # --- Static background ------------------------------------------------------
-    top, bottom = np.array(hex_to_bgr(BG_TOP)), np.array(hex_to_bgr(BG_BOTTOM))
-    ramp = np.linspace(0, 1, HEIGHT, dtype=np.float32)[:, None, None]
-    background = np.broadcast_to(
-        (1 - ramp) * top + ramp * bottom, (HEIGHT, WIDTH, 3)
-    ).copy()
-    for r in range(N):
-        for c in range(N):
-            y0, x0 = BOARD_Y + r * CELL, BOARD_X + c * CELL
-            background[y0 : y0 + CELL, x0 : x0 + CELL] = hex_to_bgr(
-                SQUARES[(r + c) % 2]
-            )
-    web = np.zeros((HEIGHT, WIDTH), np.uint8)
-    for s in range(N * N):
-        for q in neighbours(s):
-            if q > s:
-                a, b = ((np.array(square_xy(x)) * 16).astype(int) for x in (s, q))
-                cv2.line(web, tuple(a), tuple(b), 255, 1, cv2.LINE_AA, shift=4)
-    alpha = WEB_ALPHA * web.astype(np.float32)[..., None] / 255
-    background += alpha * (np.array(hex_to_bgr(WEB), np.float32) - background)
+    cat = tensor(draw_cat().reshape(-1, 3))
+    px = SIDE * SS
+    centres = (torch.arange(px, device=device, dtype=torch.float64) + 0.5) * N / px
+    v, u = torch.meshgrid(centres, centres, indexing="ij")
+    v_cell = torch.floor(v)
 
+    # Background with the static text, RGB 0..255.
+    rows = np.linspace(0, 1, HEIGHT)[:, None, None]
+    top, bottom = np.array(_rgb(BG_TOP)), np.array(_rgb(BG_BOTTOM))
+    background = ((1 - rows) * top + rows * bottom) * np.ones((1, WIDTH, 1))
+    background = background.astype(np.float32)
+    line = np.array(_rgb(FRAME_LINE), np.float32)
+    background[TOP - 3 : TOP + SIDE + 3, LEFT - 3 : LEFT + SIDE + 3] = line
+    text, dim, accent = (
+        np.array(_rgb(c), np.float32) for c in (TEXT, TEXT_DIM, ACCENT)
+    )
+    title = r"$\mathrm{Arnold}\text{'}\mathrm{s\ cat\ map}$"
     for tex, size, y, colour in (
-        (r"$\mathrm{Every\ square\ once{,}\ then\ home}$", 64, TITLE_Y, TEXT),
+        (title, 74, 92, text),
+        (r"$(x{,}\,y)\ \mapsto\ (2x+y{,}\ x+y)\ \mathrm{mod}\ 322$", 54, 192, accent),
         (
-            r"$\mathrm{a\ closed\ tour\ of\ the\ knight\ graph}$",
+            r"$\mathrm{on\ a}\ 322\times 322\ \mathrm{grid{,}\ the\ cat\ returns\ after}\ 24\ \mathrm{steps}$",
             42,
-            SUBTITLE_Y,
-            TEXT_DIM,
-        ),
-        (r"$13{,}267{,}364{,}410{,}532\ \mathrm{such\ tours}$", 44, FOOT_Y, TEXT),
-        (
-            r"$\mathrm{this\ one\ looks\ the\ same\ upside\ down}$",
-            40,
-            FOOT2_Y,
-            TEXT_DIM,
+            284,
+            dim,
         ),
     ):
-        mask = latex_mask(tex, size)
-        blit_mask(background, mask, WIDTH // 2, y, hex_to_bgr(colour), anchor="centre")
-    background_u8 = np.clip(background, 0, 255).astype(np.uint8)
-
-    # The drawn region: the board plus a margin, in its own coordinates.
-    cx0, cy0 = BOARD_X - PAD, BOARD_Y - PAD
-    side = BOARD + 2 * PAD
-    crop = background[cy0 : cy0 + side, cx0 : cx0 + side].copy()
-    local = (points - [cx0, cy0]) * 16  # 4-bit subpixel coordinates
-    lut = palette_lut(TRAIL, 256)[:, ::-1] * 255  # BGR
-    head = np.array(hex_to_bgr(HEAD), np.float32)
-    head_c = tuple(float(v) for v in head)
-    cell_xy = [
-        (int(points[j, 0]) - cx0 - CELL // 2, int(points[j, 1]) - cy0 - CELL // 2)
-        for j in range(2 * HOPS)
-    ]
-
-    def line(layer, a, b, colour, thickness):
-        cv2.line(
-            layer,
-            (int(a[0]), int(a[1])),
-            (int(b[0]), int(b[1])),
-            tuple(float(v) for v in colour),
-            thickness,
-            cv2.LINE_AA,
-            shift=4,
+        blit_mask(
+            background, latex_mask(tex, size), WIDTH // 2, y, colour, anchor="centre"
         )
+    background = tensor(background)
+
+    def layer(tex, size, y, colour):
+        """A text mask as (alpha, premultiplied colour) tensors and its box."""
+        mask = latex_mask(tex, size)
+        h, w = mask.shape
+        x = WIDTH // 2 - w // 2
+        alpha = tensor(mask[..., None])
+        return alpha, alpha * tensor(colour), (y, y + h, x, x + w)
+
+    counters = [layer(rf"$n = {k}$", 76, 1432, text) for k in range(STEPS + 1)]
+    upside = layer(r"$\mathrm{halfway{,}\ upside\ down}$", 46, 1540, accent)
+    half_time = starts[HALF] - HOLD / 2  # middle of the halfway rest
+
+    def put(image, overlay, a=1.0):
+        alpha, colour, (y0, y1, x0, x1) = overlay
+        region = image[y0:y1, x0:x1]
+        region.mul_(1 - a * alpha).add_(a * colour)
 
     def render(frame):
-        t = frame / FRAME_COUNT
-        s = HOPS * t
-        m, u = hop_state(s)
-        light = np.zeros((side, side, 3), np.float32)
-
-        # Squares glow as a knight lands on them (square k + 1 at the end of hop k).
-        age = (s - np.arange(2 * HOPS) - MOVE) % HOPS
-        for k in np.flatnonzero(age < 6 * CELL_GLOW):
-            x, y = cell_xy[(k + 1) % (2 * HOPS)]
-            glow = 0.12 * np.exp(-age[k] / CELL_GLOW) * min(1.0, age[k] / 0.12)
-            light[y + 3 : y + CELL - 3, x + 3 : x + CELL - 3] += glow * lut[200]
-
-        # Trail edges, oldest first so fresh ones draw on top.
-        strength = FLOOR + (1 - FLOOR) * np.exp(-age / TAU)
-        for k in np.argsort(-age):
-            colour = lut[int(255 * strength[k])] * (0.25 + 0.75 * strength[k])
-            line(light, local[k], local[(k + 1) % (2 * HOPS)], colour, 3)
-
-        # The two knights and the edge each is drawing right now.
-        lift = np.sin(np.pi * u)
-        # During the pause on the square the coral edge cools into the colour it
-        # has as a finished trail edge at the start of the next hop: no pop.
-        settle = float(smoothstep((s - np.floor(s) - MOVE) / (1 - MOVE)))
-        done = FLOOR + (1 - FLOOR) * np.exp(-(1 - MOVE) / TAU)
-        done = lut[int(255 * done)] * (0.25 + 0.75 * done)
-        edge = head + settle * (done - head)
-        for k in (m, (m + HOPS) % (2 * HOPS)):
-            a, b = local[k], local[(k + 1) % (2 * HOPS)]
-            pos = a + u * (b - a)
-            if u > 0:
-                line(light, a, pos, edge, 3)
-            radius = KNIGHT_R * (1 + 0.45 * lift)
-            centre = (int(pos[0]), int(pos[1]))
-            cv2.circle(light, centre, int(16 * radius), head_c, -1, cv2.LINE_AA, 4)
-            cv2.circle(
-                light,
-                centre,
-                int(16 * radius * 0.4),
-                (235.0, 240.0, 255.0),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
-
-        small = cv2.resize(
-            light,
-            (side // GLOW_SCALE, side // GLOW_SCALE),
-            interpolation=cv2.INTER_AREA,
-        )
-        small = cv2.GaussianBlur(small, (0, 0), GLOW_SIGMA)
-        glow = cv2.resize(small, (side, side), interpolation=cv2.INTER_LINEAR)
-        region = crop + light + GLOW * glow
-        image = background_u8.copy()
-        image[cy0 : cy0 + side, cx0 : cx0 + side] = np.clip(region, 0, 255)
+        seconds = frame / FRAME_COUNT * DURATION
+        k, s1, s2 = state(seconds, starts, lengths)
+        x1 = torch.remainder(torch.floor(u - s2 * v_cell), N).long()
+        y1 = torch.remainder(torch.floor(v - s1 * x1), N).long()
+        m = powers[k % STEPS]
+        x0 = (m[0, 0] * x1 + m[0, 1] * y1) % N
+        y0 = (m[1, 0] * x1 + m[1, 1] * y1) % N
+        square = cat[(y0 * N + x0).reshape(-1)].reshape(px, px, 3)
+        square = F.avg_pool2d(square.permute(2, 0, 1)[None], SS)[0].permute(1, 2, 0)
+        image = background.clone()
+        image[TOP : TOP + SIDE, LEFT : LEFT + SIDE] = square
+        put(image, counters[k])
+        a = float(smoothstep((1.6 - abs(seconds - half_time)) / 0.3))
+        if a > 0:
+            put(image, upside, a)
         return image
 
-    render_frames(settings, render, FRAME_COUNT)
-    track = ambient(tour, degree, settings.audio_tag, settings.audio_rng)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
+    lead = settings.audio_tag if settings.audio_tag in LEADS else LEAD
+    track = soundtrack(lead, starts, lengths, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
 
-def ambient(tour, degree, variant, rng):
-    """
-    The posted soundtrack: a sustained bed with sparse chimes, all loop-periodic.
+def scramble(seconds, starts, lengths):
+    """How far the picture is from a return, 0 (a cat) .. 1 (deep static), smooth in t."""
+    k, s1, s2 = state(seconds, starts, lengths)
+    steps = k + 0.5 * (s1 + s2)  # continuous count of steps done
+    near = min(steps, abs(steps - HALF), STEPS - steps)
+    return float(smoothstep(near / 5.0))
 
-    Bed: I IV vi V in major, one chord per eight hops (3.75 s), as soft pads (and a
-    quiet "u" choir; the "strings" variant swaps the choir for strings and chimes
-    only on squares with at most three moves). Chimes:
-    every hop both knights land at once on mirrored squares p and 63 - p, which have
-    the same number of knight moves. If that number is at most CHIME_DEGREE (corner
-    and edge regions), two kalimba tines sound, one per knight: pitch from the
-    square's height on the board within the current chord's tones, pan from its x.
-    Corners (2 moves) ring loudest with an octave above, squares with 4 moves
-    softest. A hop-synced echo and a long room; circular throughout,
-    master(loop=True).
+
+def soundtrack(lead, starts, lengths, rng):
     """
+    Ambient, from the same schedule as the picture; an exact loop (everything wraps
+    circularly). A bed of pad and "u" choir chords: I around the cat, IV as it
+    scrambles, vi around the upside-down cat, V as it scrambles again, back to I.
+    The bed's lowpass opens with the scramble (crossfade of a dark and a bright
+    filtered copy, weighted by `scramble(t)`). One soft lead note (felt piano or
+    harp) as each step completes, its pitch climbing the scale with the distance
+    from the nearest return, so it rises into the static and falls back out; at
+    the two returns a rolled chord instead (I for the cat, vi for the upside-down
+    cat) with a quiet bell an octave up. Delay, long reverb, master(loop=True).
+    """
+    voice = LEADS[lead]
     root = int(rng.choice(ROOTS))
     scale = Scale(root, "major")
-    track = audio.silence(DURATION)
-    bar = 8 * HOP_TIME
-    bed = audio.silence(DURATION)
-    for i, chord_degree in enumerate(PROGRESSION):
-        start = i * bar
-        notes = scale.chord(chord_degree, 3)
-        for j, midi in enumerate(notes):
-            hz = float(audio.midi_to_hz(midi))
-            held = audio.pad(hz, bar, 0.30, attack=1.4, release=2.6, brightness=0.35)
-            audio.add(bed, held, start - 0.6)
-            if variant == "strings":
-                voice = audio.strings(
-                    float(audio.midi_to_hz(midi + 12)),
-                    bar,
-                    0.16,
-                    attack=1.6,
-                    release=2.4,
-                    brightness=0.3,
-                )
-            else:
-                voice = audio.choir(
-                    float(audio.midi_to_hz(midi + 12)),
-                    bar,
-                    0.17,
-                    attack=1.6,
-                    release=2.4,
-                    vowel="u",
-                )
-            audio.add(bed, voice, start - 0.6)
-    bed = audio.lowpass(bed, 2200.0)
-    track += bed
+    ends = starts + lengths  # when each step completes
+    cat_back, upside_back = ends[-1], ends[HALF - 1]
 
-    chimes = audio.silence(DURATION)
-    threshold = CHIME_DEGREE - (variant == "strings")  # strings: corner regions only
-    count = 0
-    for k in range(HOPS):
-        landing = (k + MOVE) * HOP_TIME
-        chord_degree = PROGRESSION[int(k // 8) % len(PROGRESSION)]
-        tones = sorted(
-            {m + 12 * o for m in scale.chord(chord_degree, 3) for o in (1, 2, 3)}
-        )
-        tones = [m for m in tones if root + 16 <= m <= root + 36]
-        for square in (tour[(k + 1) % len(tour)], tour[(k + 1 + HOPS) % len(tour)]):
-            moves = degree[square]
-            if moves > threshold:
-                continue
-            r, c = divmod(square, N)
-            midi = tones[round((N - 1 - r) / (N - 1) * (len(tones) - 1))]
-            velocity = {2: 0.55, 3: 0.42, 4: 0.28}[moves]
-            position = 0.8 * (c - (N - 1) / 2) / ((N - 1) / 2)
-            note = audio.kalimba(float(audio.midi_to_hz(midi)), velocity, 3.0)
-            audio.add(chimes, audio.pan(note, position), landing)
-            if moves == 2:
-                high = audio.kalimba(float(audio.midi_to_hz(midi + 12)), 0.3, 3.0)
-                audio.add(chimes, audio.pan(high, position), landing + 0.03)
-            count += 1
-    chimes = audio.lowpass(chimes, 5000.0, order=4)
-    chimes = audio.delay(chimes, 2 * HOP_TIME, feedback=0.35, wet=0.3)
-    track += chimes
-    track = audio.highpass(track, 80.0)
-    track = audio.reverb(track, rng, rt60=4.5, wet=0.42, tone=4200.0)
+    # The bed.
+    bed = audio.silence(DURATION)
+    sections = (  # (degree, start, end)
+        (0, cat_back - 1.6, DURATION + 2.6),
+        (3, 2.4, 5.6),
+        (5, upside_back - 1.6, upside_back + 2.6),
+        (4, upside_back + 2.4, cat_back - 1.4),
+    )
+    for degree, start, end in sections:
+        for i, midi in enumerate(scale.chord(degree, 3)):
+            hz = float(audio.midi_to_hz(midi))
+            held = audio.pad(hz, end - start, 0.26, attack=1.4, release=2.2)
+            audio.add(bed, audio.pan(held[:, 0], 0.45 * (i - 1)), start)
+            sung = audio.choir(
+                hz, end - start, 0.11, attack=1.6, release=2.2, vowel="u"
+            )
+            audio.add(bed, sung, start)
+    bed = audio.highpass(bed, 120.0)
+    weight = np.array(
+        [scramble(s, starts, lengths) for s in np.arange(0, DURATION, 0.01)]
+    )
+    weight = np.interp(
+        np.arange(len(bed)) / audio.SAMPLE_RATE, np.arange(len(weight)) * 0.01, weight
+    )[:, None]
+    track = (1 - weight) * audio.lowpass(bed, 700.0) + weight * audio.lowpass(
+        bed, 2600.0
+    )
+
+    # The lead: one note per completed step, a rolled chord at each return.
+    for k, when in enumerate(ends):
+        done = k + 1
+        if done in (HALF, STEPS):
+            degree = 0 if done == STEPS else 5
+            for j, midi in enumerate(scale.chord(degree, 4, octave=1)):
+                note = voice(float(audio.midi_to_hz(midi)), 0.42 - 0.04 * j)
+                audio.add(track, audio.pan(note, -0.3 + 0.2 * j), when + 0.07 * j)
+            shine = audio.bell(scale.hz(degree, 2), 0.16, length=5.0)
+            audio.add(track, audio.pan(shine, 0.2), when + 0.3)
+            continue
+        near = min(done, abs(done - HALF), STEPS - done)  # 1 .. 5
+        degree = 2 * near - 1 if near > 1 else 1  # 1, 3, 5, 7, 9: up the scale
+        note = voice(scale.hz(degree, 1), 0.30 + 0.03 * near)
+        audio.add(track, audio.pan(note, 0.35 if k % 2 else -0.35), when)
+
+    track = audio.delay(track, 0.42, feedback=0.35, wet=0.2)
+    track = audio.reverb(track, rng, rt60=5.0, wet=0.42, tone=4200.0)
     logger.info(
-        f"Ambient soundtrack ({variant or 'choir'}): root {root}, {count} chimes"
+        f"Soundtrack ({lead}): root {root}, cat back at {cat_back:.2f} s, "
+        f"upside down at {upside_back:.2f} s"
     )
     return audio.master(track)
 

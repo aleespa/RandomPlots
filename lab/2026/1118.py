@@ -1,390 +1,433 @@
 """
-The Most Irrational Number
+The Third Root
 
-Ford circles: over every fraction p/q on the number line sits a circle
-q² times smaller than the one over 1. They never overlap; they only kiss.
-Here the camera dives towards the golden ratio, φ = 1.618…, almost a
-billion times closer.
+A Newton's method fractal. Every point on screen is a first guess for
+Newton's method, the classic recipe for solving an equation, and is coloured
+by the root its guesses settle on.
 
-The circles that reach nearest to φ are always 1/1, 2/1, 3/2, 5/3, 8/5,
-13/8…: ratios of neighbouring Fibonacci numbers, closing in alternately
-from the left and the right. The golden ratio is the hardest number of
-all to approximate with fractions (Hurwitz, 1891), so the gaps never get
-any easier: every zoom looks just like the last one, forever.
+With two roots it is easy: you reach the nearer one, and the plane splits
+along a straight line. Arthur Cayley proved that in 1879, then tried three
+roots and called it a problem of "considerable difficulty". Watch the third
+root fly in: the line erupts into chains of beads, and wherever two colours
+meet, the third is there too. It is a fractal: zoom into the centre and the
+beads repeat forever.
 
-Each new Fibonacci fraction strikes a piano note: the Fibonacci numbers
-themselves, counted round a seven-note scale.
+A harp climbs as the third root nears, and the chord is complete when it
+lands. In the zoom, each new generation of beads plucks one more step of a
+scale that keeps rising without ever getting higher.
 
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#fordcircles #numbertheory #mathart #generativeart #randomplots
+Made with Python, NumPy, Numba & OpenCV. Sound synthesized in NumPy.
+#newtonfractal #fractal #mathart #generativeart #randomplots
 """
 
 import gc
-from pathlib import Path
 
-import cv2
-import matplotlib
 import numpy as np
 from loguru import logger
-from PIL import Image, ImageDraw, ImageFont
+from numba import njit
 
 from common import audio
 from common.image_processing import ImageProcessingSettings
-from common.music import PROGRESSIONS, STYLES, Scale
-from common.video import (
-    FPS,
-    HEIGHT,
-    WIDTH,
-    frame_count,
-    hex_to_bgr,
-    palette_lut,
-    render_frames,
-    smoothstep,
-)
+from common.music import STYLES, Scale
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
 
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The dive -------------------------------------------------------------------------
-PHI = (1 + 5**0.5) / 2
-VIEW_START, VIEW_END = 1.8, 2.0e-9  # number-line units across the screen
-ZOOM_START, ZOOM_END = 0.0, 13.2  # s: the dive (eased in and out)
-EASE_IN, EASE_OUT = 1.4, 2.2  # s of speed ramp at either end
-FADE = 0.4  # s fade to the paper at the very end
+# --- Story (seconds) ------------------------------------------------------------------
+ARRIVE = 5.0  # the third root lands
+FAR = 30.0  # its distance at t = 0, in units of the final root circle
+LANDING = 2.5  # ease-out power of its approach: fast at first, a gentle landing
+SWOOP = 0.9  # rad: how far round it curls on the way in (sign from the seed)
+ZOOM_START, ZOOM_END = 5.8, 13.4  # zoom into the centre
+GENERATIONS = 24  # bead generations passed by the zoom: depth (3/2)^(G/2)
+TWIST = np.pi / 3  # rad the view turns during the zoom (the flower is 6-fold)
+FADE = 0.4  # s of fade to black at the very end
 
-# --- Layout ---------------------------------------------------------------------------
-LINE_Y = 1420  # px: the number line; the circles stand on it, mirrored below
-MIRROR = 0.32  # reflection strength just under the line, fading downwards
-SS = 2  # supersampling of the circle layer
-MIN_RADIUS = 0.3  # px: smaller circles are not drawn
-LABEL_IN = (48.0, 78.0)  # px radius over which a circle's fraction fades in
+# --- Maths ----------------------------------------------------------------------------
+HALF_WIDTH = 1.55  # complex units across half the screen, before the zoom
+MAX_ITER = 80
+EPS = 1e-3  # converged: within this of a root
+FAR_FIELD = 20.0  # beyond this |z|, act 2 jumps z -> (2/3)^k z in one go
+SS = 2  # supersampling per axis, on boundary pixels
+AA_TOL = 10.0  # 0..255: corners closer than this need no supersampling
 
 # --- Look -----------------------------------------------------------------------------
-PAPER = "#f4f0e7"
-INK = "#1f2a55"  # indigo
-ACCENT = "#d6452a"  # vermilion: the Fibonacci fractions
-FILLS = ["#1f2a55", "#3d5a8a", "#7d9cb8", "#cdbf9f", "#e9dfc9"]  # tiny -> huge
-CM = Path(matplotlib.get_data_path()) / "fonts" / "ttf"  # BaKoMa Computer Modern
-PHI_GLYPH, TIMES = chr(193), chr(163)  # in cmmi10, cmsy10
+PALETTE = ["#ff5a3c", "#20d6a8", "#a77bff"]  # ember, jade, lilac: one per root
+GLOW_BASE = 3.0  # steps every pixel gets for free: below this it stays dark
+GLOW_SCALE = 8.0  # steps more for the boundary glow to saturate
+DOT = 7.0  # px: root marker core
 
 # --- Sound ----------------------------------------------------------------------------
-STYLE = "felt_piano"  # common.music.STYLES; an --audio-only tag naming one overrides it
-EVENT_RADIUS = 78.0  # px: a Fibonacci circle sounds when its label is fully in
-PROGRESSION = "drift"  # common.music.PROGRESSIONS, a chord per four Fibonacci notes
+STYLE = "harp"  # common.music.STYLES; an --audio-only tag naming one overrides it
+APPROACH_STEP = 2 ** (
+    1 / 3
+)  # a note each time the third root's distance shrinks by this
+SHEPARD_CENTRE, SHEPARD_WIDTH = 74.0, 9.0  # MIDI: where the endless climb is loudest
+RISER = 1.4  # s of build-up into the landing
 
 
-def dive_curve():
-    """(times, log view width) on a fine grid: speed eased in and out, then rest."""
-    tau = np.linspace(0.0, DURATION, 30001)
-    speed = smoothstep((tau - ZOOM_START) / EASE_IN) * smoothstep(
-        (ZOOM_END - tau) / EASE_OUT
-    )
-    progress = np.concatenate([[0.0], np.cumsum(0.5 * (speed[1:] + speed[:-1]))])
-    progress /= progress[-1]
-    log_view = np.log(VIEW_START) + (np.log(VIEW_END) - np.log(VIEW_START)) * progress
-    return tau, log_view
+def root_lut(colour, size=256):
+    """A (size, 3) BGR ramp 0..255: near black -> the root's colour -> pale."""
+    rgb = np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
+    u = np.linspace(0.0, 1.0, size)[:, None]
+    dark = 0.07 * rgb
+    pale = 0.35 * rgb + 0.65
+    lo = dark + (rgb - dark) * np.clip(u / 0.65, 0, 1)
+    hi = rgb + (pale - rgb) * np.clip((u - 0.65) / 0.35, 0, 1)
+    return (np.where(u < 0.65, lo, hi)[:, ::-1] * 255).astype(np.float32)
 
 
-def fibonacci(count):
-    """[(p, q)]: the Fibonacci ratios F(k+1)/F(k), k = 1 .. count."""
-    pairs, a, b = [], 1, 1
-    for _ in range(count):
-        pairs.append((b, a))
-        a, b = b, a + b
-    return pairs
-
-
-def ford_circles(view):
+@njit(nogil=True, fastmath=True, cache=True, inline="always")
+def sample(zr, zi, rre, rim, rs, tre, tim, cubic):
     """
-    Every Ford circle that touches the screen when it is `view` units wide,
-    centred on φ: arrays p, q (coprime) and the circle's centre x offset from φ
-    and radius, in px. The circle over p/q has radius 1/(2q²) and touches the
-    line at p/q; it is kept if its radius is at least MIN_RADIUS px and it
-    meets the rectangle above the line that the screen shows.
+    Newton's method from z = zr + i zi: (index of the root reached, smooth step
+    count v = sum over steps of clip(log(d / EPS) / log(1 / EPS), 0, 1), d the
+    distance to the nearest root).
+
+    General case: p(z) = prod (z - r_j / s_j) up to a constant, step
+    z <- z - 1 / sum_j s_j / (s_j z - r_j), so a root with s_j -> 0 recedes to
+    infinity continuously. cubic (exactly z^3 - 1 turned by a quarter turn,
+    worked in the rotated frame w = -i z, whose roots are the cube roots of
+    unity): N(w) = 2w/3 + 1/(3 w^2), and any
+    |w| > FAR_FIELD jumps to (2/3)^n w at once (n steps counted), since there
+    N(w) = 2w/3 to 1e-4.
     """
-    scale = WIDTH / view  # px per unit
-    half = 0.5 * WIDTH / scale + 8 / scale
-    top = (LINE_Y + 8) / scale
-    q_max = int(np.sqrt(scale / (2 * MIN_RADIUS)))
-    q = np.arange(1, q_max + 1, dtype=np.int64)
-    reach = 1.0 / (2.0 * q * q)  # the circle's radius in units
-    lo = np.ceil((PHI - half - reach) * q).astype(np.int64)
-    hi = np.floor((PHI + half + reach) * q).astype(np.int64)
-    count = np.maximum(hi - lo + 1, 0)
-    q = np.repeat(q, count)
-    start = np.repeat(lo, count)
-    offset = np.arange(len(q)) - np.repeat(np.cumsum(count) - count, count)
-    p = start + offset
-    keep = np.gcd(p, q) == 1
-    p, q = p[keep], q[keep]
-    radius = 1.0 / (2.0 * q * q)
-    dx = (p - q * PHI) / q  # tangent point minus φ
-    # Does the circle meet the box |x - φ| <= half, 0 <= y <= top? (no cancellation)
-    gap = np.maximum(np.abs(dx) - half, 0.0)
-    near = top * (2 * radius - top)
-    meets = (gap * gap < near) | (top >= radius) & (gap < radius)
-    p, q, dx, radius = p[meets], q[meets], dx[meets], radius[meets]
-    return p, q, dx * scale, radius * scale
+    inv_log = 1.0 / np.log(1.0 / EPS)
+    nr = rre.shape[0]
+    v = 0.0
+    if cubic:
+        wr, wi = zi, -zr  # w = -i z: the up-pointing root goes to w = 1
+        for it in range(MAX_ITER):
+            r2 = wr * wr + wi * wi
+            if r2 > FAR_FIELD * FAR_FIELD:
+                n = int((0.5 * np.log(r2) - np.log(FAR_FIELD)) / np.log(1.5)) + 1
+                f = (2.0 / 3.0) ** n
+                wr *= f
+                wi *= f
+                v += n
+                continue
+            sr = wr * wr - wi * wi  # w^2
+            si = 2.0 * wr * wi
+            dx = wr + 0.5  # squared distance to the nearest cube root of unity
+            dy = abs(wi) - 0.8660254037844386
+            d2 = min((wr - 1.0) * (wr - 1.0) + wi * wi, dx * dx + dy * dy)
+            if d2 < EPS * EPS:
+                break
+            if d2 < 1.0:
+                v += 0.5 * np.log(d2 / (EPS * EPS)) * inv_log
+            else:
+                v += 1.0
+            q = 1.0 / (3.0 * (sr * sr + si * si) + 1e-300)
+            wr = 2.0 / 3.0 * wr + q * sr
+            wi = 2.0 / 3.0 * wi - q * si
+        # nearest cube root of unity in w: 1 (k 0), e^{2 pi i/3} (k 1), e^{-2 pi i/3} (k 2)
+        if wr >= 0.0 and abs(wi) * 0.5773502691896258 <= wr:
+            return 0, v
+        return (1 if wi > 0.0 else 2), v
+    k = 0
+    for it in range(MAX_ITER):
+        dmin = 1e300
+        k = 0
+        for j in range(nr):
+            dx = zr - tre[j]
+            dy = zi - tim[j]
+            d = dx * dx + dy * dy
+            if d < dmin:
+                dmin = d
+                k = j
+        if dmin < EPS * EPS:
+            break
+        if dmin < 1.0:
+            v += 0.5 * np.log(dmin / (EPS * EPS)) * inv_log
+        else:
+            v += 1.0
+        sre = 0.0
+        sim = 0.0
+        for j in range(nr):
+            ure = rs[j] * zr - rre[j]
+            uim = rs[j] * zi - rim[j]
+            q = rs[j] / (ure * ure + uim * uim + 1e-300)
+            sre += q * ure
+            sim -= q * uim
+        q = 1.0 / (sre * sre + sim * sim + 1e-300)
+        zr -= q * sre
+        zi += q * sim
+    return k, v
 
 
-def circle_polygon(cx, cy, r, w, h):
-    """Points of the part of a large circle near the box [0, w] x [0, h], in px."""
-    corners = np.array([[0, 0], [w, 0], [0, h], [w, h]], float) - (cx, cy)
-    inside = abs(cx - w / 2) < w / 2 and abs(cy - h / 2) < h / 2
-    if inside:
-        a0, a1 = 0.0, 2 * np.pi
-    else:
-        mid = np.arctan2(h / 2 - cy, w / 2 - cx)
-        angles = np.arctan2(corners[:, 1], corners[:, 0]) - mid
-        angles = (angles + np.pi) % (2 * np.pi) - np.pi
-        a0, a1 = mid + angles.min() - 0.02, mid + angles.max() + 0.02
-    n = int(np.clip((a1 - a0) * r / 3.0, 16, 20000))
-    a = np.linspace(a0, a1, n)
-    return np.stack([cx + r * np.cos(a), cy + r * np.sin(a)], axis=1)
+@njit(nogil=True, fastmath=True, cache=True)
+def newton_frame(scale, rot, rre, rim, rs, luts, offset, cubic, out):
+    """
+    One frame into out (H, W, 3) float32 BGR. The point at p (pixels from the
+    centre, y up) is z = scale e^{i rot} p. Every pixel corner is sampled and
+    coloured (lut of its root at 1 - exp(-(v - offset) / GLOW_SCALE)); a pixel
+    whose four corners agree (same root, colours within AA_TOL) is their mean,
+    any other gets SS x SS interior samples: adaptive anti-aliasing, so the
+    flat basins cost one sample per pixel and only the boundaries pay for more.
+    """
+    h, w = out.shape[0], out.shape[1]
+    nr = rre.shape[0]
+    cr, sr = np.cos(rot) * scale, np.sin(rot) * scale
+    tre = np.empty(nr)
+    tim = np.empty(nr)
+    for j in range(nr):
+        tre[j] = rre[j] / rs[j]
+        tim[j] = rim[j] / rs[j]
+    corner = np.empty((h + 1, w + 1, 3), np.float32)
+    root = np.empty((h + 1, w + 1), np.int8)
+    for i in range(h + 1):
+        py = 0.5 * h - i
+        for jx in range(w + 1):
+            px = jx - 0.5 * w
+            k, v = sample(
+                cr * px - sr * py, sr * px + cr * py, rre, rim, rs, tre, tim, cubic
+            )
+            v = max(v - offset, 0.0)
+            idx = int((1.0 - np.exp(-v / GLOW_SCALE)) * 255.0)
+            root[i, jx] = k
+            for c in range(3):
+                corner[i, jx, c] = luts[k, idx, c]
+    inv_ss = 1.0 / SS
+    for i in range(h):
+        for jx in range(w):
+            k = root[i, jx]
+            same = (
+                root[i, jx + 1] == k
+                and root[i + 1, jx] == k
+                and root[i + 1, jx + 1] == k
+            )
+            if same:
+                for c in range(3):
+                    lo = min(
+                        corner[i, jx, c],
+                        corner[i, jx + 1, c],
+                        corner[i + 1, jx, c],
+                        corner[i + 1, jx + 1, c],
+                    )
+                    hi = max(
+                        corner[i, jx, c],
+                        corner[i, jx + 1, c],
+                        corner[i + 1, jx, c],
+                        corner[i + 1, jx + 1, c],
+                    )
+                    if hi - lo > AA_TOL:
+                        same = False
+            if same:
+                for c in range(3):
+                    out[i, jx, c] = 0.25 * (
+                        corner[i, jx, c]
+                        + corner[i, jx + 1, c]
+                        + corner[i + 1, jx, c]
+                        + corner[i + 1, jx + 1, c]
+                    )
+                continue
+            br = 0.0
+            bg = 0.0
+            bb = 0.0
+            for a in range(SS):
+                for b in range(SS):
+                    px = jx + (b + 0.5) * inv_ss - 0.5 * w
+                    py = 0.5 * h - i - (a + 0.5) * inv_ss
+                    k, v = sample(
+                        cr * px - sr * py,
+                        sr * px + cr * py,
+                        rre,
+                        rim,
+                        rs,
+                        tre,
+                        tim,
+                        cubic,
+                    )
+                    v = max(v - offset, 0.0)
+                    idx = int((1.0 - np.exp(-v / GLOW_SCALE)) * 255.0)
+                    br += luts[k, idx, 0]
+                    bg += luts[k, idx, 1]
+                    bb += luts[k, idx, 2]
+            n = SS * SS
+            out[i, jx, 0] = br / n
+            out[i, jx, 1] = bg / n
+            out[i, jx, 2] = bb / n
 
 
-class Typesetter:
-    """Computer Modern text onto an RGBA PIL layer."""
+def story(tau, swoop_sign):
+    """
+    The state at time tau (s): roots (re, im) and weights s (root j sits at
+    r_j / s_j), the view's complex units per pixel, its rotation, the zoom depth.
+    """
+    angles = np.pi / 2 + 2 * np.pi * np.arange(3) / 3
+    a = 1 - (1 - min(tau / ARRIVE, 1.0)) ** LANDING
+    distance = np.exp(np.log(FAR) * (1 - a))  # log-distance eases from FAR to 1
+    angles[0] += swoop_sign * SWOOP * (1 - a) ** 2
+    rre, rim = np.cos(angles), np.sin(angles)
+    rs = np.array([1.0 / distance, 1.0, 1.0])
+    z = smoothstep((tau - ZOOM_START) / (ZOOM_END - ZOOM_START))
+    depth = 1.5 ** (GENERATIONS / 2 * z)
+    scale = 2 * HALF_WIDTH / WIDTH / depth
+    return rre, rim, rs, scale, swoop_sign * TWIST * z, depth
 
-    def __init__(self):
-        self.fonts = {}
 
-    def font(self, face, size):
-        key = face, int(size)
-        if key not in self.fonts:
-            self.fonts[key] = ImageFont.truetype(str(CM / f"{face}.ttf"), int(size))
-        return self.fonts[key]
+def add_marker(image, x, y, colour, strength):
+    """A root: a soft halo in its colour round a white core, at pixel (x, y)."""
+    r = int(6 * DOT)
+    x0, x1 = max(0, int(x) - r), min(WIDTH, int(x) + r + 1)
+    y0, y1 = max(0, int(y) - r), min(HEIGHT, int(y) + r + 1)
+    if x0 >= x1 or y0 >= y1:
+        return
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    d2 = (xx - x) ** 2 + (yy - y) ** 2
+    halo = np.exp(-d2 / (2 * (2.2 * DOT) ** 2))[..., None] * colour * 0.9
+    core = np.exp(-((np.sqrt(d2) / DOT) ** 6))[..., None] * 255.0
+    patch = image[y0:y1, x0:x1]
+    patch += strength * (halo + core - patch * np.minimum(1, core / 255.0))
+
+
+def soundtrack(swoop_sign, style_name, rng):
+    """
+    Cinematic swell with a struck voice on top, every onset from the closed
+    forms of the picture (one-shot: circular=False, master(loop=False)).
+
+    Two roots: a bare fifth (root and fifth, strings) from the first frame,
+    struck once at t = 0. The approach: a note each time the third root's
+    distance FAR^((1-u)^LANDING) shrinks by APPROACH_STEP, climbing the scale
+    (a step every two notes) to the chord's third an octave up, panned by the root's x on screen and louder as it nears,
+    then a riser into ARRIVE, where the third lands: struck triad, strings and
+    choir complete the chord. The zoom: one note per bead generation (depth
+    crossing (3/2)^(g/2), solved through the smoothstep), each a Shepard tone
+    (the same pitch class in several octaves, weighted by a bell curve round
+    SHEPARD_CENTRE), stepping up the scale every generation: a climb that never
+    gets higher, like beads that never get smaller. Louder where the zoom is
+    fastest, panned round the twist. A low root and a high chord close it at
+    ZOOM_END and ring out.
+    """
+    style = STYLES[style_name]
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    root = scale.root
+    third = scale.note(2) - root  # a major or minor third in every catalogue mode
+    track = audio.silence(DURATION)
+    kw = dict(circular=False)
+
+    def hz(midi):
+        return float(audio.midi_to_hz(midi))
+
+    def strike(midi, velocity, when, x=0.0):
+        velocity = round(float(np.clip(velocity, 0.05, 1.0)) * 20) / 20  # cache hits
+        note = style.voice(hz(midi), velocity)
+        audio.add(track, audio.pan(note, float(np.clip(x, -1, 1))), when, **kw)
+
+    def screen_x(tau):
+        rre, rim, rs, scale_, rot, _ = story(tau, swoop_sign)
+        z = complex(rre[0], rim[0]) / rs[0] * np.exp(-1j * rot) / scale_
+        return z.real / (WIDTH / 2)
+
+    # Two roots: the open fifth, the easy case.
+    for semitones, vel in ((-12, 0.4), (-5, 0.3)):
+        voice = audio.strings(hz(root + semitones), ARRIVE + 0.6, vel, 0.25, 1.5, 0.35)
+        audio.add(track, voice, 0.0, **kw)
+    strike(root - 12, 0.55, 0.02, -0.35)
+    strike(root + 7 - 12, 0.5, 0.02, 0.35)
+
+    # The approach: log-distance log(FAR) (1-u)^LANDING crosses each step.
+    levels = np.log(FAR) - np.log(APPROACH_STEP) * np.arange(1, 100)
+    levels = levels[levels > 0.05]
+    times = ARRIVE * (1 - (levels / np.log(FAR)) ** (1 / LANDING))
+    n = len(times)
+    for k, when in enumerate(times):
+        # climbing a step every two notes to the third, an octave up, at the landing
+        degree = 2 + len(scale.steps) - (n - k) // 2
+        distance = np.exp(levels[k])
+        strike(scale.note(degree), 0.25 + 0.35 / distance**0.5, when, screen_x(when))
+    audio.add(track, audio.riser(RISER, rng, 220.0, 1800.0, 0.18), ARRIVE - RISER, **kw)
+    logger.info(f"{n} approach notes, {times[0]:.2f}-{times[-1]:.2f} s")
+
+    # The landing: the third completes the chord.
+    for i, semitones in enumerate((0, 7, third + 12, 12 + 7)):
+        strike(
+            root + semitones, 0.6 - 0.07 * i, ARRIVE + 0.07 * i, 0.5 * (i % 2) - 0.25
+        )
+    strike(root - 24, 0.6, ARRIVE)
+    hold = DURATION - ARRIVE
+    for semitones in (-12, -5, third):
+        voice = audio.strings(hz(root + semitones), hold - 0.8, 0.4, 0.4, 1.6, 0.45)
+        audio.add(track, voice, ARRIVE, **kw)
+    for semitones in (0, 7, third + 12):
+        voice = audio.choir(hz(root + semitones), hold - 2.0, 0.22, 2.5, 1.6, "a")
+        audio.add(track, voice, ARRIVE + 0.3, **kw)
+
+    # The zoom: one Shepard step per bead generation.
+    grid = np.linspace(0.0, 1.0, 4001)
+    eased = smoothstep(grid)
+    span = ZOOM_END - ZOOM_START
+    for g in range(1, GENERATIONS + 1):
+        when = ZOOM_START + span * float(np.interp(g / GENERATIONS, eased, grid))
+        u = (when - ZOOM_START) / span
+        speed = 6 * u * (1 - u)  # d(smoothstep)/du, 1.5 at the middle
+        pitch_class = scale.note(g)
+        x = 0.6 * np.sin(2 * np.pi * g / 6)
+        for octave in range(-3, 4):
+            midi = pitch_class + 12 * octave
+            weight = np.exp(-0.5 * ((midi - SHEPARD_CENTRE) / SHEPARD_WIDTH) ** 2)
+            if weight > 0.12 and 40 <= midi <= 96:
+                strike(midi, (0.2 + 0.25 * speed) * weight, when, x)
+
+    # The end: home, ringing out over the rest.
+    strike(root - 24, 0.65, ZOOM_END)
+    for i, semitones in enumerate((12, 12 + third, 19, 24)):
+        strike(root + semitones, 0.45, ZOOM_END + 0.09 * i, 0.4 * (i % 2) - 0.2)
+    return audio.master(style.room(track, rng, circular=False), loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Ford circles (L. R. Ford, 1938): over each reduced fraction p/q, the circle
-    of radius 1/(2q²) tangent to the real line at p/q. Two are tangent exactly
-    when |p q' - p' q| = 1 (Farey neighbours) and never overlap otherwise; they
-    are the horoballs of the modular group, so the packing is invariant under
-    SL(2, Z).
+    Newton's method on p(z) = (z - r0)(z - r1)(z - r2), the cube roots of unity
+    turned so that r0 points up. Each pixel (2x2 supersampled) is iterated
+    z <- z - p/p' (written as z - 1 / sum 1/(z - r_j)) until it is within EPS
+    of a root, and coloured by that root: dark where it converges at once,
+    glowing where it takes many steps, i.e. along the basin boundaries.
 
-    The camera is centred on φ and its width W(τ) shrinks from VIEW_START to
-    VIEW_END, exponentially with an eased speed (smoothstep ramps of EASE_IN
-    and EASE_OUT s), then rests. Per frame, every circle with radius >= MIN_RADIUS
-    px that meets the screen is enumerated directly: q <= sqrt(S / 2 r_min),
-    p in the window widened by the radius, gcd(p, q) = 1, then an exact
-    box-circle test written without cancellation (the huge circles of small q
-    only graze the top of the screen deep in the dive). Since φ is badly
-    approximable (|φ - p/q| > ~1/(√5 q²)), the visible circles never exceed a
-    few thousand px, and their count stays near a thousand at every depth.
+    Act 1 (0-5 s): r0 starts FAR = 30 units away and its log-distance eases
+    down to 1 (ease-out, power LANDING), curling SWOOP rad round on the way (direction from
+    the seed). With r0 far, only r1 and r2 matter and the boundary is their
+    perpendicular bisector, Cayley's straight line; as r0 nears, beads of its
+    basin grow along the line. The receding root enters through a weight s:
+    sum s / (s z - r) is continuous as s -> 0.
+    Act 2 (5.8-13.4 s): a smoothstep-in-log zoom into z = 0, the double
+    critical point of z^3 - 1, where N(z) ~ 1/(3z^2): the picture there is the
+    far field inverted, self-similar under zooming by sqrt(3/2), so the zoom
+    passes GENERATIONS bead generations (depth (3/2)^12 ~ 130) while the view
+    turns TWIST. A pixel near 0 takes one more step per generation, so that
+    baseline is subtracted to keep the glow the same at every depth. Then the
+    image rests and fades out.
 
-    Drawing: cv2 at SS x supersampling, fills coloured by on-screen size
-    (FILLS, tiny -> huge) mixed into the paper, ink outlines; circles larger
-    than ~200 px are drawn as clipped polygons of their visible arc (cv2's own
-    circles are 72-gons at that size). The Fibonacci ratios F(k+1)/F(k), the
-    continued-fraction convergents of φ = [1; 1, 1, ...], are filled and
-    outlined in ACCENT. Fractions are typeset in each circle above LABEL_IN px
-    radius. The layer is mirrored under the line, faded (MIRROR). On top: φ's
-    decimals as far as the view resolves them and the zoom factor.
-
-    Each frame is a pure function of τ; frames render in parallel on the
-    thread pool. Nothing is random in the picture: the seed only picks the
-    soundtrack's key (through the audio generator).
+    Each frame is a pure function of t, computed by a numba kernel (nogil),
+    frames in parallel on the thread pool. The seed picks which colour goes to
+    which root and which way the third root curls in.
     """
     settings = settings or ImageProcessingSettings(1)
-    curve_tau, curve_log = dive_curve()
-    convergents = {pair for pair in fibonacci(40)}
-    phi_text = f"{PHI:.15f}"
-
-    bg = np.array(hex_to_bgr(PAPER), np.float32)
-    ink = hex_to_bgr(INK)
-    accent = np.array(hex_to_bgr(ACCENT), np.float32)
-    fill_lut = palette_lut(FILLS, 256)[:, ::-1] * 255.0  # BGR
-    type_ = Typesetter()
-    ink_rgb = tuple(int(INK[i : i + 2], 16) for i in (1, 3, 5))
-    accent_rgb = tuple(int(ACCENT[i : i + 2], 16) for i in (1, 3, 5))
-
-    def fill_colour(r):
-        """Fill for a circle of r px: tiny circles dark, huge ones pale; strength by size."""
-        u = np.clip((np.log2(max(r, 0.25)) + 1) / 12.0, 0, 1)
-        colour = fill_lut[int(u * 255)]
-        alpha = 0.95 - 0.55 * u
-        return tuple(float(c) for c in alpha * colour + (1 - alpha) * bg)
+    rng = settings.rng
+    swoop_sign = float(rng.choice([-1.0, 1.0]))
+    order = rng.permutation(3)
+    colours = [PALETTE[k] for k in order]
+    luts = np.stack([root_lut(c) for c in colours])
+    marker_bgr = [luts[k, 166] for k in range(3)]  # the root's own colour
 
     def render(frame):
         tau = frame / FPS
-        view = float(np.exp(np.interp(tau, curve_tau, curve_log)))
-        p, q, cx, r = ford_circles(view)
-        h, w = LINE_Y * SS, WIDTH * SS
-        layer = np.empty((h, w, 3), np.uint8)
-        layer[:] = bg.astype(np.uint8)
-        order = np.argsort(-r)  # big first (they never overlap, but outlines do)
-        labels = []
-        for i in order:
-            pi_, qi = int(p[i]), int(q[i])
-            rad = float(r[i])
-            x = WIDTH / 2 + float(cx[i])
-            y = LINE_Y - rad
-            fib = (pi_, qi) in convergents
-            if fib:
-                base = np.array(fill_colour(rad), np.float32)
-                fill = tuple(float(c) for c in 0.3 * accent + 0.7 * base)
-                line = tuple(float(c) for c in accent)
-            else:
-                fill = fill_colour(rad)
-                line = ink
-            X, Y, R = x * SS, y * SS, rad * SS
-            thick = int(np.clip(0.035 * R, 1.0, 5.0 if fib else 3.0))
-            if R < 180:
-                c = (int(round(X * 16)), int(round(Y * 16)))
-                cv2.circle(layer, c, max(int(R * 16), 1), fill, -1, cv2.LINE_AA, 4)
-                if R > 3:
-                    cv2.circle(layer, c, int(R * 16), line, thick, cv2.LINE_AA, 4)
-            else:
-                poly = circle_polygon(X, Y, R, w, h)
-                pts = np.round(poly * 16).astype(np.int64)
-                pts = np.clip(pts, -(2**28), 2**28).astype(np.int32)
-                cv2.fillPoly(layer, [pts], fill, cv2.LINE_AA, 4)
-                closed = R < 1.2 * max(w, h) and abs(X - w / 2) < w and Y > -R
-                cv2.polylines(layer, [pts], closed, line, thick, cv2.LINE_AA, 4)
-            if rad > LABEL_IN[0] and -rad < y < LINE_Y and 0 < x < WIDTH:
-                labels.append((pi_, qi, x, y, rad, fib))
-        layer = cv2.resize(layer, (WIDTH, LINE_Y), interpolation=cv2.INTER_AREA)
-
+        rre, rim, rs, scale, rot, depth = story(tau, swoop_sign)
+        offset = GLOW_BASE + 2 * np.log(depth) / np.log(1.5)
         image = np.empty((HEIGHT, WIDTH, 3), np.float32)
-        image[:] = bg
-        image[:LINE_Y] = layer
-        below = HEIGHT - LINE_Y
-        mirror = layer[::-1][:below].astype(np.float32)
-        fade = MIRROR * (1 - np.linspace(0, 1, below)) ** 1.6
-        image[LINE_Y:] = bg + (mirror - bg) * fade[:, None, None]
-        cv2.line(image, (0, LINE_Y), (WIDTH, LINE_Y), ink, 2, cv2.LINE_AA)
-        # φ marker: a small vermilion triangle under the line
-        tri = np.array([[540, LINE_Y + 6], [528, LINE_Y + 28], [552, LINE_Y + 28]])
-        cv2.fillPoly(image, [tri.astype(np.int32)], tuple(float(c) for c in accent))
-
-        # Paper band behind the heading
-        band = np.clip((330 - np.arange(330)) / 160.0, 0, 1) ** 1.5
-        image[:330] = image[:330] + (bg - image[:330]) * band[:, None, None]
-
-        text = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-        pen = ImageDraw.Draw(text)
-        for pi_, qi, x, y, rad, fib in labels:
-            fade_in = smoothstep((rad - LABEL_IN[0]) / (LABEL_IN[1] - LABEL_IN[0]))
-            digits = max(len(str(pi_)), len(str(qi)))
-            size = min(0.62 * rad, 1.25 * rad / (0.5 * digits + 0.3), 120.0)
-            font = type_.font("cmr10", size)
-            colour = accent_rgb if fib else ink_rgb
-            fill = colour + (int(235 * fade_in),)
-            gap = 0.16 * size
-            pen.text((x, y - gap), str(pi_), font=font, fill=fill, anchor="ms")
-            pen.text((x, y + gap), str(qi), font=font, fill=fill, anchor="mt")
-            bar = 0.55 * size * digits * 0.95 / 2 + 0.1 * size
-            pen.line(
-                [(x - bar, y), (x + bar, y)], fill=fill, width=max(1, int(0.05 * size))
-            )
-
-        # Heading: φ's decimals as far as the view resolves them, and the zoom.
-        decimals = int(np.clip(np.floor(np.log10(2.0 / view)) + 1, 1, 12))
-        size = 92
-        f_math, f_rm = type_.font("cmmi10", size), type_.font("cmr10", size)
-        shown = phi_text[: 2 + decimals]
-        head = [(PHI_GLYPH, f_math), (" = ", f_rm), (shown, f_rm), ("...", f_rm)]
-        width = sum(f.getlength(s) for s, f in head)
-        left = (WIDTH - width) / 2
-        for s, f in head:
-            pen.text((left, 180), s, font=f, fill=ink_rgb + (255,), anchor="ls")
-            left += f.getlength(s)
-        small = type_.font("cmr10", 40)
-        zoom = f"{VIEW_START / view:,.0f}"
-        times = type_.font("cmsy10", 40)
-        parts = [("zoom ", small), (TIMES, times), (" " + zoom, small)]
-        width = sum(f.getlength(s) for s, f in parts)
-        left = (WIDTH - width) / 2
-        for s, f in parts:
-            pen.text((left, 250), s, font=f, fill=ink_rgb + (150,), anchor="ls")
-            left += f.getlength(s)
-
-        overlay = np.asarray(text, np.float32)
-        alpha = overlay[..., 3:] / 255.0
-        image += (overlay[..., 2::-1] - image) * alpha
-        end = smoothstep((DURATION - tau) / FADE)
-        image = bg + (image - bg) * end
+        newton_frame(scale, rot, rre, rim, rs, luts, offset, tau >= ARRIVE, image)
+        for j in range(3):
+            z = complex(rre[j], rim[j]) / rs[j] * np.exp(-1j * rot) / scale
+            add_marker(image, WIDTH / 2 + z.real, HEIGHT / 2 - z.imag, marker_bgr[j], 1)
+        image *= smoothstep((DURATION - tau) / FADE)
         return image
 
     render_frames(settings, render, FRAME_COUNT)
     style_name = settings.audio_tag if settings.audio_tag in STYLES else STYLE
-    track = soundtrack(curve_tau, curve_log, style_name, settings.audio_rng)
+    track = soundtrack(swoop_sign, style_name, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
-
-
-def soundtrack(curve_tau, curve_log, style_name, rng):
-    """
-    Felt piano over a soft pad, one-shot (circular=False, master(loop=False)).
-
-    Melody: one note per Fibonacci ratio F(k+1)/F(k), at the moment its circle
-    grows past EVENT_RADIUS px (its label fully in), solved from the same dive
-    curve: radius = S / (2 F(k)²) with S = WIDTH / W(τ). The pitch is F(k+1)
-    mod 7, a degree of the style's scale (Fibonacci numbers mod 7 repeat every
-    16: the Pisano period), panned to the side of φ the fraction lies on
-    (they alternate). Fractions already that big at τ = 0 are struck together
-    as the opening chord. Velocity follows the dive speed.
-    Under it: a pad chord from PROGRESSION, one per four Fibonacci notes, and
-    a bass note on every second one. When the dive stops, the home chord and
-    a low root ring out over the rest.
-    """
-    style = STYLES[style_name]
-    scale = Scale(int(rng.choice(style.roots)), style.mode)
-    progression = PROGRESSIONS[PROGRESSION]
-    track = audio.silence(DURATION)
-    kw = dict(circular=False)
-    size = len(scale.steps)
-
-    def strike(degree, velocity, when, x=0.0, octave=0, voice=None):
-        velocity = round(float(np.clip(velocity, 0.05, 1.0)) * 20) / 20  # cache hits
-        note = (voice or style.voice)(scale.hz(degree, octave), velocity)
-        audio.add(track, audio.pan(note, float(np.clip(x, -1, 1))), when, **kw)
-
-    # τ when each Fibonacci circle reaches EVENT_RADIUS px: log W = log(WIDTH / (2 q² r))
-    log_speed = -np.gradient(curve_log, curve_tau)
-    peak_speed = log_speed.max()
-    events = []
-    for p, q in fibonacci(40):
-        target = np.log(WIDTH / (2.0 * q * q * EVENT_RADIUS))
-        if target >= curve_log[0]:
-            events.append((0.02, p, q))
-        elif target >= curve_log[-1]:
-            when = float(np.interp(-target, -curve_log, curve_tau))
-            events.append((when, p, q))
-    opening = [e for e in events if e[0] == 0.02]
-    rest = [e for e in events if e[0] > 0.02]
-    logger.info(
-        f"{len(opening)} opening, {len(rest)} Fibonacci notes "
-        f"{rest[0][0]:.2f}-{rest[-1][0]:.2f} s"
-    )
-
-    for i, (when, p, q) in enumerate(opening):
-        strike(p % 7, 0.45, when + 0.05 * i, 0.4 * np.sign(p / q - PHI))
-    for k, (when, p, q) in enumerate(rest):
-        speed = float(np.interp(when, curve_tau, log_speed)) / peak_speed
-        strike(p % 7, 0.32 + 0.3 * speed, when, 0.55 * np.sign(p / q - PHI))
-        if k % 2 == 0:
-            chord = progression[(k // 4) % len(progression)]
-            strike(chord, 0.42, when, 0.0, octave=-2, voice=style.bass)
-
-    # Pad: one chord per four Fibonacci notes, from the first note to the end.
-    starts = [0.0] + [rest[k][0] for k in range(4, len(rest), 4)]
-    ends = starts[1:] + [DURATION]
-    for j, (a, b) in enumerate(zip(starts, ends)):
-        chord = scale.chord(progression[j % len(progression)], 3, octave=-1)
-        for midi in chord:
-            voice = audio.pad(
-                float(audio.midi_to_hz(midi)), b - a + 0.3, 0.16, 0.8, 1.6, 0.35
-            )
-            audio.add(track, voice, a, **kw)
-
-    # The dive stops: home.
-    strike(0, 0.6, ZOOM_END - 0.6, 0.0, octave=-2, voice=style.bass)
-    for i, degree in enumerate((0, 2, 4, 7)):
-        strike(degree, 0.42, ZOOM_END - 0.6 + 0.08 * i, 0.4 * (i % 2) - 0.2)
-    return audio.master(style.room(track, rng, circular=False), loop=False)
 
 
 if __name__ == "__main__":

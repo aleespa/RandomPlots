@@ -1,44 +1,44 @@
 """
-Why Hydrogen Glows Red
+The 9% That Never Goes Away
 
-A hydrogen atom giving off one particle of light. The violet cloud is its
-electron, caught halfway between two energy levels, 3d and 2p. A quantum state
-with a single energy never moves: the cloud of a pure 3d or 2p state stays
-perfectly still. Mix the two and the cloud starts to slosh back and forth,
-and a sloshing charge sends out light, the red ripples.
+A square wave built from sine waves, one Fourier series term at a time. At the
+top are the ingredients: sin x, then sin 3x a third as tall, sin 5x a fifth as
+tall, and so on. In the middle is their sum, which straightens into a square
+wave as more and more sine waves are added, up to 256 of them.
 
-The cloud swings at a rate set by the energy gap between the two levels,
-E₃ − E₂ = hν, so the colour of the light is fixed by the gap. For this jump it
-is 656 nm, the deep red of hydrogen and the glow of every pink nebula in
-space photos. As the light carries the energy away, the electron drains into
-the lower level, the cloud shrinks and goes still, and the hydrogen atom stops
-glowing. (Slowed down about 10¹⁵ times.)
+But look at the corners. Every sum overshoots the jump and rings, and the
+bottom panel zooms in on the jump as the waves pile up. The ripples squeeze
+closer to the corner, yet the first one never gets lower: it always overshoots
+by about 9% of the jump. Add a million sine waves and it is still there. This
+is the Gibbs phenomenon, and it is why sharp edges in compressed images and
+audio come with a faint ring.
 
-Listen: each swing of the cloud strikes a handpan, and the notes step down
-as the electron falls, over a soft choir that moves from the upper chord to
-the home chord as the atom comes to rest.
+Listen: a pure tone grows into a square wave's hollow buzz as its overtones
+join, each new one struck on a bell at its own pitch. Every time the number of
+waves doubles, the loudest three ring again, and the overshoot is still there.
 
 Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#hydrogenatom #quantummechanics #mathart #generativeart #randomplots
+#gibbsphenomenon #fourierseries #mathart #generativeart #randomplots
 """
 
 import gc
+import io
 
 import cv2
 import numpy as np
 from loguru import logger
+from matplotlib import mathtext
+from matplotlib.font_manager import FontProperties
 
 from common import audio
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale
+from common.music import STYLES
 from common.video import (
     FPS,
     HEIGHT,
     WIDTH,
-    blit_mask,
     frame_count,
     hex_to_bgr,
-    latex_mask,
     palette_lut,
     render_frames,
     smoothstep,
@@ -47,283 +47,341 @@ from common.video import (
 DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The transition ----------------------------------------------------------------
-P0 = 0.97  # |c_3|^2 at s = 0: the atom has just started to leave 3d
-TAU = 2.2  # s: lifetime of the upper level (|c_3|^2 decays as e^{-s/τ})
-SETTLE = (8.5, 12.0)  # s: the tail of the decay is eased to exactly zero here
-SWING = 1.25  # Hz: the beat (E_3 - E_2)/h, slowed down for the eye
+# --- The series --------------------------------------------------------------------
+TERMS = 256  # odd harmonics k = 1, 3, ..., 511 by the end
+BUILD = 13.0  # s: terms arrive until here, then the picture rests
+GROWTH = 2.5  # M(s) = (1 + s/τ)^GROWTH terms at time s, reaching TERMS at BUILD
+TAU = BUILD / (TERMS ** (1 / GROWTH) - 1)
+GIBBS = 2 / np.pi * 1.851937051982466  # (2/π) Si(π) = 1.17898: the overshoot peak
 FADE = 0.4  # s: fade to the background at the end
 
-# --- Layout (px) -------------------------------------------------------------------
-CX, CY = WIDTH // 2, 900  # the nucleus
-SCALE = 21.0  # px per Bohr radius
-AXIS = np.radians(28.0)  # the dipole axis, in the image plane, above horizontal
-TILT = np.radians(22.0)  # and tilted towards the viewer
-DEPTH = 34.0  # Bohr radii integrated either side along the line of sight
-DEPTH_SAMPLES = 112
-CLOUD_HALF = 700  # px: rows CY ± CLOUD_HALF hold the cloud
-C_LIGHT = 360.0  # px/s: speed of the ripples
-CREST_POW = 9.0  # sharpness of the crests
-NEAR = (110.0, 260.0)  # px: the ripples fade in over this range of radius
-TITLE_Y, FORMULA_Y = 96, 196
-BARS_Y = (1640, 1712)  # the |c_3|^2 and |c_2|^2 bars
-BAR_X = (250, 930)
-BAR_H = 14
-LINE_Y = 1792
+# --- Layout (px, 1x) ---------------------------------------------------------------
+SS = 2  # supersampling
+X_RANGE = (-0.6 * np.pi, 2.6 * np.pi)  # x shown by the fan and the sum
+FAN_Y, FAN_SCALE = 410, 210  # centre line and px per unit
+SUM_Y, SUM_SCALE = 1010, 190
+LENS_TOP, LENS_BOTTOM = 1330, 1700  # px rows of the magnified jump
+LENS_S = (0.3, 1.25)  # values of the sum shown in the lens
+LENS_XI = (-2 * np.pi, 6 * np.pi)  # lens shows x = ξ / (2 M^ZOOM)
+ZOOM = 0.6  # < 1: the zoom lags the ripples, so they squeeze towards the jump
+LENS_X = (60, 1020)
+LABEL_Y, COUNTER_Y, LENS_LABEL_Y = 62, 708, 1288
 
 # --- Look --------------------------------------------------------------------------
-BACKGROUND = "#05040a"
-CLOUD = ["#05040a", "#17123a", "#3b2f86", "#7d6fd6", "#c9c0ff", "#f4f1ff"]
-CLOUD_GAIN, CLOUD_GAMMA = 2.0, 0.6  # tone map 1 - exp(-gain (ρ / max ρ_2p)^gamma)
-LIGHT = "#ff2a3a"  # H-alpha
-LIGHT_CORE = "#ffb0a8"
-GLOW_SIGMA, GLOW_GAIN = 8.0, 0.65
-TEXT, TEXT_DIM = "#efeaff", "#9a90bf"
+BACKGROUND = "#0a0710"
+FAN_PALETTE = ["#4b2bb0", "#a23ac0", "#ff5e7e", "#ffb347", "#fff1b8"]
+SUM_CORE, SUM_GLOW = "#fff6e6", "#ff9a5c"
+GHOST = "#4a3d5c"  # the target square wave, the lens frame
+OVERSHOOT = "#ff6f61"
+TEXT, TEXT_DIM = "#f3e9ff", "#9a8bb0"
+GLOW_SIGMA, GLOW_GAIN = 6.0, 0.9
 
 # --- Sound -------------------------------------------------------------------------
-STYLE = "handpan"  # common.music.STYLES; an --audio-only tag naming one overrides it
-UPPER, HOME = 4, 0  # choir chords (scale degrees) for the 3d and 2p states
-STEPS = 7  # the struck melody falls this many scale degrees as the atom decays
+ROOTS = (45, 47, 48, 50)  # MIDI fundamentals f0 to choose from (A2, B2, C3, D3)
+STRUCK = 16  # the first STRUCK terms are struck on a bell as they arrive
+DRONE_TOP = 7000.0  # Hz: overtones of the drone stop here
+CHIME = (1, 3, 5)  # harmonics struck again whenever the term count doubles
 
 
-def upper_weight(s):
-    """|c_3(s)|^2: exponential decay from P0, eased to exactly 0 by SETTLE[1]."""
-    s = np.asarray(s, float)
-    p = (
-        P0
-        * np.exp(-s / TAU)
-        * (1 - smoothstep((s - SETTLE[0]) / (SETTLE[1] - SETTLE[0])))
+def terms_at(s):
+    """M(s): how many terms are in at time s (seconds), continuous, 1 .. TERMS."""
+    s = np.clip(np.asarray(s, float), 0.0, BUILD)
+    return np.minimum((1 + s / TAU) ** GROWTH, TERMS)
+
+
+def time_of(m):
+    """The inverse of `terms_at`: when M reaches m."""
+    return TAU * (np.asarray(m, float) ** (1 / GROWTH) - 1)
+
+
+def weights(m):
+    """Weight of each term j = 0 .. TERMS-1 (k = 2j + 1) when M = m: 0 -> 1 as M passes j."""
+    return smoothstep(m - np.arange(TERMS))
+
+
+def text_mask(tex, size):
+    """LaTeX (mathtext, Computer Modern) at `size` px per em, as a float32 alpha crop."""
+    buffer = io.BytesIO()
+    prop = FontProperties(size=size, math_fontfamily="cm")
+    mathtext.math_to_image(tex, buffer, prop=prop, dpi=72, format="png")
+    grey = cv2.imdecode(
+        np.frombuffer(buffer.getvalue(), np.uint8), cv2.IMREAD_GRAYSCALE
     )
-    return np.clip(p, 0.0, 1.0)
+    mask = 1 - grey.astype(np.float32) / 255  # black ink on white
+    rows = np.flatnonzero(mask.max(1) > 0)
+    cols = np.flatnonzero(mask.max(0) > 0)
+    return np.pad(mask[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1], 2)
 
 
-def dipole(s):
-    """2|c_3 c_2|, the swing amplitude of the cloud and of the light it gives off."""
-    p = upper_weight(s)
-    return 2 * np.sqrt(p * (1 - p))
+def blit(image, mask, x, y, colour, alpha=1.0, anchor="left"):
+    """Composite a text mask onto a float BGR image at (x, y) = top-left (or top-centre)."""
+    h, w = mask.shape
+    if anchor == "centre":
+        x -= w // 2
+    region = image[y : y + h, x : x + w]
+    a = alpha * mask[..., None]
+    region *= 1 - a
+    region += a * np.array(colour, np.float32)
 
 
-def orbitals(r, cos_theta):
-    """ψ_320 and ψ_210 of hydrogen in atomic units (real)."""
-    r32 = 4 / (81 * np.sqrt(30)) * r**2 * np.exp(-r / 3)
-    r21 = 1 / (2 * np.sqrt(6)) * r * np.exp(-r / 2)
-    y20 = np.sqrt(5 / (16 * np.pi)) * (3 * cos_theta**2 - 1)
-    y10 = np.sqrt(3 / (4 * np.pi)) * cos_theta
-    return r32 * y20, r21 * y10
-
-
-def projections():
+def soundtrack(voice, rng):
     """
-    Column densities ∫|ψ_3|², ∫|ψ_2|² and ∫ψ_3ψ_2 along the line of sight, at half
-    resolution over the cloud rows, then resized to full: (3, rows, WIDTH) float32.
-    """
-    axis = np.array(
-        [np.cos(TILT) * np.cos(AXIS), np.cos(TILT) * np.sin(AXIS), np.sin(TILT)]
-    )
-    rows = 2 * CLOUD_HALF
-    u = ((np.arange(WIDTH // 2) + 0.5) * 2 - CX) / SCALE
-    v = -((np.arange(rows // 2) + 0.5) * 2 - CLOUD_HALF) / SCALE
-    w = np.linspace(-DEPTH, DEPTH, DEPTH_SAMPLES)
-    dw = w[1] - w[0]
-    out = np.zeros((3, rows // 2, WIDTH // 2), np.float64)
-    for i, vi in enumerate(v):
-        uu, ww = np.meshgrid(u, w, indexing="ij")
-        r = np.sqrt(uu**2 + vi**2 + ww**2) + 1e-9
-        cos_theta = (uu * axis[0] + vi * axis[1] + ww * axis[2]) / r
-        p3, p2 = orbitals(r, cos_theta)
-        out[0, i] = (p3 * p3).sum(1) * dw
-        out[1, i] = (p2 * p2).sum(1) * dw
-        out[2, i] = (p3 * p2).sum(1) * dw
-    return np.stack(
-        [
-            cv2.resize(
-                o.astype(np.float32), (WIDTH, rows), interpolation=cv2.INTER_CUBIC
-            )
-            for o in out
-        ]
-    )
+    The Fourier series made audible, from the same M(s) as the picture.
 
-
-def soundtrack(style_name, rng):
-    """
-    The decay made audible, from the same |c_3(s)|² as the picture.
-
-    - Strikes: every swing of the cloud (cos(2π SWING s) = ±1) strikes the style's voice
-      while the dipole 2|c_3 c_2| is above 0.08; louder for a bigger swing, the far swing an
-      octave lower and softer. The pitch falls STEPS scale degrees as |c_3|² drains to 0.
-    - Choir: an "u" chord on degree UPPER whose level follows |c_3|², and the home chord
-      whose level follows |c_2|² = 1 - |c_3|², so the harmony moves with the electron.
-    - Landing: the home root and fifth struck as the atom settles (SETTLE[1]), ringing out.
+    - Drone: additive synthesis of the very same partial sum, Σ w_j(s) sin(2π f0 k τ)/k
+      for k = 2j + 1, with w_j(s) the weights the frames use, so the tone starts as a pure
+      sine at f0 and becomes a square wave's buzz. Overtones above DRONE_TOP are left out.
+    - Strikes: the first STRUCK terms are struck on `voice` (a bell) at f0·k as they reach
+      half weight, louder for larger amplitude 1/k, panned by k.
+    - Chimes: each time M doubles from 16 to 256, harmonics CHIME (f0, 3f0, 5f0) are
+      struck together; the last lands as the build finishes and rings over the rest.
     One-shot: nothing wraps (circular=False) and `master(loop=False)`.
     """
-    style = STYLES[style_name]
-    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    f0 = float(audio.midi_to_hz(int(rng.choice(ROOTS))))
     sr = audio.SAMPLE_RATE
     track = audio.silence(DURATION)
     n = len(track)
-    s = np.arange(n) / sr
-    upper = upper_weight(s)
-    fade = 0.5 - 0.5 * np.cos(np.pi * np.clip((DURATION - s) / 1.2, 0, 1))
-    for degree, level in ((UPPER, upper), (HOME, 1 - upper)):
-        for note in scale.chord(degree, 3, octave=-1):
-            sung = audio.choir(
-                float(audio.midi_to_hz(note)), DURATION, 0.32, attack=0.6, vowel="u"
-            )[:n]
-            track += sung * (level * fade)[:, None]
+    tau = np.arange(n) / sr
+    m = terms_at(tau)
+    drone = np.zeros(n)
+    for j in range(TERMS):
+        k = 2 * j + 1
+        if k * f0 > DRONE_TOP:
+            break
+        w = smoothstep(m - j)
+        drone += w * np.sin(2 * np.pi * f0 * k * tau) / k
+    fade = np.clip((DURATION - tau) / 1.5, 0, 1)
+    drone *= 0.4 * (0.5 - 0.5 * np.cos(np.pi * fade))
+    drone = audio.lowpass(drone[:, None] * np.ones(2), 4500.0, circular=False)
+    track += drone
 
-    strikes = 0
-    for k in range(int(2 * SWING * DURATION)):
-        when = k / (2 * SWING)
-        amp = float(dipole(when))
-        if amp < 0.08:
-            continue
-        degree = int(round(STEPS * float(upper_weight(when))))
-        near = k % 2 == 0  # cos = +1: the swing towards the upper right
-        freq = scale.hz(degree, octave=0 if near else -1)
-        velocity = (0.3 + 0.5 * amp) * (1.0 if near else 0.6)
+    for j in range(STRUCK):
+        k = 2 * j + 1
+        when = 0.0 if j == 0 else float(time_of(j + 0.5))
+        note = voice(f0 * k, float(np.clip(0.75 / np.sqrt(k), 0.12, 0.75)))
         audio.add(
-            track,
-            audio.pan(style.voice(freq, velocity), 0.35 if near else -0.35),
-            when,
-            circular=False,
+            track, audio.pan(note, 0.7 * np.tanh((k - 8) / 10)), when, circular=False
         )
-        strikes += 1
-    for degree, velocity in ((HOME, 0.7), (HOME + 4, 0.45)):
-        audio.add(
-            track, style.voice(scale.hz(degree), velocity), SETTLE[1], circular=False
-        )
-    logger.info(f"Soundtrack: {style_name}, root {scale.root}, {strikes} strikes")
-    return audio.master(style.room(track, rng, circular=False), loop=False)
+    doublings = [2**p for p in range(4, 9)]
+    for i, count in enumerate(doublings):
+        when = float(time_of(count))
+        last = count == TERMS
+        for k in CHIME:
+            velocity = (0.8 if last else 0.5) / np.sqrt(k)
+            audio.add(track, voice(f0 * k, velocity), when, circular=False)
+    logger.info(
+        f"Soundtrack: f0 {f0:.1f} Hz, drone up to k = {int(DRONE_TOP // f0)}, "
+        f"{STRUCK} strikes, chimes at {[round(float(time_of(c)), 2) for c in doublings]} s"
+    )
+    track = audio.reverb(track, rng, rt60=2.6, wet=0.3, tone=5000.0, circular=False)
+    return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    A hydrogen atom radiating H-alpha (3d -> 2p, m = 0), as a one-shot.
+    The Gibbs phenomenon, as a one-shot. The Fourier series of the square wave
+    sign(sin x) is (4/π) Σ sin(kx)/k over odd k. At time s the series holds
+    M(s) = (1 + s/τ)^GROWTH terms (continuous; term j = 0, 1, ... has weight
+    smoothstep(M − j), so each new sine grows in from flat), from 1 at s = 0 to
+    TERMS = 256 at s = BUILD, then the picture rests and fades out.
 
-    The state is ψ = c_3 ψ_320 e^{-iE_3 t} + c_2 ψ_210 e^{-iE_2 t} with real hydrogen
-    eigenfunctions (atomic units). Its density is
-    |c_3|² ψ_3² + |c_2|² ψ_2² + 2|c_3 c_2| ψ_3 ψ_2 cos(ω s), ω = 2π SWING standing in for
-    (E_3 - E_2)/ħ. |c_3(s)|² = P0 e^{-s/τ} (the Weisskopf-Wigner decay), eased to 0
-    over SETTLE so the 2p cloud ends perfectly still; |c_2|² = 1 - |c_3|².
+    Three panels share that one closed form. Top: every weighted term
+    w_j (4/π) sin(kx)/k drawn over the same x, coloured by log k, the newest
+    brighter. Middle: the partial sum, a glowing curve over the dim target
+    square wave; a box at the jump x = 0 marks the lens. Bottom (the lens): the
+    sum near the jump, x = ξ / (2 M^ZOOM), values LENS_S. Near the jump
+    S_M(x) → (2/π) Si(2Mx), so the ripples are 1/M wide; the lens zooms only as
+    M^ZOOM (ZOOM = 0.6), so they visibly squeeze into the wall while the first
+    peak stays at (2/π) Si(π) ≈ 1.179, an overshoot of 9% of the jump of 2 (the
+    red line, which pulses each time M doubles).
 
-    Cloud: the three column densities ∫ψ_3², ∫ψ_2², ∫ψ_3ψ_2 along the line of sight (the
-    m = 0 axis at AXIS in the image plane, tilted TILT towards the viewer) are integrated
-    once at half resolution; each frame is their weighted sum, tone-mapped through the
-    CLOUD palette. Light: the far field of the oscillating dipole d(s) ∝ 2|c_3 c_2| cos(ω s)
-    along the axis, E ∝ sin θ d(s - r/c) / r, drawn as crests (½ + ½cos)^CREST_POW of the
-    retarded phase with brightness 2|c_3 c_2|(s - r/c) sin²θ / √r, in H-alpha red with
-    a glow. Wavelength and atom size are not to scale (λ is ~10⁴ atoms really).
-
-    Text (Computer Modern via common.video.latex_mask, typeset once) and two bars for
-    |c_3|² and |c_2|². Every frame is a pure function of s on the render_frames thread
-    pool. Nothing is random: --seed does not change the picture. The soundtrack
-    (`soundtrack`, STYLE handpan over a choir) uses settings.audio_rng for the root and the
-    reverb; the posted one used --seed 0. An --audio-only tag naming a common.music style
-    swaps the struck voice.
+    Rendering: sin(kx) for every k is precomputed once on the 2x-supersampled
+    column grid; each frame is a weighted sum, 256 cv2 polylines, a downsample,
+    a Gaussian glow and text masks typeset once in
+    Computer Modern with matplotlib mathtext, all a pure function of the frame
+    index on the render_frames thread pool. Nothing is random: --seed does not
+    change the picture. The soundtrack (`soundtrack`, Harmonic series) uses
+    settings.audio_rng only to pick f0 and the reverb; the posted one used --seed 0.
+    An --audio-only tag naming a common.music style swaps the bell for its voice.
     """
     settings = settings or ImageProcessingSettings(1)
-    cloud_maps = projections()
-    ref = float(cloud_maps[1].max())
-    cloud_maps /= ref
-    lut = (palette_lut(CLOUD, 1024)[:, ::-1] * 255).astype(np.float32)  # BGR
-    top = CY - CLOUD_HALF
+    W2, H2 = WIDTH * SS, HEIGHT * SS
+    shift = 2  # cv2 fractional bits
+    one = 1 << shift
 
-    # Light: radius and angle of every pixel from the nucleus, once.
-    yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH].astype(np.float32)
-    dx, dy = xx - CX, -(yy - CY)
-    radius = np.sqrt(dx**2 + dy**2) + 1e-3
-    axis = np.array(
-        [np.cos(TILT) * np.cos(AXIS), np.cos(TILT) * np.sin(AXIS)], np.float32
+    def px(v):
+        return np.round(v * SS * one).astype(np.int32)
+
+    ks = 2 * np.arange(TERMS) + 1
+    amps = 4 / (np.pi * ks)
+    cols = (np.arange(W2) + 0.5) / SS
+    xs = X_RANGE[0] + (X_RANGE[1] - X_RANGE[0]) * cols / WIDTH
+    basis = np.sin(np.outer(ks, xs)).astype(np.float32)  # (TERMS, W2)
+    lens_cols = np.linspace(LENS_X[0], LENS_X[1], (LENS_X[1] - LENS_X[0]) * SS)
+    xi = LENS_XI[0] + (LENS_XI[1] - LENS_XI[0]) * (lens_cols - LENS_X[0]) / (
+        LENS_X[1] - LENS_X[0]
     )
-    sin2 = 1 - ((dx * axis[0] + dy * axis[1]) / radius) ** 2  # w = 0 plane
-    # Dim the light behind the text bands so the type stays readable.
-    row = np.arange(HEIGHT, dtype=np.float32)
-    calm = 1 - 0.65 * smoothstep((FORMULA_Y + 90 - row) / 60)
-    calm *= 1 - 0.65 * smoothstep((row - (BARS_Y[0] - 70)) / 60)
-    sin2 *= calm[:, None]
-    bins = 4  # per px
-    rbin = np.round(radius * bins).astype(np.int32)
-    r1d = np.arange(rbin.max() + 1) / bins
-    reach = smoothstep((r1d - NEAR[0]) / (NEAR[1] - NEAR[0])) * np.sqrt(
-        NEAR[1] / np.maximum(r1d, NEAR[1])
-    )
-    del xx, yy, dx, dy, radius
-    light_colour = np.array(hex_to_bgr(LIGHT), np.float32)
-    core_colour = np.array(hex_to_bgr(LIGHT_CORE), np.float32)
+    lens_scale = (LENS_BOTTOM - LENS_TOP) / (LENS_S[1] - LENS_S[0])
+
+    def lens_y(s):
+        return LENS_BOTTOM - (s - LENS_S[0]) * lens_scale
+
+    def screen_x(x):
+        return (x - X_RANGE[0]) / (X_RANGE[1] - X_RANGE[0]) * WIDTH
+
+    lut = palette_lut(FAN_PALETTE, 1024)[:, ::-1] * 255  # BGR
+    fan_colour = lut[(np.clip(np.log(ks) / np.log(127), 0, 1) * 1023).astype(int)]
     bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
-    omega = 2 * np.pi * SWING
 
-    title = latex_mask(r"$3d\ \rightarrow\ 2p$", 66)
-    formula = latex_mask(
-        r"$\psi = c_3\,\psi_{3d}\,e^{-iE_3t/\hbar} + c_2\,\psi_{2p}\,e^{-iE_2t/\hbar}$",
-        44,
+    # The static layer at 2x: the target square wave and the lens frame.
+    static = np.full((H2, W2, 3), hex_to_bgr(BACKGROUND), np.uint8)
+    ghost = hex_to_bgr(GHOST)
+    square = np.sign(np.sin(xs + 1e-9))
+    pts = np.stack([px(cols), px(SUM_Y - SUM_SCALE * square)], 1)
+    cv2.polylines(static, [pts], False, ghost, 2 * SS, cv2.LINE_AA, shift)
+    cv2.line(
+        static, (0, px(FAN_Y)), (W2 * one, px(FAN_Y)), ghost, SS, cv2.LINE_AA, shift
     )
-    line = latex_mask(r"$E_3 - E_2 = h\nu{,}\quad \lambda = 656\ \mathrm{nm}$", 42)
-    labels = [latex_mask(r"$|c_3|^2$", 40), latex_mask(r"$|c_2|^2$", 40)]
+    for s_value in (1.0,):
+        y = px(lens_y(s_value))
+        cv2.line(
+            static,
+            (px(LENS_X[0]), y),
+            (px(LENS_X[1]), y),
+            ghost,
+            SS,
+            cv2.LINE_AA,
+            shift,
+        )
+    lens_square = np.where(xi < 0, -1.0, 1.0)
+    lens_rows = slice(int(LENS_TOP - 30) * SS, int(LENS_BOTTOM + 30) * SS)
+    lens_offset = (LENS_TOP - 30) * SS * one
+    pts = np.stack([px(lens_cols), px(lens_y(lens_square)) - lens_offset], 1)
+    cv2.polylines(static[lens_rows], [pts], False, ghost, 2 * SS, cv2.LINE_AA, shift)
+
+    # Text, once.
+    label = text_mask(
+        r"$\sin x\, +\, \frac{\sin 3x}{3}\, +\, \frac{\sin 5x}{5}\, +\, "
+        r"\frac{\sin 7x}{7}\, +\, \cdots$",
+        40,
+    )
+    lens_label = text_mask(r"$\mathrm{the\ jump{,}\ magnified}$", 36)
+    nine = text_mask(r"$+9\%$", 48)
+    counters = [None] + [
+        text_mask(
+            rf"${c}\ \mathrm{{sine\ wave{'s' if c > 1 else ''}{{,}}\ added\ up}}$", 54
+        )
+        for c in range(1, TERMS + 1)
+    ]
     text, text_dim = hex_to_bgr(TEXT), hex_to_bgr(TEXT_DIM)
-    bar_colours = [np.array(hex_to_bgr(c), np.float32) for c in (CLOUD[4], CLOUD[3])]
-    cols = np.arange(WIDTH, dtype=np.float32) + 0.5
+    doubling_times = time_of(np.array([2**p for p in range(1, 9)]))
+    core, halo = hex_to_bgr(SUM_CORE), hex_to_bgr(SUM_GLOW)
+    overshoot = np.array(hex_to_bgr(OVERSHOOT), np.float32)
+    logger.info(
+        f"τ = {TAU:.3f} s; M doubles at {np.round(doubling_times, 2).tolist()} s"
+    )
 
     def render(frame: int) -> np.ndarray:
         s = frame / (FRAME_COUNT - 1) * DURATION
-        upper = float(upper_weight(s))
-        swing = float(dipole(s)) * np.cos(omega * s)
-        image = np.empty((HEIGHT, WIDTH, 3), np.float32)
-        image[:] = bg
+        m = float(terms_at(s))
+        zoom = m**ZOOM
+        w = weights(m)
+        live = int(np.count_nonzero(w))
+        coeff = (w * amps).astype(np.float32)
+        canvas = static.copy()
 
-        # The cloud.
-        rho = (
-            upper * cloud_maps[0] + (1 - upper) * cloud_maps[1] + swing * cloud_maps[2]
-        )
-        tone = 1 - np.exp(-CLOUD_GAIN * np.clip(rho, 0, None) ** CLOUD_GAMMA)
-        image[top : top + 2 * CLOUD_HALF] = lut[(tone * 1023).astype(np.int32)]
-
-        # The light, by retarded time.
-        ret = s - r1d / C_LIGHT
-        crest = (0.5 + 0.5 * np.cos(omega * ret)) ** CREST_POW
-        profile = (dipole(ret) * (ret > -0.1) * crest * reach).astype(np.float32)
-        light = profile[rbin] * sin2
-        image += light[..., None] * light_colour
-        image += (light**2)[..., None] * core_colour * 0.5
-        glow = cv2.GaussianBlur(
-            cv2.resize(np.clip(image - bg, 0, None), (WIDTH // 2, HEIGHT // 2)),
-            (0, 0),
-            GLOW_SIGMA / 2,
-        )
-        image += GLOW_GAIN * cv2.resize(glow, (WIDTH, HEIGHT))
-
-        # Text and the two weights.
-        blit_mask(image, title, WIDTH // 2, TITLE_Y, text, anchor="centre")
-        blit_mask(image, formula, WIDTH // 2, FORMULA_Y, text_dim, anchor="centre")
-        for i, weight in enumerate((upper, 1 - upper)):
-            y = BARS_Y[i]
-            mask = labels[i]
-            blit_mask(
-                image, mask, BAR_X[0] - 30 - mask.shape[1], y - mask.shape[0] // 2, text
+        # Top: the ingredients, high k first so the big ones sit on top.
+        fan = coeff[:live, None] * basis[:live]
+        ys = px(FAN_Y - FAN_SCALE * fan)
+        xcol = px(cols)
+        for j in range(live - 1, -1, -1):
+            fresh = np.exp(-max(m - j, 0.0) / 1.5)
+            colour = np.clip(fan_colour[j] * (0.55 + 0.45 * w[j] + 0.6 * fresh), 0, 255)
+            thick = SS * (2 if j < 8 else 1)
+            pts = np.stack([xcol, ys[j]], 1)
+            cv2.polylines(
+                canvas, [pts], False, colour.tolist(), thick, cv2.LINE_AA, shift
             )
-            end = BAR_X[0] + weight * (BAR_X[1] - BAR_X[0])
-            cover = np.clip(end - cols, 0, 1) * (cols >= BAR_X[0])
-            cover *= smoothstep((end - BAR_X[0]) / 10)  # a bar under 10 px fades out
-            band = image[y - BAR_H // 2 : y + BAR_H // 2]
-            track = (cols >= BAR_X[0]) & (cols <= BAR_X[1])
-            band[:, track] = 0.75 * band[:, track] + 0.25 * np.array(
-                hex_to_bgr(CLOUD[1]), np.float32
-            )
-            band += cover[None, :, None] * (bar_colours[i] - band)
-        blit_mask(image, line, WIDTH // 2, LINE_Y, text_dim, anchor="centre")
 
+        # Middle: the sum, and the lens box at the jump.
+        total = coeff[:live] @ basis[:live]
+        pts = np.stack([xcol, px(SUM_Y - SUM_SCALE * total)], 1)
+        cv2.polylines(canvas, [pts], False, halo, 5 * SS, cv2.LINE_AA, shift)
+        cv2.polylines(canvas, [pts], False, core, 2 * SS, cv2.LINE_AA, shift)
+        x0, x1 = (screen_x(v / (2 * zoom)) for v in LENS_XI)
+        x0, x1 = max(x0, 2), min(x1, WIDTH - 2)
+        y0 = SUM_Y - SUM_SCALE * 1.24
+        y1 = SUM_Y - SUM_SCALE * LENS_S[0]
+        box_colour = hex_to_bgr(TEXT_DIM)
+        cv2.rectangle(
+            canvas,
+            (px(x0), px(y0)),
+            (px(x1), px(y1)),
+            box_colour,
+            SS,
+            cv2.LINE_AA,
+            shift,
+        )
+        for a, b in ((x0, LENS_X[0]), (x1, LENS_X[1])):
+            cv2.line(
+                canvas,
+                (px(a), px(y1)),
+                (px(b), px(LENS_TOP - 30)),
+                ghost,
+                SS,
+                cv2.LINE_AA,
+                shift,
+            )
+
+        # Bottom: the lens, S_M(ξ / 2M) against ξ.
+        lens = coeff[:live] @ np.sin(np.outer(ks[:live], xi / (2 * zoom))).astype(
+            np.float32
+        )
+        pulse = float(np.sum(np.exp(-(s - doubling_times[doubling_times <= s]) / 0.45)))
+        pulse = min(pulse, 1.0)
+        y = px(lens_y(GIBBS)) - lens_offset
+        line_colour = (overshoot * (0.55 + 0.45 * pulse)).tolist()
+        sub = canvas[lens_rows]
+        cv2.line(
+            sub,
+            (px(LENS_X[0]), y),
+            (px(LENS_X[1]), y),
+            line_colour,
+            SS * (2 if pulse > 0.5 else 1),
+            cv2.LINE_AA,
+            shift,
+        )
+        pts = np.stack([px(lens_cols), px(lens_y(lens)) - lens_offset], 1)
+        cv2.polylines(sub, [pts], False, halo, 5 * SS, cv2.LINE_AA, shift)
+        cv2.polylines(sub, [pts], False, core, 2 * SS, cv2.LINE_AA, shift)
+
+        image = cv2.resize(canvas, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
+        image = image.astype(np.float32)
+        light = np.clip(image - bg, 0, None)
+        glow = cv2.GaussianBlur(light, (0, 0), GLOW_SIGMA)
+        image += GLOW_GAIN * glow
+
+        blit(image, label, WIDTH // 2, LABEL_Y, text_dim, anchor="centre")
+        count = int(np.clip(round(m), 1, TERMS))
+        blit(image, counters[count], WIDTH // 2, COUNTER_Y, text, anchor="centre")
+        blit(image, lens_label, LENS_X[0], LENS_LABEL_Y, text_dim)
+        blit(
+            image,
+            nine,
+            LENS_X[1] - nine.shape[1],
+            int(lens_y(GIBBS)) - nine.shape[0] - 10,
+            overshoot.tolist(),
+            alpha=0.7 + 0.3 * pulse,
+        )
         out = float(smoothstep((DURATION - s) / FADE))
         if out < 1:
             image = bg + out * (image - bg)
         return image
 
-    logger.info(
-        f"Cloud maps {cloud_maps.shape}, peak 3d/2p column density "
-        f"{cloud_maps[0].max():.2f}; swing {SWING} Hz, λ = {C_LIGHT / SWING:.0f} px"
-    )
     render_frames(settings, render, FRAME_COUNT)
     tag = settings.audio_tag
-    track = soundtrack(tag if tag in STYLES else STYLE, settings.audio_rng)
+    voice = STYLES[tag].voice if tag in STYLES else audio.bell
+    track = soundtrack(voice, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

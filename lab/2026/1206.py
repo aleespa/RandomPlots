@@ -1,30 +1,33 @@
 """
-The Cat That Always Comes Back
+A Cube Through a Cube
 
-This is Arnold's cat map, the textbook example of chaos. Take a 322 × 322 pixel
-picture of a cat, shear it up, shear it sideways, and wrap whatever spills off
-one edge back in at the other: (x, y) → (2x + y, x + y) mod 322. Neighbouring
-pixels fly apart, and within a few steps the cat is pure static.
+Can a cube pass through a hole drilled in a cube of exactly the same size? It
+sounds impossible, but yes: tilt the hole along the right slanted direction
+and there is room for a square tunnel slightly wider than the cube itself, with
+the drilled cube still in one piece.
 
-Yet nothing is lost. There are only so many pixels, so the shuffle must
-repeat: after 12 steps the cat returns upside down, after 24 it is back
-exactly. This chaos is not randomness, just order scrambled beyond recognition.
+Prince Rupert of the Rhine bet on this in the 1690s and won. Seen along the
+tunnel, a cube's outline is a hexagon, and a square a little bigger than its own
+faces fits inside it. A century later Pieter Nieuwland found the best tunnel:
+a cube about 6% bigger, 3√2/4 ≈ 1.06 times the size, can still slip through.
+Many solids share this property. In 2025 mathematicians found the first convex
+shape that does not, the Noperthedron.
 
-Listen: a slow chord brightens with the static, a soft piano note climbs with
-every step, and each return lands on a rolled chord, minor upside down, home
-when the cat is back.
+Listen: a slow, breathing chord opens as the tunnel is drilled, holds its
+breath while the second cube slides through, and settles on the home chord the
+moment it is clear, with a soft bell at each turn.
 
 Made with Python & PyTorch. Sound synthesized in NumPy.
-#arnoldscatmap #chaostheory #mathart #generativeart #randomplots
+#princerupertscube #geometry #mathart #generativeart #randomplots
 """
 
 import gc
 
-import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
 from loguru import logger
+from scipy.spatial.transform import Rotation, Slerp
 
 from common import audio
 from common.gpu import select_device
@@ -41,371 +44,557 @@ from common.video import (
     smoothstep,
 )
 
-DURATION = 15.0  # seconds, an exact loop
+DURATION = 15.0  # seconds, one-shot
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The map -----------------------------------------------------------------------
-N = 322  # grid size; the cat map M = [[2, 1], [1, 1]] has period 24 mod 322
-CAT = np.array([[2, 1], [1, 1]], dtype=np.int64)
-HOLD = 1.0  # s of rest on the cat and on the upside-down cat
-SLOW = 1.3  # steps near a return last up to 1 + SLOW times as long as the others
-SHEAR = 0.44  # fraction of a step each of the two shears takes
+# --- The geometry ------------------------------------------------------------------
+# Unit cube A = [-1/2, 1/2]^3. Nieuwland's tunnel runs along d = (2, 2, -1)/3: the
+# square with corners (1/4, -1/2, -1/2), (-1/2, 1/4, -1/2), (-1/4, 1/2, 1/2),
+# (1/2, -1/4, 1/2) lies inside A, is perpendicular to d and has side 3√2/4.
+TUNNEL = np.array(
+    [
+        [-1 / np.sqrt(2), 1 / np.sqrt(2), 0.0],  # e1
+        [1 / np.sqrt(18), 1 / np.sqrt(18), 4 / np.sqrt(18)],  # e2
+        [2 / 3, 2 / 3, -1 / 3],  # d = e1 x e2
+    ]
+).T  # columns e1, e2, d: a rotation
+NIEUWLAND = 3 * np.sqrt(2) / 4  # the widest square tunnel, 1.0607
+HOLE = 1.03  # side of the drilled tunnel; cube B (side 1) passes with 1.5% clearance
+REACH = 0.5 * np.abs(TUNNEL[:, 2]).sum()  # half the extent of A along d: 5/6
+CORNERS = np.array([[x, y, z] for x in (-1, 1) for y in (-1, 1) for z in (-1, 1)]) / 2
 
-# --- Layout & look -----------------------------------------------------------------
+# --- Timeline (seconds) ------------------------------------------------------------
+DRILL = (0.5, 3.4)  # the tunnel opens from nothing to HOLE
+THROUGH = (3.7, 4.5)  # the camera looks straight down the tunnel
+FLIGHT = (4.5, 6.3)  # B flies round behind A and turns to the tunnel's angle
+SLIDE = (6.3, 10.4)  # B slides along the tunnel, towards the camera
+B_START, B_END = -2.1, 1.75  # B's centre along d during the slide
+ABOVE = 1.8  # B's height above A (camera up) at the start and the end
+OBLIQUE = 50.0  # degrees the camera tilts away from d over TILT
+TILT = (5.8, 11.0)
+ORBIT = 75.0  # degrees the camera turns about d from then until the end
+QUESTION_OUT, ANSWER_IN = (5.4, 6.1), (10.8, 11.6)
+FADE = 0.4  # s: fade to the background at the end
+
+# --- Camera ------------------------------------------------------------------------
 SS = 2  # supersampling
-SIDE = 1008  # px, the torus square
-LEFT, TOP = (WIDTH - SIDE) // 2, 380
-BG_TOP, BG_BOTTOM = "#141022", "#06050c"
-FRAME_LINE = "#3a3352"
-TEXT, TEXT_DIM, ACCENT = "#efe8dc", "#9a93b0", "#f2a03d"
+DISTANCE = 8.0  # camera to target
+FOCAL = 3000.0  # px at 1x
+LIFT = 0.12  # the target sits this far below the pair's middle (room for text)
+MARGIN = 8  # px around the cubes' projected bounding box that gets traced
+
+# --- Look --------------------------------------------------------------------------
+BG_TOP, BG_BOTTOM = "#121a2e", "#05070d"
+CUBE_A = "#efe7d6"  # porcelain
+WALL = "#d9a43a"  # the tunnel's inner walls, gold
+CUBE_B = "#2bb0a0"  # teal
+INK = "#1b1e28"
+GHOST = 0.32  # opacity of the drilled-away edges of A
+TEXT, TEXT_DIM = "#ece6da", "#9aa2b6"
+LINE_PX = 1.6  # edge line half-width, px at 1x
+LIGHT = np.array([-0.45, 0.75, 0.6])  # camera frame (right, up, back)
+AMBIENT, DIFFUSE = 0.42, 0.62
 
 # --- Sound -------------------------------------------------------------------------
-LEADS = {"felt_piano": audio.piano, "harp": audio.pluck}  # --audio-only tag picks one
-LEAD = "felt_piano"
-ROOTS = (50, 52, 53)  # MIDI roots (D3, E3, F3) of the chords; the lead is an octave up
+STYLE = (
+    "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one overrides it
+)
+AMBIENT_ROOTS = (50, 52, 53)  # MIDI roots for the posted ambient track (D3, E3, F3)
+DRILL_NOTES = 8  # struck as the tunnel widens through k/8 of its size
+SLIDE_STEP = 0.25  # a note each time B advances this far while it overlaps A
 
 
-def period(n: int = N) -> int:
-    """Smallest k with M^k = I mod n."""
-    power = np.eye(2, dtype=np.int64)
-    for k in range(1, 10 * n):
-        power = CAT @ power % n
-        if (power == np.eye(2, dtype=np.int64)).all():
-            return k
-    raise ValueError(n)
+def _rgb(colour: str) -> np.ndarray:
+    return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
 
 
-STEPS = period()  # 24
-HALF = STEPS // 2  # M^12 = -I mod 322: the cat upside down
+def _normalise(v):
+    return v / np.linalg.norm(v)
 
 
-def schedule():
+def camera_frame(back) -> np.ndarray:
+    """Columns (right, up, back) for a camera looking along -back, world z up."""
+    back = _normalise(np.asarray(back, float))
+    up = _normalise(np.array([0.0, 0.0, 1.0]) - back[2] * back)
+    return np.stack([np.cross(up, back), up, back], 1)
+
+
+def eased(s, start, end):
+    return float(smoothstep((s - start) / (end - start)))
+
+
+def _inverse_ease(fraction, start, end):
+    """When smoothstep over (start, end) reaches `fraction` (bisection)."""
+    lo, hi = 0.0, 1.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        lo, hi = (mid, hi) if smoothstep(mid) < fraction else (lo, mid)
+    return start + 0.5 * (lo + hi) * (end - start)
+
+
+def hole_time(fraction):
+    """When the tunnel reaches `fraction` of its final size."""
+    return _inverse_ease(fraction, *DRILL)
+
+
+def slide_time(x):
+    """When B's centre reaches x along d during the slide."""
+    return _inverse_ease((x - B_START) / (B_END - B_START), *SLIDE)
+
+
+def _bezier(p0, p1, p2, v):
+    return (1 - v) ** 2 * p0 + 2 * v * (1 - v) * p1 + v**2 * p2
+
+
+def timeline():
     """
-    Start time (s) of every step and its length. Time 0 is the middle of the rest on
-    the cat; the steps slow down near the two returns (k = 0, HALF, STEPS) and a rest
-    of HOLD sits at each.
+    Per-frame scene parameters, all closed forms in time: the camera frame and
+    origin, the tunnel size, B's centre and orientation.
     """
-    centres = np.arange(STEPS) + 0.5
-    near = np.minimum.reduce([abs(centres - r) for r in (0, HALF, STEPS)])
-    weight = 1 + SLOW * np.exp(-((near / 2.2) ** 2))
-    lengths = weight / weight.sum() * (DURATION - 2 * HOLD)
-    starts = np.empty(STEPS)
-    clock = HOLD / 2
-    for k in range(STEPS):
-        if k == HALF:
-            clock += HOLD
-        starts[k] = clock
-        clock += lengths[k]
-    return starts, lengths
+    d = TUNNEL[:, 2]
+    side = _normalise([-0.6, 0.9, 0.9] - np.dot([-0.6, 0.9, 0.9], d) * d)
+    side2 = np.cross(d, side)
+    approach = Slerp(
+        [0, 1],
+        Rotation.from_matrix(
+            [camera_frame([1.0, -1.25, 0.95]), camera_frame(d)]  # three faces -> d
+        ),
+    )
 
+    def camera_at(s):
+        if s < THROUGH[0]:
+            return approach([eased(s, 0.0, THROUGH[0])]).as_matrix()[0]
+        tilt = np.radians(OBLIQUE) * eased(s, TILT[0], TILT[1])
+        turn = np.radians(ORBIT) * eased(s, THROUGH[1] + 0.5, DURATION)
+        around = np.cos(turn) * side + np.sin(turn) * side2
+        return camera_frame(np.cos(tilt) * d + np.sin(tilt) * around)
 
-def state(seconds, starts, lengths):
-    """(completed steps k, first shear s1, second shear s2) at a time in the loop."""
-    k = int(np.searchsorted(starts, seconds, side="right")) - 1
-    if k < 0:
-        return 0, 0.0, 0.0
-    tau = (seconds - starts[k]) / lengths[k]
-    if tau >= 1:  # resting after step k
-        return k + 1, 0.0, 0.0
-    s1 = float(smoothstep(tau / SHEAR))
-    s2 = float(smoothstep((tau - (1 - SHEAR)) / SHEAR))
-    return k, s1, s2
+    turn = Slerp(
+        [0, 1],
+        Rotation.concatenate([Rotation.identity(), Rotation.from_matrix(TUNNEL)]),
+    )
+    up_through = camera_frame(d)[:, 1]  # camera up while it looks down the tunnel
+    fly = (ABOVE * up_through, 1.9 * up_through + 1.3 * B_START * d, B_START * d)
 
-
-def inverse_powers():
-    """M^-k mod N for k = 0 .. STEPS, as integer 2x2 matrices."""
-    inverse = np.array([[1, -1], [-1, 2]], dtype=np.int64) % N
-    out = [np.eye(2, dtype=np.int64)]
-    for _ in range(STEPS):
-        out.append(inverse @ out[-1] % N)
-    return np.array(out)
-
-
-def _rgb(colour: str):
-    return tuple(int(colour[i : i + 2], 16) for i in (1, 3, 5))
-
-
-def draw_cat(n: int = N) -> np.ndarray:
-    """The picture: a ginger cat's face on a dusk gradient, (n, n, 3) RGB uint8."""
-    big = 4  # draw at 4x and shrink, for clean edges at grid resolution
-    s = n * big / 322.0
-
-    def p(x, y):
-        return int(round(x * s)), int(round(y * s))
-
-    def r(a):
-        return int(round(a * s))
-
-    yy, xx = np.mgrid[0 : n * big, 0 : n * big] / (n * big)
-    top, bottom = np.array(_rgb("#2a7f8f")), np.array(_rgb("#3b1f5e"))
-    g = np.clip(0.65 * yy + 0.35 * xx, 0, 1)[..., None]
-    image = ((1 - g) * top + g * bottom).astype(np.uint8)
-    image = np.ascontiguousarray(image)
-    aa = cv2.LINE_AA
-
-    # A low moon behind, and a few stars.
-    cv2.circle(image, p(258, 62), r(40), _rgb("#f6e7b8"), -1, aa)
-    for x, y, a in (
-        (40, 40, 3),
-        (90, 22, 2),
-        (30, 120, 2),
-        (296, 150, 2),
-        (220, 20, 2),
-    ):
-        cv2.circle(image, p(x, y), r(a), _rgb("#fdf6dc"), -1, aa)
-
-    fur, dark, light = _rgb("#f08a24"), _rgb("#b4520f"), _rgb("#fbf1df")
-    pink, ink = _rgb("#f4a1ae"), _rgb("#1a1020")
-    # Ears.
-    for sign in (-1, 1):
-        outer = np.array(
-            [p(161 + sign * 112, 150), p(161 + sign * 92, 32), p(161 + sign * 36, 104)]
-        )
-        inner = np.array(
-            [p(161 + sign * 98, 132), p(161 + sign * 88, 56), p(161 + sign * 54, 106)]
-        )
-        cv2.fillPoly(image, [outer], fur, aa)
-        cv2.fillPoly(image, [inner], pink, aa)
-    # Head, cheeks and chin.
-    cv2.ellipse(image, p(161, 190), (r(118), r(100)), 0, 0, 360, fur, -1, aa)
-    cv2.ellipse(image, p(161, 248), (r(96), r(62)), 0, 0, 360, fur, -1, aa)
-    # Forehead stripes.
-    for dx, h in ((-26, 44), (0, 56), (26, 44)):
-        poly = np.array([p(161 + dx - 9, 96), p(161 + dx + 9, 96), p(161 + dx, 96 + h)])
-        cv2.fillPoly(image, [poly], dark, aa)
-    for sign in (-1, 1):  # cheek stripes
-        for dy in (0, 20):
-            poly = np.array(
-                [
-                    p(161 + sign * 118, 196 + dy),
-                    p(161 + sign * 116, 208 + dy),
-                    p(161 + sign * 78, 204 + dy),
-                ]
+    frames = []
+    for frame in range(FRAME_COUNT):
+        s = frame / (FRAME_COUNT - 1) * DURATION
+        camera = camera_at(s)
+        if s < FLIGHT[0]:
+            centre, orient = ABOVE * camera[:, 1], np.eye(3)
+        elif s < SLIDE[0]:
+            v = eased(s, *FLIGHT)
+            centre, orient = _bezier(*fly, v), turn([v]).as_matrix()[0]
+        else:
+            x = B_START + (B_END - B_START) * eased(s, *SLIDE)
+            centre, orient = x * d, TUNNEL
+        target = 0.5 * centre - LIFT * camera[:, 1]
+        frames.append(
+            dict(
+                s=s,
+                camera=camera,
+                origin=target + DISTANCE * camera[:, 2],
+                hole=HOLE * eased(s, *DRILL),
+                centre=centre,
+                orient=orient,
             )
-            cv2.fillPoly(image, [poly], dark, aa)
-    # Muzzle.
-    for sign in (-1, 1):
-        cv2.ellipse(
-            image, p(161 + sign * 24, 238), (r(32), r(24)), 0, 0, 360, light, -1, aa
         )
-    cv2.ellipse(image, p(161, 262), (r(30), r(18)), 0, 0, 360, light, -1, aa)
-    # Eyes: green, slit pupils, a highlight.
-    for sign in (-1, 1):
-        c = (161 + sign * 46, 172)
-        cv2.ellipse(image, p(*c), (r(25), r(29)), 0, 0, 360, ink, -1, aa)
-        cv2.ellipse(image, p(*c), (r(22), r(26)), 0, 0, 360, _rgb("#a6e05a"), -1, aa)
-        cv2.ellipse(image, p(*c), (r(5), r(22)), 0, 0, 360, ink, -1, aa)
-        cv2.circle(image, p(c[0] + 8, c[1] - 10), r(5), _rgb("#ffffff"), -1, aa)
-    # Nose and mouth.
-    nose = np.array([p(147, 218), p(175, 218), p(161, 234)])
-    cv2.fillPoly(image, [nose], pink, aa)
-    cv2.line(image, p(161, 234), p(161, 246), ink, r(2.5), aa)
-    cv2.ellipse(image, p(149, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
-    cv2.ellipse(image, p(173, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
-    # Whiskers.
-    for sign in (-1, 1):
-        for dy, ey in ((-6, -18), (2, 2), (10, 22)):
-            cv2.line(
-                image,
-                p(161 + sign * 50, 240 + dy),
-                p(161 + sign * 150, 240 + ey),
-                light,
-                r(2),
-                aa,
-            )
-    return cv2.resize(image, (n, n), interpolation=cv2.INTER_AREA)
+    return frames
+
+
+def _crop(p):
+    """The 2x pixel box (rows, cols) that both cubes project into, plus a margin."""
+    R, O = p["camera"], p["origin"]
+    points = np.concatenate([CORNERS, p["centre"] + CORNERS @ p["orient"].T])
+    cam = (points - O) @ R  # (right, up, back) coordinates
+    depth = -cam[:, 2]
+    x = WIDTH / 2 + FOCAL * cam[:, 0] / depth
+    y = HEIGHT / 2 - FOCAL * cam[:, 1] / depth
+    x0 = int(np.clip(np.floor(x.min()) - MARGIN, 0, WIDTH))
+    x1 = int(np.clip(np.ceil(x.max()) + MARGIN, 0, WIDTH))
+    y0 = int(np.clip(np.floor(y.min()) - MARGIN, 0, HEIGHT))
+    y1 = int(np.clip(np.ceil(y.max()) + MARGIN, 0, HEIGHT))
+    return y0, max(y1, y0 + 1), x0, max(x1, x0 + 1)
+
+
+def _slabs(q, v, half):
+    """Ray-slab intersection: entry/exit distances and the axes they happen on."""
+    v = torch.where(v.abs() < 1e-9, torch.full_like(v, 1e-9), v)
+    inv = 1.0 / v
+    t1, t2 = (-half - q) * inv, (half - q) * inv
+    near, far = torch.minimum(t1, t2), torch.maximum(t1, t2)
+    t_near, axis_near = near.max(-1)
+    t_far, axis_far = far.min(-1)
+    return t_near, t_far, axis_near, axis_far, v
+
+
+def _face_normal(frame, v, axis):
+    """World normal facing the ray on slab face `axis` of a box with axes `frame`."""
+    direction = torch.gather(v, 1, axis[:, None])[:, 0]
+    return frame.T[axis] * -torch.sign(direction)[:, None]
+
+
+def _edge_distance(q, half, skip):
+    """Distance from a point in box coordinates to the nearest edge of its face."""
+    m = (half - q.abs()).scatter(1, skip[:, None], 1e9)
+    return m.min(-1).values
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Arnold's cat map on a 322 x 322 torus, as an exact loop. The picture is a grid of
-    N = 322 cells (a cat's face drawn with cv2). One step of the map is M = [[2, 1],
-    [1, 1]] = A·B with the shears B: (x, y) -> (x, y + x) and A: (x, y) -> (x + y, y),
-    mod N. M has period 24 mod 322 (Pisano-type period; 322 is the Lucas number L12)
-    and M^12 = -I, so the cat returns rotated by 180° halfway and exactly at the end.
+    Prince Rupert's cube, as a one-shot ray-traced on the GPU. Cube A is the unit
+    cube at the origin; the tunnel is the infinite square prism of side h(s)
+    (0 -> HOLE = 1.03 over DRILL, smoothstep) about the axis d = (2, 2, -1)/3, with
+    cross-section axes e1 = (-1, 1, 0)/√2, e2 = (1, 1, 4)/√18. Nieuwland's square
+    (side 3√2/4) is the cross-section of A through its centre perpendicular to d, so
+    any tunnel up to that size leaves A in one piece (here 12% of its volume).
 
-    Time: the loop's 15 s hold HOLD = 1 s on each return and spread the 24 steps over
-    the rest, longer near the returns (weight 1 + SLOW·exp(-(d/2.2)²), d = steps to
-    the nearest return). Within a step the two shears are animated continuously:
-    column i slides by s1·i cells, then row j by s2·j cells (smoothstep over SHEAR
-    of the step each), wrapping round the torus. A display point (u, v) in cell units
-    shows the cell x1 = ⌊u − s2⌊v⌋⌋, y1 = ⌊v − s1·x1⌋ of the image after k steps,
-    which is the cell M^-k (x1, y1) mod N of the original. Integer arithmetic, so
-    the map is exact and the loop closes bit for bit.
+    Cube B (side 1) starts above A with A's orientation (camera up × ABOVE). The
+    camera slerps from a three-face view to straight down the tunnel while it is
+    drilled, holds, then B flies on a quadratic Bézier round behind A while slerping
+    to the tunnel frame (e1, e2, d), so it sits framed in the hole, then slides
+    along d from B_START to B_END, towards the camera and out of the front of A.
+    Meanwhile the camera tilts OBLIQUE = 50° away from d over TILT and turns ORBIT
+    = 75° about d until the end, so the passage is seen from the side. The look-at
+    target is half of B's centre, so both stay framed. All of it is a closed form
+    in the time s; nothing is random, so --seed does not change the picture.
 
-    Rendering: one integer gather per 2x supersampled pixel of the square on the GPU
-    (torch), average-pooled to 1x and composited over a gradient with LaTeX text (a
-    step counter n, the map, a note at the halfway return), render_frames(parallel=
-    False). Nothing is random, so --seed does not change the picture.
+    Rendering: only the projected bounding box of the two cubes is traced, one
+    perspective ray per pixel at 2x supersampling. A minus the tunnel is solved per
+    ray with slab intersections (convex CSG: A's entry face unless that point lies
+    in the prism, else the prism's exit wall if it is still inside A); B is a second
+    oriented slab box; the nearest hit wins. Faces are Lambert-shaded from a light
+    fixed to the camera, the tunnel walls are gold and darken with depth, ink lines
+    mark edges, the tunnel's rim and corners at a constant pixel width, and the
+    drilled-away edges of A stay as faint ghost lines. Premultiplied colour and
+    coverage are average-pooled to 1x and composited over a gradient on CUDA, with
+    LaTeX text layers (mathtext masks, `blit_mask`-ed once into full-frame layers).
+    render_frames(parallel=False).
 
-    Soundtrack (`soundtrack`, ambient Drone & pad with a felt-piano lead): pad and
-    "u" choir chords I, IV, vi, V on the step schedule, lowpass opening with the
-    scramble, one piano note per completed step (pitch by distance from the nearest
-    return), rolled vi / I chords plus a bell at the two returns, delay and a 5 s
-    reverb, all circular. `--audio-only harp` swaps the lead for a harp pluck. The
-    posted soundtrack is LEAD = "felt_piano" with --seed 0 (settings.audio_rng
-    picks root MIDI 52 and the room).
+    Soundtrack (`ambient`, Drone & pad), from the same timeline: pad chords vi, IV,
+    a suspended V from the moment B touches A (centre at −(5/6 + 1/2) along d) until
+    it is clear (+(5/6 + 1/2)), then I, each section's lowpass opening as it goes;
+    a soft "u" choir throughout; bell tones at 0 s, the straight-through view,
+    first contact and the release; delay and a long reverb. A STYLES tag to
+    --audio-only (e.g. mallet_garden) plays the older struck Rise & resolve
+    version (`soundtrack`) instead. The posted
+    soundtrack uses --seed 0 (settings.audio_rng picks the root and the room).
     """
     settings = settings or ImageProcessingSettings(1)
     device = select_device()
-    starts, lengths = schedule()
-    powers = torch.tensor(inverse_powers(), device=device)
-    logger.info(f"Cat map period mod {N}: {STEPS} steps, M^{HALF} = -I")
+    focal = FOCAL * SS
+    plan = timeline()
+    logger.info(f"tunnel {HOLE} wide, Nieuwland limit {NIEUWLAND:.4f}")
 
-    def tensor(a, dtype=torch.float32):
-        return torch.tensor(np.asarray(a), device=device, dtype=dtype)
+    def tensor(a):
+        return torch.tensor(np.asarray(a), device=device, dtype=torch.float32)
 
-    cat = tensor(draw_cat().reshape(-1, 3))
-    px = SIDE * SS
-    centres = (torch.arange(px, device=device, dtype=torch.float64) + 0.5) * N / px
-    v, u = torch.meshgrid(centres, centres, indexing="ij")
-    v_cell = torch.floor(v)
+    tunnel = tensor(TUNNEL)
+    eye = torch.eye(3, device=device)
+    cube_a, wall, cube_b, ink = (tensor(_rgb(c)) for c in (CUBE_A, WALL, CUBE_B, INK))
+    light_cam = _normalise(LIGHT)
 
-    # Background with the static text, RGB 0..255.
-    rows = np.linspace(0, 1, HEIGHT)[:, None, None]
-    top, bottom = np.array(_rgb(BG_TOP)), np.array(_rgb(BG_BOTTOM))
-    background = ((1 - rows) * top + rows * bottom) * np.ones((1, WIDTH, 1))
-    background = background.astype(np.float32)
-    line = np.array(_rgb(FRAME_LINE), np.float32)
-    background[TOP - 3 : TOP + SIDE + 3, LEFT - 3 : LEFT + SIDE + 3] = line
-    text, dim, accent = (
-        np.array(_rgb(c), np.float32) for c in (TEXT, TEXT_DIM, ACCENT)
+    # Background: a vertical gradient with a soft vignette, RGB 0..255.
+    v = np.linspace(0, 1, HEIGHT)[:, None, None]
+    bg = (1 - v) * _rgb(BG_TOP) + v * _rgb(BG_BOTTOM)
+    yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
+    r2 = ((xx - WIDTH / 2) / WIDTH) ** 2 + ((yy - HEIGHT * 0.55) / HEIGHT) ** 2
+    bg = bg * (1.0 - 0.35 * np.clip(r2 / 0.35, 0, 1))[..., None]
+    background = tensor(255 * bg)
+
+    # Text, typeset once into full-frame layers: alpha and premultiplied colour.
+    def layer(lines):
+        alpha = np.zeros((HEIGHT, WIDTH, 3), np.float32)
+        colour = np.zeros((HEIGHT, WIDTH, 3), np.float32)
+        for tex, size, y, rgb in lines:
+            mask = latex_mask(tex, size)
+            blit_mask(alpha, mask, WIDTH // 2, y, (1, 1, 1), anchor="centre")
+            blit_mask(colour, mask, WIDTH // 2, y, 255 * rgb, anchor="centre")
+        return tensor(alpha[..., :1]), tensor(colour)
+
+    text, dim = _rgb(TEXT), _rgb(TEXT_DIM)
+    question = layer(
+        [
+            (r"$\mathrm{Can\ a\ cube\ pass\ through}$", 66, 120, text),
+            (r"$\mathrm{a\ hole\ in\ an\ identical\ cube?}$", 66, 210, text),
+        ]
     )
-    title = r"$\mathrm{Arnold}\text{'}\mathrm{s\ cat\ map}$"
-    for tex, size, y, colour in (
-        (title, 74, 92, text),
-        (r"$(x{,}\,y)\ \mapsto\ (2x+y{,}\ x+y)\ \mathrm{mod}\ 322$", 54, 192, accent),
-        (
-            r"$\mathrm{on\ a}\ 322\times 322\ \mathrm{grid{,}\ the\ cat\ returns\ after}\ 24\ \mathrm{steps}$",
-            42,
-            284,
-            dim,
-        ),
-    ):
-        blit_mask(
-            background, latex_mask(tex, size), WIDTH // 2, y, colour, anchor="centre"
+    answer = layer(
+        [
+            (r"$\mathrm{Yes{,}\ with\ room\ to\ spare.}$", 66, 110, text),
+            (r"$\mathrm{Prince\ Rupert\ was\ right{,}\ in\ 1693}$", 44, 204, dim),
+            (
+                r"$\mathrm{Even\ a\ cube}\ \frac{3\sqrt{2}}{4}\approx 1.06"
+                r"\ \mathrm{times\ as\ big\ fits.}$",
+                52,
+                272,
+                text,
+            ),
+        ]
+    )
+
+    def trace(p, rows, cols):
+        """Premultiplied colour (N, 3) in [0, 1] and coverage (N,) for a 2x box."""
+        R = tensor(p["camera"])
+        yy, xx = torch.meshgrid(
+            (HEIGHT * SS / 2 - (rows + 0.5)) / focal,
+            (cols + 0.5 - WIDTH * SS / 2) / focal,
+            indexing="ij",
         )
-    background = tensor(background)
+        dirs = torch.stack([xx, yy, -torch.ones_like(xx)], -1).reshape(-1, 3)
+        D = (dirs / dirs.norm(dim=1, keepdim=True)) @ R.T  # world directions
+        O = tensor(p["origin"])
+        n = D.shape[0]
+        inf = torch.full((n,), float("inf"), device=device)
+        h = p["hole"]
+        drilled = h > 1e-4
 
-    def layer(tex, size, y, colour):
-        """A text mask as (alpha, premultiplied colour) tensors and its box."""
-        mask = latex_mask(tex, size)
-        h, w = mask.shape
-        x = WIDTH // 2 - w // 2
-        alpha = tensor(mask[..., None])
-        return alpha, alpha * tensor(colour), (y, y + h, x, x + w)
+        # Cube A minus the tunnel.
+        tnA, tfA, iaA, _, vA = _slabs(O[None], D, 0.5)
+        hitA = (tnA < tfA) & (tfA > 0)
+        if drilled:
+            qH, vH0 = O @ tunnel[:, :2], D @ tunnel[:, :2]
+            tnH, tfH, _, ibH, vH = _slabs(qH[None], vH0, h / 2)
+            inside = (tnH <= tnA) & (tnA < tfH)
+            outer = hitA & ~inside
+            inner = hitA & inside & (tfH < tfA)
+            tA = torch.where(outer, tnA, torch.where(inner, tfH, inf))
+        else:
+            outer, inner = hitA, torch.zeros_like(hitA)
+            tA = torch.where(hitA, tnA, inf)
 
-    counters = [layer(rf"$n = {k}$", 76, 1432, text) for k in range(STEPS + 1)]
-    upside = layer(r"$\mathrm{halfway{,}\ upside\ down}$", 46, 1540, accent)
-    half_time = starts[HALF] - HOLD / 2  # middle of the halfway rest
+        # Cube B.
+        RB, pB = tensor(p["orient"]), tensor(p["centre"])
+        tnB, tfB, iaB, _, vB = _slabs(((O - pB) @ RB)[None], D @ RB, 0.5)
+        tB = torch.where((tnB < tfB) & (tfB > 0), tnB, inf)
 
-    def put(image, overlay, a=1.0):
-        alpha, colour, (y0, y1, x0, x1) = overlay
-        region = image[y0:y1, x0:x1]
-        region.mul_(1 - a * alpha).add_(a * colour)
+        t_hit = torch.minimum(tA, tB)
+        hit = torch.isfinite(t_hit)
+        isB = hit & (tB <= tA)
+        isOuter, isInner = hit & ~isB & outer, hit & ~isB & inner
+        t = torch.where(hit, t_hit, torch.zeros_like(t_hit))
+        P = O[None] + t[:, None] * D
+        width = LINE_PX * SS / focal  # world half-width of a line per unit depth
+
+        normal = _face_normal(eye, vA, iaA)
+        dist = _edge_distance(P, 0.5, iaA)
+        base = cube_a[None].expand(n, 3)
+        shade = torch.ones(n, device=device)
+        if drilled:
+            normal = torch.where(
+                isInner[:, None], _face_normal(tunnel[:, :2], vH, ibH), normal
+            )
+            r = (P @ tunnel[:, :2]).abs()
+            rim = (r.max(-1).values - h / 2).abs()
+            dist = torch.where(isOuter, torch.minimum(dist, rim), dist)
+            gap = (0.5 - P.abs()).min(-1).values  # how deep inside A
+            corner = h / 2 - r.min(-1).values
+            dist = torch.where(isInner, torch.minimum(gap, corner), dist)
+            depth = torch.clamp(gap / 0.3, 0, 1)
+            shade = torch.where(isInner, 1.0 - 0.45 * depth * depth, shade)
+            base = torch.where(isInner[:, None], wall[None], base)
+        normal = torch.where(isB[:, None], _face_normal(RB, vB, iaB), normal)
+        dist = torch.where(isB, _edge_distance((P - pB) @ RB, 0.5, iaB), dist)
+        base = torch.where(isB[:, None], cube_b[None], base)
+
+        light = tensor(p["camera"] @ light_cam)
+        lambert = torch.clamp(normal @ light, min=0)
+        colour = base * ((AMBIENT + DIFFUSE * lambert) * shade)[:, None]
+        edge = torch.clamp(dist / (width * t) - 0.5, 0, 1)
+        edge = edge * edge * (3 - 2 * edge)
+        colour = ink[None] + edge[:, None] * (colour - ink[None])
+        cover = hit.float()
+        colour = colour * cover[:, None]
+
+        # Ghost edges: where A's entry or exit point was drilled away and nothing
+        # nearer covers it, draw the original cube's edge faintly.
+        if drilled:
+            for t_face, axis in ((tnA, iaA), (tfA, None)):
+                visible = hitA & (t_hit > t_face + 1e-4)
+                Q = O[None] + t_face[:, None] * D
+                if axis is None:
+                    axis = (Q.abs() - 0.5).abs().argmin(-1)
+                g = _edge_distance(Q, 0.5, axis) / (width * t_face) - 0.5
+                g = GHOST * (1 - torch.clamp(g, 0, 1)) * visible.float()
+                colour = colour * (1 - g[:, None]) + g[:, None] * cube_a[None]
+                cover = cover + g * (1 - cover)
+        return colour, cover
+
+    rows_all = torch.arange(HEIGHT * SS, device=device, dtype=torch.float32)
+    cols_all = torch.arange(WIDTH * SS, device=device, dtype=torch.float32)
 
     def render(frame):
-        seconds = frame / FRAME_COUNT * DURATION
-        k, s1, s2 = state(seconds, starts, lengths)
-        x1 = torch.remainder(torch.floor(u - s2 * v_cell), N).long()
-        y1 = torch.remainder(torch.floor(v - s1 * x1), N).long()
-        m = powers[k % STEPS]
-        x0 = (m[0, 0] * x1 + m[0, 1] * y1) % N
-        y0 = (m[1, 0] * x1 + m[1, 1] * y1) % N
-        square = cat[(y0 * N + x0).reshape(-1)].reshape(px, px, 3)
-        square = F.avg_pool2d(square.permute(2, 0, 1)[None], SS)[0].permute(1, 2, 0)
+        p = plan[frame]
+        y0, y1, x0, x1 = _crop(p)
+        colour, cover = trace(
+            p, rows_all[y0 * SS : y1 * SS], cols_all[x0 * SS : x1 * SS]
+        )
+        rgba = torch.cat([colour, cover[:, None]], 1)
+        rgba = rgba.reshape((y1 - y0) * SS, (x1 - x0) * SS, 4).permute(2, 0, 1)[None]
+        rgba = F.avg_pool2d(rgba, SS)[0].permute(1, 2, 0)
         image = background.clone()
-        image[TOP : TOP + SIDE, LEFT : LEFT + SIDE] = square
-        put(image, counters[k])
-        a = float(smoothstep((1.6 - abs(seconds - half_time)) / 0.3))
-        if a > 0:
-            put(image, upside, a)
+        region = image[y0:y1, x0:x1]
+        region.mul_(1 - rgba[..., 3:]).add_(255 * rgba[..., :3])
+        s = p["s"]
+        for (alpha, colour), a in (
+            (question, 1 - eased(s, *QUESTION_OUT)),
+            (answer, eased(s, *ANSWER_IN)),
+        ):
+            if a > 0:
+                image = image * (1 - a * alpha) + a * colour
+        out = float(smoothstep((DURATION - s) / FADE))
+        if out < 1:
+            image = background + out * (image - background)
         return image
 
     render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
-    lead = settings.audio_tag if settings.audio_tag in LEADS else LEAD
-    track = soundtrack(lead, starts, lengths, settings.audio_rng)
+    tag = settings.audio_tag
+    track = (
+        soundtrack(tag, settings.audio_rng)
+        if tag in STYLES
+        else ambient(settings.audio_rng)
+    )
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
 
-def scramble(seconds, starts, lengths):
-    """How far the picture is from a return, 0 (a cat) .. 1 (deep static), smooth in t."""
-    k, s1, s2 = state(seconds, starts, lengths)
-    steps = k + 0.5 * (s1 + s2)  # continuous count of steps done
-    near = min(steps, abs(steps - HALF), STEPS - steps)
-    return float(smoothstep(near / 5.0))
-
-
-def soundtrack(lead, starts, lengths, rng):
+def ambient(rng):
     """
-    Ambient, from the same schedule as the picture; an exact loop (everything wraps
-    circularly). A bed of pad and "u" choir chords: I around the cat, IV as it
-    scrambles, vi around the upside-down cat, V as it scrambles again, back to I.
-    The bed's lowpass opens with the scramble (crossfade of a dark and a bright
-    filtered copy, weighted by `scramble(t)`). One soft lead note (felt piano or
-    harp) as each step completes, its pitch climbing the scale with the distance
-    from the nearest return, so it rises into the static and falls back out; at
-    the two returns a rolled chord instead (I for the cat, vi for the upside-down
-    cat) with a quiet bell an octave up. Delay, long reverb, master(loop=True).
+    Drone & pad on the timeline of the picture (the posted soundtrack). No beat:
+    pad chords that breathe, a soft "u" choir, and three bell tones at the
+    moments that matter. vi while the tunnel is drilled (its lowpass opens with
+    the hole), IV as the camera looks through and B flies round, a suspended V
+    from first contact (the filter opening as B advances), then I the instant B
+    is clear, ringing to the end in a long room. One-shot: nothing wraps.
     """
-    voice = LEADS[lead]
-    root = int(rng.choice(ROOTS))
+    root = int(rng.choice(AMBIENT_ROOTS))
     scale = Scale(root, "major")
-    ends = starts + lengths  # when each step completes
-    cat_back, upside_back = ends[-1], ends[HALF - 1]
-
-    # The bed.
-    bed = audio.silence(DURATION)
-    sections = (  # (degree, start, end)
-        (0, cat_back - 1.6, DURATION + 2.6),
-        (3, 2.4, 5.6),
-        (5, upside_back - 1.6, upside_back + 2.6),
-        (4, upside_back + 2.4, cat_back - 1.4),
-    )
-    for degree, start, end in sections:
-        for i, midi in enumerate(scale.chord(degree, 3)):
+    track = audio.silence(DURATION)
+    contact, clear = slide_time(-(REACH + 0.5)), slide_time(REACH + 0.5)
+    through = THROUGH[0]
+    sections = [  # (degree, start, end, velocity, lowpass from, lowpass to)
+        (5, 0.0, through + 0.6, 0.30, 500.0, 1100.0),
+        (3, through - 0.3, contact + 0.6, 0.30, 900.0, 1400.0),
+        (4, contact - 0.2, clear + 0.4, 0.34, 1000.0, 2600.0),
+        (0, clear - 0.1, DURATION, 0.40, 1800.0, 1800.0),
+    ]
+    for degree, start, end, velocity, cut0, cut1 in sections:
+        layer = audio.silence(DURATION)
+        notes = scale.chord(degree, 4 if degree == 4 else 3)
+        if degree == 4:  # sus4: hold the tension until B is through
+            notes[1] = scale.note(degree + 3)
+        for i, midi in enumerate(notes):
             hz = float(audio.midi_to_hz(midi))
-            held = audio.pad(hz, end - start, 0.26, attack=1.4, release=2.2)
-            audio.add(bed, audio.pan(held[:, 0], 0.45 * (i - 1)), start)
-            sung = audio.choir(
-                hz, end - start, 0.11, attack=1.6, release=2.2, vowel="u"
+            attack = 0.5 if start == 0.0 else 1.6
+            held = audio.pad(hz, end - start, velocity, attack=attack, release=2.4)
+            audio.add(
+                layer, audio.pan(held[:, 0], 0.5 * (i - 1)), start, circular=False
             )
-            audio.add(bed, sung, start)
-    bed = audio.highpass(bed, 120.0)
-    weight = np.array(
-        [scramble(s, starts, lengths) for s in np.arange(0, DURATION, 0.01)]
-    )
-    weight = np.interp(
-        np.arange(len(bed)) / audio.SAMPLE_RATE, np.arange(len(weight)) * 0.01, weight
-    )[:, None]
-    track = (1 - weight) * audio.lowpass(bed, 700.0) + weight * audio.lowpass(
-        bed, 2600.0
-    )
-
-    # The lead: one note per completed step, a rolled chord at each return.
-    for k, when in enumerate(ends):
-        done = k + 1
-        if done in (HALF, STEPS):
-            degree = 0 if done == STEPS else 5
-            for j, midi in enumerate(scale.chord(degree, 4, octave=1)):
-                note = voice(float(audio.midi_to_hz(midi)), 0.42 - 0.04 * j)
-                audio.add(track, audio.pan(note, -0.3 + 0.2 * j), when + 0.07 * j)
-            shine = audio.bell(scale.hz(degree, 2), 0.16, length=5.0)
-            audio.add(track, audio.pan(shine, 0.2), when + 0.3)
-            continue
-        near = min(done, abs(done - HALF), STEPS - done)  # 1 .. 5
-        degree = 2 * near - 1 if near > 1 else 1  # 1, 3, 5, 7, 9: up the scale
-        note = voice(scale.hz(degree, 1), 0.30 + 0.03 * near)
-        audio.add(track, audio.pan(note, 0.35 if k % 2 else -0.35), when)
-
-    track = audio.delay(track, 0.42, feedback=0.35, wet=0.2)
-    track = audio.reverb(track, rng, rt60=5.0, wet=0.42, tone=4200.0)
+        bass = audio.pad(float(audio.midi_to_hz(notes[0] - 12)), end - start, 0.3)
+        audio.add(layer, bass, start, circular=False)
+        # The filter opens through the section: lowpass at a few cutoffs, crossfaded.
+        n = len(layer)
+        t = np.clip(
+            (np.arange(n) / audio.SAMPLE_RATE - start) / max(end - start, 1e-3), 0, 1
+        )
+        dark = audio.lowpass(layer, cut0, circular=False)
+        bright = audio.lowpass(layer, cut1, circular=False)
+        track += dark * (1 - t)[:, None] + bright * t[:, None]
+    for midi in scale.chord(0, 3):
+        voice = audio.choir(
+            float(audio.midi_to_hz(midi)),
+            DURATION - 0.5,
+            0.16,
+            attack=3.0,
+            release=3.0,
+            vowel="u",
+        )
+        audio.add(track, voice, 0.2, circular=False)
+    for when, degrees, velocity in (
+        (0.05, (4,), 0.22),
+        (through, (0, 4), 0.32),
+        (contact, (4,), 0.26),
+        (clear, (0, 2, 4), 0.38),
+    ):
+        for j, degree in enumerate(degrees):
+            tone = audio.bell(
+                float(audio.midi_to_hz(scale.note(degree, 1))), velocity, length=6.0
+            )
+            audio.add(
+                track,
+                audio.pan(tone, 0.35 * (j - (len(degrees) - 1) / 2)),
+                when + 0.04 * j,
+                circular=False,
+            )
+    track = audio.highpass(track, 55.0, circular=False)
+    track = audio.delay(track, 0.45, feedback=0.4, wet=0.22, circular=False)
+    track = audio.reverb(track, rng, rt60=5.0, wet=0.45, tone=4000.0, circular=False)
     logger.info(
-        f"Soundtrack ({lead}): root {root}, cat back at {cat_back:.2f} s, "
-        f"upside down at {upside_back:.2f} s"
+        f"Ambient soundtrack: root {root}, contact {contact:.2f} s, clear {clear:.2f} s"
     )
-    return audio.master(track)
+    return audio.master(track, loop=False)
+
+
+def soundtrack(style_name, rng):
+    """
+    Rise & resolve on the timeline of the picture (see generate()). One-shot: nothing
+    wraps (circular=False) and master(loop=False).
+    """
+    style = STYLES[style_name]
+    root = int(rng.choice(style.roots))
+    melody = Scale(root, style.mode)
+    harmony = Scale(root - 12, "major")
+    track = audio.silence(DURATION)
+
+    def strike(degree, when, velocity, position=0.0, octave=0):
+        note = style.voice(melody.hz(degree, octave), velocity)
+        audio.add(track, audio.pan(note, position), when, circular=False)
+
+    def bass(degree, when, velocity=0.5):
+        audio.add(
+            track, style.bass(melody.hz(degree, -1), velocity), when, circular=False
+        )
+
+    def chord(degree, start, end, velocity):
+        for midi in harmony.chord(degree, 3):
+            held = audio.strings(float(audio.midi_to_hz(midi)), end - start, velocity)
+            audio.add(track, held, start, circular=False)
+
+    # The drill: a note each time the tunnel passes k/8 of its size.
+    strike(0, 0.05, 0.45, -0.3)
+    bass(0, 0.05)
+    for k in range(1, DRILL_NOTES + 1):
+        strike(k, hole_time(k / DRILL_NOTES), 0.3 + 0.04 * k, -0.5 + k / DRILL_NOTES)
+    through = THROUGH[0]  # the camera looks straight down the tunnel
+    strike(0, through, 0.55, -0.2, octave=1)
+    strike(4, through, 0.5, 0.2, octave=1)
+    bass(0, through)
+
+    # The flight round the back: a falling figure.
+    for i, degree in enumerate((7, 5, 3)):
+        when = FLIGHT[0] + (i + 0.5) * (FLIGHT[1] - FLIGHT[0]) / 3.5
+        strike(degree, when, 0.4, 0.4 - 0.4 * i)
+
+    # The slide: tension from first contact until B is clear, then home.
+    contact, clear = slide_time(-(REACH + 0.5)), slide_time(REACH + 0.5)
+    chord(3, 0.0, contact, 0.22)
+    chord(4, contact, clear, 0.3)
+    swell = audio.riser(clear - contact, rng, 180.0, 1400.0, 0.22)
+    audio.add(track, audio.pan(swell, 0.0), contact, circular=False)
+    bass(4, contact)
+    steps = np.arange(-(REACH + 0.5) + SLIDE_STEP, REACH + 0.5 - 1e-6, SLIDE_STEP)
+    for i, x in enumerate(steps):
+        strike(i % 5 + 2, slide_time(x), 0.28 + 0.2 * i / len(steps), 0.6 * x / 1.4)
+    chord(0, clear, DURATION - 0.2, 0.42)
+    for degree, position in ((0, -0.3), (2, 0.0), (4, 0.3), (5, 0.0)):
+        strike(degree, clear, 0.55, position, octave=1 if degree == 5 else 0)
+    bass(0, clear, 0.65)
+    logger.info(
+        f"Soundtrack ({style_name}): root {root}, contact {contact:.2f} s, "
+        f"clear {clear:.2f} s, {len(steps)} slide steps"
+    )
+    track = style.room(track, rng, circular=False)
+    return audio.master(track, loop=False)
 
 
 if __name__ == "__main__":

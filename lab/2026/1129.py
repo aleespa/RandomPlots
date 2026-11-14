@@ -1,380 +1,423 @@
 """
-The Room You Can't Light
+Why a Cheetah's Tail Ends in Rings
 
-A room of mirrors that one candle can never fully light. Light bounces off
-the walls forever, yet the two side wings stay pitch black, though they open
-wide onto the glowing domes.
+A cheetah's coat drawn by one equation: the spots on its body and the rings on
+its tail are the same Turing pattern. Static settles into spots on the flank,
+then the pattern spreads down the tail, and where the tail grows thin the
+spots have no room left and turn into rings.
 
-The trick is Roger Penrose's, from 1958. Each dome is half an ellipse, and
-the thin walls end exactly at its two focal points. In an elliptical mirror, a
-ray passing between the foci always bounces back between them; a ray passing
-outside them stays outside. Light from the hall can only fall back into the
-hall.
+In 1952 Alan Turing showed that chemicals reacting and spreading through skin
+can make spots or stripes with a natural size of their own. The biologist James
+Murray saw what follows: a broad patch of skin has room for spots, but a tail
+narrower than about one spot can only fit bands across it. So a spotted animal
+can have a ringed tail, but a striped animal can never have a spotted one.
+Cheetahs, jaguars and genets all agree.
 
-Then a blue candle is lit in one wing. It lights both wings, even the far
-one, but never the hall between them. Two lights in one room that never meet.
+∂u/∂t = ru − (1 + ∇²)²u + gu² − u³
 
-Every bell is a ray striking a mirror: high for the warm candle, low for the
-blue, higher notes higher up the room, and a gong as each candle is lit.
+Listen: a Rhodes chord as the spots appear, then a note for every ring that
+forms down the tail, pitched by its height, over a soft lo-fi beat. The home
+chord lands at the tip.
 
 Made with Python & PyTorch. Sound synthesized in NumPy.
-#penroseunilluminableroom #optics #billiards #mathart #randomplots
+#turingpatterns #mathematicalbiology #mathart #generativeart #randomplots
 """
 
 import gc
 
-import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from loguru import logger
+from scipy.interpolate import CubicSpline
 
 from common import audio
-from common.gpu import blur, gaussian_kernel, select_device, wide_blur
+from common.gpu import select_device, wide_blur
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale
-from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
-
-DURATION = 15.0
-FRAME_COUNT = frame_count(DURATION)
-
-# --- The room (px, y up, origin at the centre of the frame) ------------------------
-SEMI_A, SEMI_B = 470.0, 400.0  # each dome is the half-ellipse x^2/a^2 + y'^2/b^2 = 1
-HALF_H = 400.0  # the domes' flat sides sit at y = +-HALF_H
-FOCUS = float(np.sqrt(SEMI_A**2 - SEMI_B**2))  # the partitions stand at x = +-FOCUS
-CENTRE = (WIDTH / 2, HEIGHT / 2)
-
-# --- The candles ----------------------------------------------------------------------
-# (position, lit at s, colour in linear RGB). Rays leave each one at evenly spaced
-# angles, with a random phase.
-CANDLES = (
-    ((-70.0, -170.0), 0.0, (1.0, 0.52, 0.16)),  # warm, in the hall
-    ((-(SEMI_A + FOCUS) / 2, 140.0), 6.5, (0.22, 0.52, 1.0)),  # blue, in the left wing
+from common.music import STYLES, Scale, beat, quantize
+from common.video import (
+    FPS,
+    HEIGHT,
+    WIDTH,
+    frame_count,
+    palette_lut,
+    render_frames,
+    smoothstep,
 )
-RAYS = 4000  # per candle
-SPEED = 900.0  # px of path per second
-HEAD_START = 140.0  # px of path the first candle's light has already run at t = 0
-STEP = 1.5  # px between samples along each ray
 
-# --- Look -----------------------------------------------------------------------------
-BACKGROUND = (0.012, 0.010, 0.016)
-EXPOSURE, GAMMA = 0.55, 0.8  # light = 1 - exp(-EXPOSURE * density^GAMMA)
-SETTLE = 2200.0  # px of path: the exposure stops adapting once light ran this far
-SOFT = 1.0  # px blur of the ray density
-SPARK_TRAIL, SPARK_GAIN = 28, 0.06  # samples of comet trail at each ray's head
-GLOWS = ((10.0, 2, 0.10), (40.0, 8, 0.06))  # (sigma px, shrink, gain) halos
-WALL_COLOUR, WALL_ALPHA, WALL_WIDTH = (0.86, 0.80, 0.70), 0.7, 3
-FLAME_SIGMA = 7.0  # px
+DURATION = 15.0  # seconds
+FRAME_COUNT = frame_count(DURATION)
+FADE = 0.4  # s of fade to the background at the end
 
-# --- Sound ----------------------------------------------------------------------------
-STYLE = "gamelan"  # common.music.STYLES; an --audio-only tag naming one overrides it
-LISTENED = ((2, 1), (2, 2))  # rays sounded per candle: before / after the blue candle
-DEGREES = 9  # pelog degrees from the bottom of the room to the top
-MIN_GAP = 0.14  # s: a ray's taps closer than this to its previous one are skipped
+# --- The animal (screen pixels, y down) ------------------------------------------
+BODY = (300.0, -260.0, 760.0, 900.0)  # flank: ellipse centre x, y and semi-axes
+TAIL = [  # centreline of the tail, from inside the flank to the curled tip
+    (600.0, 260.0),
+    (800.0, 560.0),
+    (900.0, 860.0),
+    (840.0, 1120.0),
+    (660.0, 1320.0),
+    (480.0, 1500.0),
+    (400.0, 1680.0),
+    (450.0, 1830.0),
+    (570.0, 1860.0),
+    (630.0, 1770.0),
+]
+TAIL_R = (175.0, 27.0, 2.2)  # radius at the root, at the tip, taper exponent
+BLEND = 60.0  # px: smooth union of flank and tail
+BODY_MARGIN = (
+    80.0  # px: the flank's pattern runs on past its edge (cropped, no edge effects)
+)
+SPACING = 3.0  # px between centreline samples
+
+# --- Swift-Hohenberg: u_t = r u - (1 + lap)^2 u + g u^2 - u^3 ---------------------
+CELL = 2  # screen px per grid cell: the field lives on a 540 x 960 grid
+WAVELENGTH = 56.0  # screen px per pattern wavelength (2 pi in SH units)
+R_IN, R_OUT = 0.18, -0.6  # control parameter inside the skin / outside it
+G = 1.6  # quadratic term: favours hexagonal spots
+DT = 0.3
+NOISE0 = 0.05  # initial static
+FORCING = 3e-3  # a fixed whisper of noise everywhere, the seed of the tail's rings
+T_END = 330.0  # sim time at the end of the run
+SIM_END = 0.88  # fraction of the video by which sim time reaches T_END
+EASE = 0.3  # fraction of that run spent slowing down
+FRONT_T = (
+    10.0,
+    290.0,
+)  # sim times at which the switch-on front leaves the root / reaches the tip
+FRONT_SOFT = 30.0  # px
+
+# --- Look -------------------------------------------------------------------------
+BACKGROUND = "#0a0d12"
+PELT = ["#2a1608", "#7a4618", "#c9862f", "#e8b25a", "#f7dfa6"]  # shadow .. highlight
+INK = "#160d08"
+LIGHT = np.array([-0.45, -0.55, 0.7])
+
+# --- Sound ------------------------------------------------------------------------
+STYLE = "lofi_keys"  # common.music.STYLES; an --audio-only tag naming one overrides it
+BPM = 80.0
+BASS_LINE = (0, 3, 0, 4, 0)
 
 
-def wall_hit(p: np.ndarray, d: np.ndarray):
-    """Distance along d from each p (inside the room) to the next wall, and its normal."""
-    best = np.full(len(p), np.inf)
-    normal = np.zeros_like(p)
-    for side in (1.0, -1.0):  # the two domes, centred at (0, +-HALF_H)
-        q = p - np.array([0.0, side * HALF_H])
-        qa = d[:, 0] ** 2 / SEMI_A**2 + d[:, 1] ** 2 / SEMI_B**2
-        qb = 2 * (q[:, 0] * d[:, 0] / SEMI_A**2 + q[:, 1] * d[:, 1] / SEMI_B**2)
-        qc = q[:, 0] ** 2 / SEMI_A**2 + q[:, 1] ** 2 / SEMI_B**2 - 1
-        disc = qb * qb - 4 * qa * qc
-        root = np.sqrt(np.maximum(disc, 0))
-        for s in ((-qb - root) / (2 * qa), (-qb + root) / (2 * qa)):
-            y = q[:, 1] + s * d[:, 1]
-            ok = (disc > 0) & (s > 1e-6) & (side * y >= -1e-9) & (s < best)
-            best = np.where(ok, s, best)
-            hit = q + s[:, None] * d
-            n = np.stack([hit[:, 0] / SEMI_A**2, hit[:, 1] / SEMI_B**2], 1)
-            normal[ok] = n[ok] / np.linalg.norm(n[ok], axis=1, keepdims=True)
-    for x in (SEMI_A, -SEMI_A, FOCUS, -FOCUS):  # outer walls and the two partitions
-        with np.errstate(divide="ignore", invalid="ignore"):
-            s = (x - p[:, 0]) / d[:, 0]
-        y = p[:, 1] + s * d[:, 1]
-        ok = (s > 1e-6) & (np.abs(y) <= HALF_H) & (s < best)
-        best = np.where(ok, s, best)
-        normal[ok] = (1.0, 0.0)
-    return best, normal
-
-
-def trace(source, angles, length: float) -> dict:
+def sim_time(t):
     """
-    Bounce rays from `source` until each has run `length` px: the arc length at
-    which each straight segment starts, its start point and direction,
-    (rays, segments) arrays. Rays that are done keep 'bouncing' at zero cost.
+    Sim time at video time t (seconds): steady, then easing to a stop at T_END
+    at SIM_END * DURATION (the last EASE of the way decelerates linearly).
     """
-    p = np.tile(np.array(source, float), (len(angles), 1))
-    d = np.stack([np.cos(angles), np.sin(angles)], 1)
-    s = np.zeros(len(angles))
-    keep = [(s.copy(), p.copy(), d.copy())]
-    while s.min() <= length:
-        active = s <= length
-        step, n = wall_hit(p[active], d[active])
-        pa, da = p[active] + step[:, None] * d[active], d[active]
-        da = da - 2 * (da * n).sum(1, keepdims=True) * n
-        da /= np.linalg.norm(da, axis=1, keepdims=True)
-        p[active], d[active] = pa, da
-        s[active] += step
-        s[~active] = np.inf
-        keep.append((s.copy(), p.copy(), d.copy()))
-        if len(keep) > 20_000:
-            raise RuntimeError("a ray is stuck bouncing")
-    out = {key: np.stack([k[i] for k in keep], 1) for i, key in enumerate("spd")}
-    out["s"][:, 0] = 0.0
-    return out
+    x = np.clip(np.asarray(t, float) / (SIM_END * DURATION), 0.0, 1.0)
+    y = np.clip(x - (1.0 - EASE), 0.0, None)
+    return T_END * (x - y * y / (2.0 * EASE)) / (1.0 - EASE / 2.0)
 
 
-def path_length(seconds, lit: float, head: float = 0.0):
-    """How far a candle's light has run at `seconds` (0 before it is lit)."""
-    return np.where(seconds >= lit, head + SPEED * (seconds - lit), 0.0)
+def front_s(tau, length):
+    """Arc length of the switch-on front along the tail at sim time tau."""
+    x = np.clip((tau - FRONT_T[0]) / (FRONT_T[1] - FRONT_T[0]), 0.0, 1.0)
+    return -2 * FRONT_SOFT + x * (length + 4 * FRONT_SOFT)
 
 
-def in_wing(x, y):
-    return (abs(x) > FOCUS) & (abs(x) < SEMI_A) & (abs(y) < HALF_H)
+def centreline():
+    """Tail centreline sampled every SPACING px: points (M, 2), arc length, radius."""
+    p = np.array(TAIL)
+    chord = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))])
+    spline = CubicSpline(chord, p, bc_type="natural")
+    fine = spline(np.linspace(0, chord[-1], 20000))
+    seg = np.concatenate(
+        [[0], np.cumsum(np.linalg.norm(np.diff(fine, axis=0), axis=1))]
+    )
+    s = np.arange(0, seg[-1], SPACING)
+    points = np.stack([np.interp(s, seg, fine[:, k]) for k in range(2)], axis=1)
+    r0, r1, power = TAIL_R
+    radius = r1 + (r0 - r1) * (1 - s / s[-1]) ** power
+    return points, s, radius
 
 
-def in_hall(x, y):
-    return (abs(x) < FOCUS) & (abs(y) < HALF_H)
-
-
-def sample(room: dict, count: int, device) -> torch.Tensor:
+def anatomy(device, scale):
     """
-    Pixel index of every ray every STEP px along its path, (count, rays) int32,
-    sample-major so any prefix is 'all the light up to that length'.
+    Signed distance to the animal, shading normal and tail arc length on a grid
+    `scale` screen px per cell: (sdf, nx, ny, s_tail, w_tail), each (H, W).
     """
-    to = dict(device=device, dtype=torch.float64)
-    starts = torch.tensor(room["s"], **to)
-    points = torch.tensor(room["p"], **to)
-    dirs = torch.tensor(room["d"], **to)
-    starts = torch.where(torch.isinf(starts), torch.full_like(starts, 1e30), starts)
-    rays = starts.shape[0]
-    out = torch.empty(count, rays, dtype=torch.int32, device=device)
-    leaks = 0
-    for j0 in range(0, count, 1000):
-        j = torch.arange(j0, min(count, j0 + 1000), device=device, dtype=torch.float64)
-        query = (j * STEP)[None, :].expand(rays, -1).contiguous()
-        k = (torch.searchsorted(starts, query, right=True) - 1).clamp_min(0)
-        s0 = starts.gather(1, k)
-        x = points[..., 0].gather(1, k) + (query - s0) * dirs[..., 0].gather(1, k)
-        y = points[..., 1].gather(1, k) + (query - s0) * dirs[..., 1].gather(1, k)
-        leaks += int(in_wing(x, y).sum()) if room["home"] == "hall" else 0
-        leaks += int(in_hall(x, y).sum()) if room["home"] == "wing" else 0
-        px = torch.round(CENTRE[0] + x).clamp(0, WIDTH - 1).long()
-        py = torch.round(CENTRE[1] - y).clamp(0, HEIGHT - 1).long()
-        out[j0 : j0 + len(j)] = (py * WIDTH + px).T.to(torch.int32)
-    logger.info(f"Sampled {count:,} x {rays:,} points; {leaks} forbidden samples")
-    return out
+    points, s, radius = centreline()
+    h, w = HEIGHT // scale, WIDTH // scale
+    ys = (torch.arange(h, device=device, dtype=torch.float32) + 0.5) * scale
+    xs = (torch.arange(w, device=device, dtype=torch.float32) + 0.5) * scale
+    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
+    c = torch.tensor(points, device=device, dtype=torch.float32)
+    rad = torch.tensor(radius, device=device, dtype=torch.float32)
+    arc = torch.tensor(s, device=device, dtype=torch.float32)
+    d_tail = torch.empty(h, w, device=device)
+    best = torch.empty(h, w, device=device, dtype=torch.long)
+    rows = max(1, 2_000_000 // (w * len(points)) * 8)
+    for i in range(0, h, rows):
+        px = xx[i : i + rows, :, None] - c[:, 0]
+        py = yy[i : i + rows, :, None] - c[:, 1]
+        d = torch.sqrt(px * px + py * py) - rad
+        d_tail[i : i + rows], best[i : i + rows] = d.min(dim=-1)
+    tx = (xx - c[best, 0]) / rad[best]
+    ty = (yy - c[best, 1]) / rad[best]
+    s_tail = arc[best]
+
+    cx, cy, a, b = BODY
+    qx, qy = (xx - cx) / a, (yy - cy) / b
+    q = torch.sqrt(qx * qx + qy * qy)
+    d_body = (q - 1.0) * min(a, b)
+
+    k = BLEND
+    h = (0.5 + 0.5 * (d_body - d_tail) / k).clamp(0, 1)
+    sdf = d_body + h * (d_tail - d_body) - k * h * (1 - h)
+    # Inside the flank the flank wins (shading, pattern); the tail takes over
+    # only once it has left it.
+    x = ((d_body + 0.5 * k) / (1.5 * k)).clamp(0, 1)
+    w_tail = h * x * x * (3 - 2 * x)
+    nx = w_tail * tx + (1 - w_tail) * qx
+    ny = w_tail * ty + (1 - w_tail) * qy
+    return sdf, nx, ny, s_tail, w_tail, float(s[-1])
 
 
-def walls() -> np.ndarray:
-    """The mirrors as an alpha mask (H, W), drawn at 4x and shrunk."""
-    big = np.zeros((HEIGHT * 4, WIDTH * 4), np.uint8)
-    u = np.linspace(0, np.pi, 1500)
-    dome = np.stack([SEMI_A * np.cos(u), HALF_H + SEMI_B * np.sin(u)], 1)
-    outline = np.concatenate([dome, dome[::-1] * [1, -1]])
-    lines = [outline]
-    for x in (FOCUS, -FOCUS):
-        lines.append(np.array([[x, HALF_H], [x, -HALF_H]]))
-    for pts, closed in zip(lines, (True, False, False)):
-        pix = np.stack([CENTRE[0] + pts[:, 0], CENTRE[1] - pts[:, 1]], 1)
-        cv2.polylines(
-            big,
-            [np.round(pix * 16 * 4).astype(np.int32)],
-            closed,
-            255,
-            WALL_WIDTH * 4,
-            cv2.LINE_AA,
-            4,
-        )
-    for x in (FOCUS, -FOCUS):  # the foci, where the partitions end
-        for y in (HALF_H, -HALF_H):
-            centre = (int(4 * (CENTRE[0] + x)), int(4 * (CENTRE[1] - y)))
-            cv2.circle(big, centre, 4 * WALL_WIDTH * 2, 255, -1, cv2.LINE_AA)
-    mask = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-    return mask.astype(np.float32) / 255.0
-
-
-def soundtrack(rooms: list, style_name: str, rng: np.random.Generator):
+def soundtrack(rings, body_time, tip_time, style_name, rng):
     """
-    A one-shot in pelog bells.
-
-    - A gong (the style's bass, two octaves down) and a bell on the root as
-      each candle is lit, at 0 s and at the blue candle's time.
-    - Wall strikes: LISTENED rays of each candle (chosen with the audio rng)
-      sound every bounce at its exact time, (arc length) / SPEED after the
-      candle was lit. Pitch is the height of the bounce in the room (DEGREES
-      pelog steps bottom to top), the warm candle an octave above the blue
-      one; pan is x. Taps closer than MIN_GAP to the ray's previous one are
-      skipped (grazing hops in the domes), and fewer warm rays sound once the
-      blue candle is lit, to keep the density near 5 notes/s.
-    - A quiet pad on the root and fifth, joined by the third when the blue
-      candle is lit.
+    Lo-fi keys. A brush of noise for the static, the flank's spots condensing
+    as a rolled Rhodes chord; then every
+    ring that forms down the tail strikes one Rhodes note, pitch by its height
+    on screen (higher up, higher note), pan by its x, softer as the tail thins,
+    pulled 70 % onto an eighth-note grid at BPM. A soft kick/tick beat and a
+    Rhodes bass walk BASS_LINE underneath once the spots are in, and the home
+    chord lands as the last ring forms at the tip.
     """
     style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
     track = audio.silence(DURATION)
     kw = dict(circular=False)
-    blue_lit = CANDLES[1][1]
-    top = HALF_H + SEMI_B
+    end = min(tip_time + 0.3, DURATION - 2.0)
 
-    def low(hz):
-        while hz < 65:
-            hz *= 2
-        return hz
+    hiss = audio.lowpass(audio.tick(rng, 0.5, 0.25, 2500.0), 5000.0, circular=False)
+    audio.add(track, audio.pan(hiss, -0.2), 0.0, **kw)  # the static
+    roll = max(0.12, body_time - 0.35)
+    for i, degree in enumerate((0, 2, 4, 6, 9)):  # the spots condense
+        note = style.voice(scale.hz(degree), 0.35 + 0.05 * i)
+        audio.add(track, audio.pan(note, -0.4 + 0.2 * i), roll + 0.09 * i, **kw)
 
-    for lit in (CANDLES[0][1], blue_lit):
-        audio.add(track, style.bass(low(scale.hz(0, -2)), 0.6, length=6.0), lit, **kw)
-        audio.add(track, style.voice(scale.hz(0, 0), 0.45), lit + 0.02, **kw)
+    if len(rings):
+        times = quantize([r[0] for r in rings], DURATION, BPM, 2, amount=0.7)
+        last = -1.0
+        for when, (_, x, y, width) in sorted(zip(times, rings)):
+            if when - last < 0.11 or when > end - 0.05:
+                continue
+            last = when
+            degree = int(round(11 - 13 * y / HEIGHT))
+            velocity = 0.3 + 0.35 * np.clip(width / (2 * TAIL_R[0]), 0, 1)
+            note = audio.pan(
+                style.voice(scale.hz(degree), velocity), 1.3 * (x / WIDTH - 0.5)
+            )
+            audio.add(track, note, when, **kw)
 
-    taps = 0
-    for c, (room, (before, after), octave) in enumerate(zip(rooms, LISTENED, (0, -1))):
-        lit = CANDLES[c][1]
-        head = HEAD_START if c == 0 else 0.0
-        chosen = rng.choice(room["s"].shape[0], max(before, after), replace=False)
-        for r, ray in enumerate(chosen):
-            last = -1.0
-            for s, (x, y) in zip(room["s"][ray, 1:], room["p"][ray, 1:]):
-                when = lit + (s - head) / SPEED
-                if not np.isfinite(when) or when >= DURATION - 0.3:
-                    break
-                if when < 0.05 or when - last < MIN_GAP:
-                    continue
-                if c == 0 and r >= after and when >= blue_lit:
-                    break
-                last = when
-                degree = int(round((y + top) / (2 * top) * DEGREES))
-                fade = 1 - 0.6 * float(smoothstep((when - 13.0) / 2.0))
-                velocity = fade * rng.uniform(0.26, 0.4)
-                note = style.voice(scale.hz(degree, octave), velocity)
-                audio.add(track, audio.pan(note, 0.75 * x / SEMI_A), when, **kw)
-                taps += 1
-
-    for degree, start in ((0, 0.0), (3, 0.0), (2, blue_lit)):
-        hz = low(scale.hz(degree, -1))
+    step = beat(BPM)
+    start = np.ceil(body_time / step) * step
+    for i, when in enumerate(np.arange(start, end, step)):
+        if i % 2 == 0:
+            audio.add(track, audio.kick(0.4, 55.0), when, **kw)
+        audio.add(
+            track, audio.pan(audio.tick(rng, 0.18, 0.04), 0.3), when + step / 2, **kw
+        )
+    for i, when in enumerate(np.arange(start, end, 4 * step)):
+        bass = style.bass(scale.hz(BASS_LINE[i % len(BASS_LINE)], -1), 0.55, length=4.0)
+        audio.add(track, bass, when, **kw)
+    for degree in (0, 2, 4):
         audio.add(
             track,
-            audio.pad(hz, DURATION - start - 1.5, 0.08, 2.0, 1.5, 0.3),
-            start,
+            audio.pad(scale.hz(degree, -1), end - body_time, 0.1, 2.0, 2.5, 0.25),
+            body_time,
             **kw,
         )
-    logger.info(f"Soundtrack: {style_name}, root MIDI {scale.root}, {taps} wall taps")
-    track = style.room(track, rng, circular=False)
-    return audio.master(track, loop=False)
+
+    for i, degree in enumerate((0, 2, 4, 6, 7)):  # the home chord at the tip
+        audio.add(track, style.voice(scale.hz(degree), 0.5), end + 0.04 * i, **kw)
+    audio.add(track, style.bass(scale.hz(0, -1), 0.6, length=4.0), end, **kw)
+    track = audio.lowpass(track, 6000.0, circular=False)
+    return audio.master(style.room(track, rng, circular=False), loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Penrose's unilluminable room, lit by two candles.
+    Murray's tail theorem with a Turing pattern, as a one-shot.
 
-    The room: two half-ellipses (semi-axes SEMI_A, SEMI_B) with flat sides at
-    y = +-HALF_H, joined by vertical outer walls at x = +-SEMI_A, plus two
-    two-sided partitions at x = +-FOCUS = +-sqrt(a^2 - b^2) from one dome's
-    focus to the other's. A chord of an ellipse that crosses the major axis
-    between the foci reflects into another such chord (its caustic is a
-    confocal hyperbola); one that crosses outside them stays outside (a
-    confocal ellipse). Reflection in the flat side preserves this, so the
-    domes return light from the hall (|x| < FOCUS) to the hall and light from
-    the wings (FOCUS < |x| < SEMI_A) to the wings: a candle in the hall never
-    lights the wings and vice versa (`sample` counts forbidden samples; 0).
+    The pattern is the Swift-Hohenberg equation, the generic model of a Turing
+    instability: u_t = r u - (1 + lap)^2 u + g u^2 - u^3, whose unstable band
+    sits at wavenumber 1 (wavelength 2 pi = WAVELENGTH screen px). With g = G
+    the quadratic term makes hexagonal spots (u maxima, drawn as INK) win over
+    stripes. It is solved on a 540 x 960 periodic grid (CELL = 2 px) on the GPU
+    by a semi-implicit pseudo-spectral step: the linear operator
+    -(1 - k^2)^2 implicitly, r(x) u + g u^2 - u^3 + FORCING * xi(x) explicitly,
+    dt = DT (~1100 FFT steps in all, about a second).
 
-    Each candle sends RAYS rays at evenly spaced angles plus one random phase
-    from settings.rng; `trace` reflects them exactly (quadratic for the domes,
-    linear for the walls) in float64 until each has run the whole clip. Every
-    ray is then sampled every STEP px of path into a pixel index, sample-major,
-    so the light a candle has shed by path length L is a prefix of that array.
+    The animal is a signed-distance shape: a flank (an ellipse off the top of
+    the frame) smoothly united with a tail, a tube of radius tapering from
+    TAIL_R[0] to TAIL_R[1] px along a spline through TAIL. Outside it r = R_OUT
+    (stable, so the field dies off: an effective Dirichlet edge); inside,
+    r = R_IN. Where the tail is narrower than about one wavelength only modes
+    along it fit, so the spots become bands across it: Murray's theorem. The
+    flank's r region runs BODY_MARGIN px past its drawn edge, so the flank shows
+    no edge effects and its silhouette simply crops the spots.
 
-    A frame is a pure function of t: L = HEAD_START + SPEED t for the warm
-    candle, SPEED (t - 6.5) for the blue one; each prefix is bincounted on the
-    GPU into a ray-density image, normalised by min(L, SETTLE) so the exposure
-    adapts as light spreads, then lightly blurred. The heads of the rays (the
-    last SPARK_TRAIL samples) are added as sparks. Both colours are tone-mapped
-    together as 1 - exp(-EXPOSURE * density), glowed, and the mirrors and foci
-    laid on top. Caustics of the domes show in the hall as bright envelopes.
+    Time: the flank starts as static (NOISE0 * white noise) and condenses into
+    spots in the first second. The tail is held stable (r = R_OUT) until a
+    switch-on front passes down it along arc length, from sim time FRONT_T[0]
+    at the root to FRONT_T[1] at the tip, seeded by the fixed whisper xi; the
+    rings therefore form one after another down the tail. Video time maps to
+    sim time by sim_time (steady, easing to a stop at SIM_END), then a rest and
+    a FADE. Every frame steps the field from the previous frame's sim time to
+    its own with a fixed dt (constant cost, render_frames(parallel=False)), so
+    RP_FPS previews show the same motion.
 
-    The posted render uses --seed 0 (the default), with the gamelan soundtrack.
+    Drawing: u is normalised by min(max |u|, 3 std) over the flank (so the
+    opening static is visible), upsampled bilinearly to 1080 x 1920 and
+    thresholded smoothly into ink over a pelt shaded with a Lambert light on
+    the shape's normals (sphere-like flank, cylinder-like tail), over a dark
+    vignetted background with a faint rim glow and a fixed dither.
+
+    Sound (`soundtrack`): u is recorded along the tail centreline every other
+    step; each local maximum of the final profile is a ring (or a spot on the
+    centreline), sounding when it first reaches 60 % of its final height.
+    The posted video and soundtrack use the default --seed 0 (audio seed 0).
     """
     settings = settings or ImageProcessingSettings(1)
-    lengths = []
-    rooms = []
-    for c, (source, lit, _) in enumerate(CANDLES):
-        head = HEAD_START if c == 0 else 0.0
-        length = float(path_length(DURATION, lit, head)) + 2 * STEP
-        phase = settings.rng.uniform(0, 2 * np.pi / RAYS)
-        angles = phase + 2 * np.pi * np.arange(RAYS) / RAYS
-        room = trace(source, angles, length)
-        room["home"] = "hall" if c == 0 else "wing"
-        rooms.append(room)
-        lengths.append(length)
-        logger.info(
-            f"Candle {c}: {RAYS} rays traced to {length:.0f} px, "
-            f"{room['s'].shape[1] - 1} bounces"
+    rng = settings.rng
+    device = select_device()
+
+    gh, gw = HEIGHT // CELL, WIDTH // CELL
+    sdf, nx, ny, s_tail, w_tail, length = anatomy(device, CELL)
+    inside = torch.sigmoid(-(sdf - BODY_MARGIN * (1 - w_tail)) / 6.0)
+    noise0 = torch.tensor(
+        rng.standard_normal((gh, gw)), device=device, dtype=torch.float32
+    )
+    whisper = torch.tensor(
+        rng.standard_normal((gh, gw)), device=device, dtype=torch.float32
+    )
+    u = NOISE0 * noise0 * inside
+
+    h = 2 * np.pi * CELL / WAVELENGTH  # SH units per grid cell
+    ky = torch.fft.fftfreq(gh, d=h / (2 * np.pi), device=device)
+    kx = torch.fft.rfftfreq(gw, d=h / (2 * np.pi), device=device)
+    k2 = ky[:, None] ** 2 + kx[None, :] ** 2
+    implicit = 1.0 / (1.0 + DT * (1.0 - k2) ** 2)
+
+    # Listening line: the tail centreline on the grid.
+    points, arc, radius = centreline()
+    pi_ = torch.tensor(
+        np.clip(points[:, 1] / CELL, 0, gh - 1).astype(int), device=device
+    )
+    pj_ = torch.tensor(
+        np.clip(points[:, 0] / CELL, 0, gw - 1).astype(int), device=device
+    )
+    history = []  # (sim time, u along the centreline)
+
+    state = {"step": 0}
+
+    def advance(frame):
+        nonlocal u
+        t = frame / FPS
+        target = int(round(sim_time(t) / DT))
+        while state["step"] < target:
+            tau = state["step"] * DT
+            act = torch.sigmoid((front_s(tau, length) - s_tail) / FRONT_SOFT)
+            act = w_tail * act + (1 - w_tail)
+            r = R_OUT + (R_IN - R_OUT) * inside * act
+            nonlinear = r * u + G * u * u - u * u * u + FORCING * whisper
+            u = torch.fft.irfft2(
+                (torch.fft.rfft2(u) + DT * torch.fft.rfft2(nonlinear)) * implicit,
+                s=(gh, gw),
+            )
+            state["step"] += 1
+            if state["step"] % 2 == 0:
+                history.append((state["step"] * DT, u[pi_, pj_]))
+        return t
+
+    # --- picture --------------------------------------------------------------
+    up = dict(size=(HEIGHT, WIDTH), mode="bilinear", align_corners=False)
+    geo = F.interpolate(torch.stack([sdf, nx, ny])[None], **up)[0]
+    big_sdf, bnx, bny = geo[0], geo[1], geo[2]
+    nz = (1 - bnx**2 - bny**2).clamp(0, 1).sqrt()
+    light = LIGHT / np.linalg.norm(LIGHT)
+    lambert = (bnx * light[0] + bny * light[1] + nz * light[2]).clamp(0, 1)
+    shade = (0.18 + 0.82 * lambert) * (0.55 + 0.45 * nz)
+    alpha = (0.5 - big_sdf / 1.5).clamp(0, 1)
+    pelt = torch.tensor(palette_lut(PELT, 512), device=device)
+    pelt_img = pelt[(shade.clamp(0, 1) * 511).long()]
+    ink = torch.tensor(palette_lut([INK, INK], 2)[0], device=device)
+    bg = torch.tensor(palette_lut([BACKGROUND, BACKGROUND], 2)[0], device=device)
+    vy, vx = torch.meshgrid(
+        torch.linspace(-1, 1, HEIGHT, device=device),
+        torch.linspace(-1, 1, WIDTH, device=device),
+        indexing="ij",
+    )
+    vignette = 1.0 - 0.4 * (0.5 * vx**2 + 0.5 * vy**2).clamp(0, 1)
+    dither = torch.tensor(
+        rng.uniform(-0.5, 0.5, (HEIGHT, WIDTH, 1)) / 255.0,
+        device=device,
+        dtype=torch.float32,
+    )  # breaks the banding of the dark gradient
+    body_mask = (inside * (1 - w_tail)) > 0.5
+
+    def render(frame):
+        t = advance(frame)
+        body = u[body_mask]
+        level = torch.minimum(body.abs().amax(), 3.0 * body.std()).clamp(min=1e-3)
+        field = F.interpolate((u / level)[None, None], **up)[0, 0]
+        spot = smooth(0.15, 0.5, field)
+        skin = (
+            pelt_img * (1 - 0.35 * spot[..., None])
+            + spot[..., None] * (ink * (0.7 + 0.3 * shade[..., None]) - pelt_img) * 0.95
         )
+        rim = wide_blur(alpha[..., None].expand(-1, -1, 3).contiguous(), 30.0, 4)
+        image = bg * vignette[..., None] + 0.05 * rim * pelt[300]
+        image = image + alpha[..., None] * (skin - image)
+        image = image * float(smoothstep((DURATION - t) / FADE)) + dither
+        return (image.clamp(0, 1) * 255).round()
 
-    if not settings.audio_only:
-        device = select_device()
-        to = dict(device=device, dtype=torch.float32)
-        samples = [
-            sample(room, int(length / STEP), device)
-            for room, length in zip(rooms, lengths)
-        ]
-        colours = [torch.tensor(c[2], **to) for c in CANDLES]
-        area = (4 * SEMI_A * HALF_H) + np.pi * SEMI_A * SEMI_B  # px^2
-        soft = gaussian_kernel(SOFT, device)
-        wall = torch.tensor(walls(), **to)[..., None]
-        wall_rgb = torch.tensor(WALL_COLOUR, **to)
-        background = torch.tensor(BACKGROUND, **to)
-        yy, xx = torch.meshgrid(
-            torch.arange(HEIGHT, **to), torch.arange(WIDTH, **to), indexing="ij"
-        )
-        flames = []
-        for (x, y), _, _ in CANDLES:
-            r2 = (xx - CENTRE[0] - x) ** 2 + (yy - CENTRE[1] + y) ** 2
-            flames.append(torch.exp(-r2 / (2 * FLAME_SIGMA**2))[..., None])
-        trail = torch.linspace(0.15, 1.0, SPARK_TRAIL, **to)[:, None]
-        heads = torch.ones(SPARK_TRAIL, RAYS, **to) * trail
+    if settings.audio_only:
+        for frame in range(FRAME_COUNT):
+            advance(frame)
+    else:
+        render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
 
-    def render(frame: int) -> torch.Tensor:
-        seconds = frame / (FRAME_COUNT - 1) * DURATION
-        linear = torch.zeros(HEIGHT * WIDTH, 3, **to)
-        sparks = torch.zeros(HEIGHT * WIDTH, 3, **to)
-        for c, (points, colour) in enumerate(zip(samples, colours)):
-            lit = CANDLES[c][1]
-            head = HEAD_START if c == 0 else 0.0
-            length = float(path_length(seconds, lit, head))
-            n = min(int(length / STEP) + 1, points.shape[0]) if seconds >= lit else 0
-            if n == 0:
-                continue
-            density = torch.bincount(points[:n].reshape(-1), minlength=HEIGHT * WIDTH)
-            scale = STEP * area / (RAYS * max(length, SETTLE))
-            linear += (density.to(torch.float32) * scale)[:, None] * colour
-            m = min(n, SPARK_TRAIL)
-            index = points[n - m : n].reshape(-1).long()
-            weight = heads[SPARK_TRAIL - m :].reshape(-1)
-            sparks.index_add_(0, index, weight[:, None] * colour[None, :])
-        linear = blur(linear.view(HEIGHT, WIDTH, 3), soft)
-        linear = linear + SPARK_GAIN * blur(sparks.view(HEIGHT, WIDTH, 3), soft) * 40
-        for c, flame in enumerate(flames):
-            lit = CANDLES[c][1]
-            if seconds >= lit:
-                on = float(smoothstep((seconds - lit) / 0.3))
-                flicker = 1 + 0.12 * np.sin(11.3 * seconds + 2 * c) * np.sin(
-                    3.7 * seconds
-                )
-                linear = linear + 6.0 * on * flicker * flame * colours[c]
-        glow = sum(g * wide_blur(linear, sigma, f) for sigma, f, g in GLOWS)
-        light = 1 - torch.exp(-EXPOSURE * (linear.clamp_min(0) ** GAMMA + glow))
-        image = background + (1 - background) * light
-        image = image * (1 - WALL_ALPHA * wall) + WALL_ALPHA * wall * wall_rgb
-        return image.clamp(0, 1) * 255.0
-
-    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
-    tag = settings.audio_tag
-    track = soundtrack(rooms, tag if tag in STYLES else STYLE, settings.audio_rng)
+    rings, body_time, tip_time = listen(history, points, arc, radius, length)
+    style = settings.audio_tag if settings.audio_tag in STYLES else STYLE
+    track = soundtrack(rings, body_time, tip_time, style, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
+
+
+def smooth(lo, hi, x):
+    x = ((x - lo) / (hi - lo)).clamp(0, 1)
+    return x * x * (3 - 2 * x)
+
+
+def video_time(tau):
+    grid = np.linspace(0, DURATION, 6001)
+    return np.interp(tau, sim_time(grid), grid)
+
+
+def listen(history, points, arc, radius, length):
+    """Rings along the tail: (time, x, y, width) of each, from the centreline history."""
+    taus = np.array([h[0] for h in history])
+    line = torch.stack([h[1] for h in history]).cpu().numpy()  # (steps, M)
+    final = line[-1]
+    peaks = [
+        i
+        for i in range(2, len(final) - 2)
+        if final[i] > 0.2 and final[i] == final[i - 2 : i + 3].max()
+    ]
+    rings = []
+    for i in peaks:
+        above = np.nonzero(line[:, i] > 0.6 * final[i])[0]
+        if len(above):
+            rings.append((float(video_time(taus[above[0]])), *points[i], 2 * radius[i]))
+    logger.info(
+        f"{len(rings)} rings along the tail, forming from "
+        f"{min([r[0] for r in rings], default=0):.1f} to {max([r[0] for r in rings], default=0):.1f} s"
+    )
+    body_time = float(video_time(18.0))
+    tip_time = max([r[0] for r in rings], default=12.0)
+    return rings, body_time, tip_time
 
 
 if __name__ == "__main__":

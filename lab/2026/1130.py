@@ -1,387 +1,378 @@
 """
-The 9% That Never Goes Away
+The Room You Can't Light
 
-A square wave built from sine waves, one Fourier series term at a time. At the
-top are the ingredients: sin x, then sin 3x a third as tall, sin 5x a fifth as
-tall, and so on. In the middle is their sum, which straightens into a square
-wave as more and more sine waves are added, up to 256 of them.
+A room of mirrors that one candle can never fully light. Light bounces off
+the walls forever, yet the two side wings stay pitch black, though they open
+wide onto the glowing domes.
 
-But look at the corners. Every sum overshoots the jump and rings, and the
-bottom panel zooms in on the jump as the waves pile up. The ripples squeeze
-closer to the corner, yet the first one never gets lower: it always overshoots
-by about 9% of the jump. Add a million sine waves and it is still there. This
-is the Gibbs phenomenon, and it is why sharp edges in compressed images and
-audio come with a faint ring.
+The trick is Roger Penrose's, from 1958. Each dome is half an ellipse, and
+the thin walls end exactly at its two focal points. In an elliptical mirror, a
+ray passing between the foci always bounces back between them; a ray passing
+outside them stays outside. Light from the hall can only fall back into the
+hall.
 
-Listen: a pure tone grows into a square wave's hollow buzz as its overtones
-join, each new one struck on a bell at its own pitch. Every time the number of
-waves doubles, the loudest three ring again, and the overshoot is still there.
+Then a blue candle is lit in one wing. It lights both wings, even the far
+one, but never the hall between them. Two lights in one room that never meet.
 
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#gibbsphenomenon #fourierseries #mathart #generativeart #randomplots
+Every bell is a ray striking a mirror: high for the warm candle, low for the
+blue, higher notes higher up the room, and a gong as each candle is lit.
+
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#penroseunilluminableroom #optics #billiards #mathart #randomplots
 """
 
 import gc
-import io
 
 import cv2
 import numpy as np
+import torch
 from loguru import logger
-from matplotlib import mathtext
-from matplotlib.font_manager import FontProperties
 
 from common import audio
+from common.gpu import blur, gaussian_kernel, select_device, wide_blur
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES
-from common.video import (
-    FPS,
-    HEIGHT,
-    WIDTH,
-    frame_count,
-    hex_to_bgr,
-    palette_lut,
-    render_frames,
-    smoothstep,
-)
+from common.music import STYLES, Scale
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
 
 DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The series --------------------------------------------------------------------
-TERMS = 256  # odd harmonics k = 1, 3, ..., 511 by the end
-BUILD = 13.0  # s: terms arrive until here, then the picture rests
-GROWTH = 2.5  # M(s) = (1 + s/τ)^GROWTH terms at time s, reaching TERMS at BUILD
-TAU = BUILD / (TERMS ** (1 / GROWTH) - 1)
-GIBBS = 2 / np.pi * 1.851937051982466  # (2/π) Si(π) = 1.17898: the overshoot peak
-FADE = 0.4  # s: fade to the background at the end
+# --- The room (px, y up, origin at the centre of the frame) ------------------------
+SEMI_A, SEMI_B = 470.0, 400.0  # each dome is the half-ellipse x^2/a^2 + y'^2/b^2 = 1
+HALF_H = 400.0  # the domes' flat sides sit at y = +-HALF_H
+FOCUS = float(np.sqrt(SEMI_A**2 - SEMI_B**2))  # the partitions stand at x = +-FOCUS
+CENTRE = (WIDTH / 2, HEIGHT / 2)
 
-# --- Layout (px, 1x) ---------------------------------------------------------------
-SS = 2  # supersampling
-X_RANGE = (-0.6 * np.pi, 2.6 * np.pi)  # x shown by the fan and the sum
-FAN_Y, FAN_SCALE = 410, 210  # centre line and px per unit
-SUM_Y, SUM_SCALE = 1010, 190
-LENS_TOP, LENS_BOTTOM = 1330, 1700  # px rows of the magnified jump
-LENS_S = (0.3, 1.25)  # values of the sum shown in the lens
-LENS_XI = (-2 * np.pi, 6 * np.pi)  # lens shows x = ξ / (2 M^ZOOM)
-ZOOM = 0.6  # < 1: the zoom lags the ripples, so they squeeze towards the jump
-LENS_X = (60, 1020)
-LABEL_Y, COUNTER_Y, LENS_LABEL_Y = 62, 708, 1288
+# --- The candles ----------------------------------------------------------------------
+# (position, lit at s, colour in linear RGB). Rays leave each one at evenly spaced
+# angles, with a random phase.
+CANDLES = (
+    ((-70.0, -170.0), 0.0, (1.0, 0.52, 0.16)),  # warm, in the hall
+    ((-(SEMI_A + FOCUS) / 2, 140.0), 6.5, (0.22, 0.52, 1.0)),  # blue, in the left wing
+)
+RAYS = 4000  # per candle
+SPEED = 900.0  # px of path per second
+HEAD_START = 140.0  # px of path the first candle's light has already run at t = 0
+STEP = 1.5  # px between samples along each ray
 
-# --- Look --------------------------------------------------------------------------
-BACKGROUND = "#0a0710"
-FAN_PALETTE = ["#4b2bb0", "#a23ac0", "#ff5e7e", "#ffb347", "#fff1b8"]
-SUM_CORE, SUM_GLOW = "#fff6e6", "#ff9a5c"
-GHOST = "#4a3d5c"  # the target square wave, the lens frame
-OVERSHOOT = "#ff6f61"
-TEXT, TEXT_DIM = "#f3e9ff", "#9a8bb0"
-GLOW_SIGMA, GLOW_GAIN = 6.0, 0.9
+# --- Look -----------------------------------------------------------------------------
+BACKGROUND = (0.012, 0.010, 0.016)
+EXPOSURE, GAMMA = 0.55, 0.8  # light = 1 - exp(-EXPOSURE * density^GAMMA)
+SETTLE = 2200.0  # px of path: the exposure stops adapting once light ran this far
+SOFT = 1.0  # px blur of the ray density
+SPARK_TRAIL, SPARK_GAIN = 28, 0.06  # samples of comet trail at each ray's head
+GLOWS = ((10.0, 2, 0.10), (40.0, 8, 0.06))  # (sigma px, shrink, gain) halos
+WALL_COLOUR, WALL_ALPHA, WALL_WIDTH = (0.86, 0.80, 0.70), 0.7, 3
+FLAME_SIGMA = 7.0  # px
 
-# --- Sound -------------------------------------------------------------------------
-ROOTS = (45, 47, 48, 50)  # MIDI fundamentals f0 to choose from (A2, B2, C3, D3)
-STRUCK = 16  # the first STRUCK terms are struck on a bell as they arrive
-DRONE_TOP = 7000.0  # Hz: overtones of the drone stop here
-CHIME = (1, 3, 5)  # harmonics struck again whenever the term count doubles
-
-
-def terms_at(s):
-    """M(s): how many terms are in at time s (seconds), continuous, 1 .. TERMS."""
-    s = np.clip(np.asarray(s, float), 0.0, BUILD)
-    return np.minimum((1 + s / TAU) ** GROWTH, TERMS)
+# --- Sound ----------------------------------------------------------------------------
+STYLE = "gamelan"  # common.music.STYLES; an --audio-only tag naming one overrides it
+LISTENED = ((2, 1), (2, 2))  # rays sounded per candle: before / after the blue candle
+DEGREES = 9  # pelog degrees from the bottom of the room to the top
+MIN_GAP = 0.14  # s: a ray's taps closer than this to its previous one are skipped
 
 
-def time_of(m):
-    """The inverse of `terms_at`: when M reaches m."""
-    return TAU * (np.asarray(m, float) ** (1 / GROWTH) - 1)
+def wall_hit(p: np.ndarray, d: np.ndarray):
+    """Distance along d from each p (inside the room) to the next wall, and its normal."""
+    best = np.full(len(p), np.inf)
+    normal = np.zeros_like(p)
+    for side in (1.0, -1.0):  # the two domes, centred at (0, +-HALF_H)
+        q = p - np.array([0.0, side * HALF_H])
+        qa = d[:, 0] ** 2 / SEMI_A**2 + d[:, 1] ** 2 / SEMI_B**2
+        qb = 2 * (q[:, 0] * d[:, 0] / SEMI_A**2 + q[:, 1] * d[:, 1] / SEMI_B**2)
+        qc = q[:, 0] ** 2 / SEMI_A**2 + q[:, 1] ** 2 / SEMI_B**2 - 1
+        disc = qb * qb - 4 * qa * qc
+        root = np.sqrt(np.maximum(disc, 0))
+        for s in ((-qb - root) / (2 * qa), (-qb + root) / (2 * qa)):
+            y = q[:, 1] + s * d[:, 1]
+            ok = (disc > 0) & (s > 1e-6) & (side * y >= -1e-9) & (s < best)
+            best = np.where(ok, s, best)
+            hit = q + s[:, None] * d
+            n = np.stack([hit[:, 0] / SEMI_A**2, hit[:, 1] / SEMI_B**2], 1)
+            normal[ok] = n[ok] / np.linalg.norm(n[ok], axis=1, keepdims=True)
+    for x in (SEMI_A, -SEMI_A, FOCUS, -FOCUS):  # outer walls and the two partitions
+        with np.errstate(divide="ignore", invalid="ignore"):
+            s = (x - p[:, 0]) / d[:, 0]
+        y = p[:, 1] + s * d[:, 1]
+        ok = (s > 1e-6) & (np.abs(y) <= HALF_H) & (s < best)
+        best = np.where(ok, s, best)
+        normal[ok] = (1.0, 0.0)
+    return best, normal
 
 
-def weights(m):
-    """Weight of each term j = 0 .. TERMS-1 (k = 2j + 1) when M = m: 0 -> 1 as M passes j."""
-    return smoothstep(m - np.arange(TERMS))
-
-
-def text_mask(tex, size):
-    """LaTeX (mathtext, Computer Modern) at `size` px per em, as a float32 alpha crop."""
-    buffer = io.BytesIO()
-    prop = FontProperties(size=size, math_fontfamily="cm")
-    mathtext.math_to_image(tex, buffer, prop=prop, dpi=72, format="png")
-    grey = cv2.imdecode(
-        np.frombuffer(buffer.getvalue(), np.uint8), cv2.IMREAD_GRAYSCALE
-    )
-    mask = 1 - grey.astype(np.float32) / 255  # black ink on white
-    rows = np.flatnonzero(mask.max(1) > 0)
-    cols = np.flatnonzero(mask.max(0) > 0)
-    return np.pad(mask[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1], 2)
-
-
-def blit(image, mask, x, y, colour, alpha=1.0, anchor="left"):
-    """Composite a text mask onto a float BGR image at (x, y) = top-left (or top-centre)."""
-    h, w = mask.shape
-    if anchor == "centre":
-        x -= w // 2
-    region = image[y : y + h, x : x + w]
-    a = alpha * mask[..., None]
-    region *= 1 - a
-    region += a * np.array(colour, np.float32)
-
-
-def soundtrack(voice, rng):
+def trace(source, angles, length: float) -> dict:
     """
-    The Fourier series made audible, from the same M(s) as the picture.
-
-    - Drone: additive synthesis of the very same partial sum, Σ w_j(s) sin(2π f0 k τ)/k
-      for k = 2j + 1, with w_j(s) the weights the frames use, so the tone starts as a pure
-      sine at f0 and becomes a square wave's buzz. Overtones above DRONE_TOP are left out.
-    - Strikes: the first STRUCK terms are struck on `voice` (a bell) at f0·k as they reach
-      half weight, louder for larger amplitude 1/k, panned by k.
-    - Chimes: each time M doubles from 16 to 256, harmonics CHIME (f0, 3f0, 5f0) are
-      struck together; the last lands as the build finishes and rings over the rest.
-    One-shot: nothing wraps (circular=False) and `master(loop=False)`.
+    Bounce rays from `source` until each has run `length` px: the arc length at
+    which each straight segment starts, its start point and direction,
+    (rays, segments) arrays. Rays that are done keep 'bouncing' at zero cost.
     """
-    f0 = float(audio.midi_to_hz(int(rng.choice(ROOTS))))
-    sr = audio.SAMPLE_RATE
-    track = audio.silence(DURATION)
-    n = len(track)
-    tau = np.arange(n) / sr
-    m = terms_at(tau)
-    drone = np.zeros(n)
-    for j in range(TERMS):
-        k = 2 * j + 1
-        if k * f0 > DRONE_TOP:
-            break
-        w = smoothstep(m - j)
-        drone += w * np.sin(2 * np.pi * f0 * k * tau) / k
-    fade = np.clip((DURATION - tau) / 1.5, 0, 1)
-    drone *= 0.4 * (0.5 - 0.5 * np.cos(np.pi * fade))
-    drone = audio.lowpass(drone[:, None] * np.ones(2), 4500.0, circular=False)
-    track += drone
+    p = np.tile(np.array(source, float), (len(angles), 1))
+    d = np.stack([np.cos(angles), np.sin(angles)], 1)
+    s = np.zeros(len(angles))
+    keep = [(s.copy(), p.copy(), d.copy())]
+    while s.min() <= length:
+        active = s <= length
+        step, n = wall_hit(p[active], d[active])
+        pa, da = p[active] + step[:, None] * d[active], d[active]
+        da = da - 2 * (da * n).sum(1, keepdims=True) * n
+        da /= np.linalg.norm(da, axis=1, keepdims=True)
+        p[active], d[active] = pa, da
+        s[active] += step
+        s[~active] = np.inf
+        keep.append((s.copy(), p.copy(), d.copy()))
+        if len(keep) > 20_000:
+            raise RuntimeError("a ray is stuck bouncing")
+    out = {key: np.stack([k[i] for k in keep], 1) for i, key in enumerate("spd")}
+    out["s"][:, 0] = 0.0
+    return out
 
-    for j in range(STRUCK):
-        k = 2 * j + 1
-        when = 0.0 if j == 0 else float(time_of(j + 0.5))
-        note = voice(f0 * k, float(np.clip(0.75 / np.sqrt(k), 0.12, 0.75)))
-        audio.add(
-            track, audio.pan(note, 0.7 * np.tanh((k - 8) / 10)), when, circular=False
+
+def path_length(seconds, lit: float, head: float = 0.0):
+    """How far a candle's light has run at `seconds` (0 before it is lit)."""
+    return np.where(seconds >= lit, head + SPEED * (seconds - lit), 0.0)
+
+
+def in_wing(x, y):
+    return (abs(x) > FOCUS) & (abs(x) < SEMI_A) & (abs(y) < HALF_H)
+
+
+def in_hall(x, y):
+    return (abs(x) < FOCUS) & (abs(y) < HALF_H)
+
+
+def sample(room: dict, count: int, device) -> torch.Tensor:
+    """
+    Pixel index of every ray every STEP px along its path, (count, rays) int32,
+    sample-major so any prefix is 'all the light up to that length'.
+    """
+    to = dict(device=device, dtype=torch.float64)
+    starts = torch.tensor(room["s"], **to)
+    points = torch.tensor(room["p"], **to)
+    dirs = torch.tensor(room["d"], **to)
+    starts = torch.where(torch.isinf(starts), torch.full_like(starts, 1e30), starts)
+    rays = starts.shape[0]
+    out = torch.empty(count, rays, dtype=torch.int32, device=device)
+    leaks = 0
+    for j0 in range(0, count, 1000):
+        j = torch.arange(j0, min(count, j0 + 1000), device=device, dtype=torch.float64)
+        query = (j * STEP)[None, :].expand(rays, -1).contiguous()
+        k = (torch.searchsorted(starts, query, right=True) - 1).clamp_min(0)
+        s0 = starts.gather(1, k)
+        x = points[..., 0].gather(1, k) + (query - s0) * dirs[..., 0].gather(1, k)
+        y = points[..., 1].gather(1, k) + (query - s0) * dirs[..., 1].gather(1, k)
+        leaks += int(in_wing(x, y).sum()) if room["home"] == "hall" else 0
+        leaks += int(in_hall(x, y).sum()) if room["home"] == "wing" else 0
+        px = torch.round(CENTRE[0] + x).clamp(0, WIDTH - 1).long()
+        py = torch.round(CENTRE[1] - y).clamp(0, HEIGHT - 1).long()
+        out[j0 : j0 + len(j)] = (py * WIDTH + px).T.to(torch.int32)
+    logger.info(f"Sampled {count:,} x {rays:,} points; {leaks} forbidden samples")
+    return out
+
+
+def walls() -> np.ndarray:
+    """The mirrors as an alpha mask (H, W), drawn at 4x and shrunk."""
+    big = np.zeros((HEIGHT * 4, WIDTH * 4), np.uint8)
+    u = np.linspace(0, np.pi, 1500)
+    dome = np.stack([SEMI_A * np.cos(u), HALF_H + SEMI_B * np.sin(u)], 1)
+    outline = np.concatenate([dome, dome[::-1] * [1, -1]])
+    lines = [outline]
+    for x in (FOCUS, -FOCUS):
+        lines.append(np.array([[x, HALF_H], [x, -HALF_H]]))
+    for pts, closed in zip(lines, (True, False, False)):
+        pix = np.stack([CENTRE[0] + pts[:, 0], CENTRE[1] - pts[:, 1]], 1)
+        cv2.polylines(
+            big,
+            [np.round(pix * 16 * 4).astype(np.int32)],
+            closed,
+            255,
+            WALL_WIDTH * 4,
+            cv2.LINE_AA,
+            4,
         )
-    doublings = [2**p for p in range(4, 9)]
-    for i, count in enumerate(doublings):
-        when = float(time_of(count))
-        last = count == TERMS
-        for k in CHIME:
-            velocity = (0.8 if last else 0.5) / np.sqrt(k)
-            audio.add(track, voice(f0 * k, velocity), when, circular=False)
-    logger.info(
-        f"Soundtrack: f0 {f0:.1f} Hz, drone up to k = {int(DRONE_TOP // f0)}, "
-        f"{STRUCK} strikes, chimes at {[round(float(time_of(c)), 2) for c in doublings]} s"
-    )
-    track = audio.reverb(track, rng, rt60=2.6, wet=0.3, tone=5000.0, circular=False)
+    for x in (FOCUS, -FOCUS):  # the foci, where the partitions end
+        for y in (HALF_H, -HALF_H):
+            centre = (int(4 * (CENTRE[0] + x)), int(4 * (CENTRE[1] - y)))
+            cv2.circle(big, centre, 4 * WALL_WIDTH * 2, 255, -1, cv2.LINE_AA)
+    mask = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
+    return mask.astype(np.float32) / 255.0
+
+
+def soundtrack(rooms: list, style_name: str, rng: np.random.Generator):
+    """
+    A one-shot in pelog bells.
+
+    - A gong (the style's bass, two octaves down) and a bell on the root as
+      each candle is lit, at 0 s and at the blue candle's time.
+    - Wall strikes: LISTENED rays of each candle (chosen with the audio rng)
+      sound every bounce at its exact time, (arc length) / SPEED after the
+      candle was lit. Pitch is the height of the bounce in the room (DEGREES
+      pelog steps bottom to top), the warm candle an octave above the blue
+      one; pan is x. Taps closer than MIN_GAP to the ray's previous one are
+      skipped (grazing hops in the domes), and fewer warm rays sound once the
+      blue candle is lit, to keep the density near 5 notes/s.
+    - A quiet pad on the root and fifth, joined by the third when the blue
+      candle is lit.
+    """
+    style = STYLES[style_name]
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    track = audio.silence(DURATION)
+    kw = dict(circular=False)
+    blue_lit = CANDLES[1][1]
+    top = HALF_H + SEMI_B
+
+    def low(hz):
+        while hz < 65:
+            hz *= 2
+        return hz
+
+    for lit in (CANDLES[0][1], blue_lit):
+        audio.add(track, style.bass(low(scale.hz(0, -2)), 0.6, length=6.0), lit, **kw)
+        audio.add(track, style.voice(scale.hz(0, 0), 0.45), lit + 0.02, **kw)
+
+    taps = 0
+    for c, (room, (before, after), octave) in enumerate(zip(rooms, LISTENED, (0, -1))):
+        lit = CANDLES[c][1]
+        head = HEAD_START if c == 0 else 0.0
+        chosen = rng.choice(room["s"].shape[0], max(before, after), replace=False)
+        for r, ray in enumerate(chosen):
+            last = -1.0
+            for s, (x, y) in zip(room["s"][ray, 1:], room["p"][ray, 1:]):
+                when = lit + (s - head) / SPEED
+                if not np.isfinite(when) or when >= DURATION - 0.3:
+                    break
+                if when < 0.05 or when - last < MIN_GAP:
+                    continue
+                if c == 0 and r >= after and when >= blue_lit:
+                    break
+                last = when
+                degree = int(round((y + top) / (2 * top) * DEGREES))
+                fade = 1 - 0.6 * float(smoothstep((when - 13.0) / 2.0))
+                velocity = fade * rng.uniform(0.26, 0.4)
+                note = style.voice(scale.hz(degree, octave), velocity)
+                audio.add(track, audio.pan(note, 0.75 * x / SEMI_A), when, **kw)
+                taps += 1
+
+    for degree, start in ((0, 0.0), (3, 0.0), (2, blue_lit)):
+        hz = low(scale.hz(degree, -1))
+        audio.add(
+            track,
+            audio.pad(hz, DURATION - start - 1.5, 0.08, 2.0, 1.5, 0.3),
+            start,
+            **kw,
+        )
+    logger.info(f"Soundtrack: {style_name}, root MIDI {scale.root}, {taps} wall taps")
+    track = style.room(track, rng, circular=False)
     return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    The Gibbs phenomenon, as a one-shot. The Fourier series of the square wave
-    sign(sin x) is (4/π) Σ sin(kx)/k over odd k. At time s the series holds
-    M(s) = (1 + s/τ)^GROWTH terms (continuous; term j = 0, 1, ... has weight
-    smoothstep(M − j), so each new sine grows in from flat), from 1 at s = 0 to
-    TERMS = 256 at s = BUILD, then the picture rests and fades out.
+    Penrose's unilluminable room, lit by two candles.
 
-    Three panels share that one closed form. Top: every weighted term
-    w_j (4/π) sin(kx)/k drawn over the same x, coloured by log k, the newest
-    brighter. Middle: the partial sum, a glowing curve over the dim target
-    square wave; a box at the jump x = 0 marks the lens. Bottom (the lens): the
-    sum near the jump, x = ξ / (2 M^ZOOM), values LENS_S. Near the jump
-    S_M(x) → (2/π) Si(2Mx), so the ripples are 1/M wide; the lens zooms only as
-    M^ZOOM (ZOOM = 0.6), so they visibly squeeze into the wall while the first
-    peak stays at (2/π) Si(π) ≈ 1.179, an overshoot of 9% of the jump of 2 (the
-    red line, which pulses each time M doubles).
+    The room: two half-ellipses (semi-axes SEMI_A, SEMI_B) with flat sides at
+    y = +-HALF_H, joined by vertical outer walls at x = +-SEMI_A, plus two
+    two-sided partitions at x = +-FOCUS = +-sqrt(a^2 - b^2) from one dome's
+    focus to the other's. A chord of an ellipse that crosses the major axis
+    between the foci reflects into another such chord (its caustic is a
+    confocal hyperbola); one that crosses outside them stays outside (a
+    confocal ellipse). Reflection in the flat side preserves this, so the
+    domes return light from the hall (|x| < FOCUS) to the hall and light from
+    the wings (FOCUS < |x| < SEMI_A) to the wings: a candle in the hall never
+    lights the wings and vice versa (`sample` counts forbidden samples; 0).
 
-    Rendering: sin(kx) for every k is precomputed once on the 2x-supersampled
-    column grid; each frame is a weighted sum, 256 cv2 polylines, a downsample,
-    a Gaussian glow and text masks typeset once in
-    Computer Modern with matplotlib mathtext, all a pure function of the frame
-    index on the render_frames thread pool. Nothing is random: --seed does not
-    change the picture. The soundtrack (`soundtrack`, Harmonic series) uses
-    settings.audio_rng only to pick f0 and the reverb; the posted one used --seed 0.
-    An --audio-only tag naming a common.music style swaps the bell for its voice.
+    Each candle sends RAYS rays at evenly spaced angles plus one random phase
+    from settings.rng; `trace` reflects them exactly (quadratic for the domes,
+    linear for the walls) in float64 until each has run the whole clip. Every
+    ray is then sampled every STEP px of path into a pixel index, sample-major,
+    so the light a candle has shed by path length L is a prefix of that array.
+
+    A frame is a pure function of t: L = HEAD_START + SPEED t for the warm
+    candle, SPEED (t - 6.5) for the blue one; each prefix is bincounted on the
+    GPU into a ray-density image, normalised by min(L, SETTLE) so the exposure
+    adapts as light spreads, then lightly blurred. The heads of the rays (the
+    last SPARK_TRAIL samples) are added as sparks. Both colours are tone-mapped
+    together as 1 - exp(-EXPOSURE * density), glowed, and the mirrors and foci
+    laid on top. Caustics of the domes show in the hall as bright envelopes.
+
+    The posted render uses --seed 0 (the default), with the gamelan soundtrack.
     """
     settings = settings or ImageProcessingSettings(1)
-    W2, H2 = WIDTH * SS, HEIGHT * SS
-    shift = 2  # cv2 fractional bits
-    one = 1 << shift
-
-    def px(v):
-        return np.round(v * SS * one).astype(np.int32)
-
-    ks = 2 * np.arange(TERMS) + 1
-    amps = 4 / (np.pi * ks)
-    cols = (np.arange(W2) + 0.5) / SS
-    xs = X_RANGE[0] + (X_RANGE[1] - X_RANGE[0]) * cols / WIDTH
-    basis = np.sin(np.outer(ks, xs)).astype(np.float32)  # (TERMS, W2)
-    lens_cols = np.linspace(LENS_X[0], LENS_X[1], (LENS_X[1] - LENS_X[0]) * SS)
-    xi = LENS_XI[0] + (LENS_XI[1] - LENS_XI[0]) * (lens_cols - LENS_X[0]) / (
-        LENS_X[1] - LENS_X[0]
-    )
-    lens_scale = (LENS_BOTTOM - LENS_TOP) / (LENS_S[1] - LENS_S[0])
-
-    def lens_y(s):
-        return LENS_BOTTOM - (s - LENS_S[0]) * lens_scale
-
-    def screen_x(x):
-        return (x - X_RANGE[0]) / (X_RANGE[1] - X_RANGE[0]) * WIDTH
-
-    lut = palette_lut(FAN_PALETTE, 1024)[:, ::-1] * 255  # BGR
-    fan_colour = lut[(np.clip(np.log(ks) / np.log(127), 0, 1) * 1023).astype(int)]
-    bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
-
-    # The static layer at 2x: the target square wave and the lens frame.
-    static = np.full((H2, W2, 3), hex_to_bgr(BACKGROUND), np.uint8)
-    ghost = hex_to_bgr(GHOST)
-    square = np.sign(np.sin(xs + 1e-9))
-    pts = np.stack([px(cols), px(SUM_Y - SUM_SCALE * square)], 1)
-    cv2.polylines(static, [pts], False, ghost, 2 * SS, cv2.LINE_AA, shift)
-    cv2.line(
-        static, (0, px(FAN_Y)), (W2 * one, px(FAN_Y)), ghost, SS, cv2.LINE_AA, shift
-    )
-    for s_value in (1.0,):
-        y = px(lens_y(s_value))
-        cv2.line(
-            static,
-            (px(LENS_X[0]), y),
-            (px(LENS_X[1]), y),
-            ghost,
-            SS,
-            cv2.LINE_AA,
-            shift,
+    lengths = []
+    rooms = []
+    for c, (source, lit, _) in enumerate(CANDLES):
+        head = HEAD_START if c == 0 else 0.0
+        length = float(path_length(DURATION, lit, head)) + 2 * STEP
+        phase = settings.rng.uniform(0, 2 * np.pi / RAYS)
+        angles = phase + 2 * np.pi * np.arange(RAYS) / RAYS
+        room = trace(source, angles, length)
+        room["home"] = "hall" if c == 0 else "wing"
+        rooms.append(room)
+        lengths.append(length)
+        logger.info(
+            f"Candle {c}: {RAYS} rays traced to {length:.0f} px, "
+            f"{room['s'].shape[1] - 1} bounces"
         )
-    lens_square = np.where(xi < 0, -1.0, 1.0)
-    lens_rows = slice(int(LENS_TOP - 30) * SS, int(LENS_BOTTOM + 30) * SS)
-    lens_offset = (LENS_TOP - 30) * SS * one
-    pts = np.stack([px(lens_cols), px(lens_y(lens_square)) - lens_offset], 1)
-    cv2.polylines(static[lens_rows], [pts], False, ghost, 2 * SS, cv2.LINE_AA, shift)
 
-    # Text, once.
-    label = text_mask(
-        r"$\sin x\, +\, \frac{\sin 3x}{3}\, +\, \frac{\sin 5x}{5}\, +\, "
-        r"\frac{\sin 7x}{7}\, +\, \cdots$",
-        40,
-    )
-    lens_label = text_mask(r"$\mathrm{the\ jump{,}\ magnified}$", 36)
-    nine = text_mask(r"$+9\%$", 48)
-    counters = [None] + [
-        text_mask(
-            rf"${c}\ \mathrm{{sine\ wave{'s' if c > 1 else ''}{{,}}\ added\ up}}$", 54
+    if not settings.audio_only:
+        device = select_device()
+        to = dict(device=device, dtype=torch.float32)
+        samples = [
+            sample(room, int(length / STEP), device)
+            for room, length in zip(rooms, lengths)
+        ]
+        colours = [torch.tensor(c[2], **to) for c in CANDLES]
+        area = (4 * SEMI_A * HALF_H) + np.pi * SEMI_A * SEMI_B  # px^2
+        soft = gaussian_kernel(SOFT, device)
+        wall = torch.tensor(walls(), **to)[..., None]
+        wall_rgb = torch.tensor(WALL_COLOUR, **to)
+        background = torch.tensor(BACKGROUND, **to)
+        yy, xx = torch.meshgrid(
+            torch.arange(HEIGHT, **to), torch.arange(WIDTH, **to), indexing="ij"
         )
-        for c in range(1, TERMS + 1)
-    ]
-    text, text_dim = hex_to_bgr(TEXT), hex_to_bgr(TEXT_DIM)
-    doubling_times = time_of(np.array([2**p for p in range(1, 9)]))
-    core, halo = hex_to_bgr(SUM_CORE), hex_to_bgr(SUM_GLOW)
-    overshoot = np.array(hex_to_bgr(OVERSHOOT), np.float32)
-    logger.info(
-        f"τ = {TAU:.3f} s; M doubles at {np.round(doubling_times, 2).tolist()} s"
-    )
+        flames = []
+        for (x, y), _, _ in CANDLES:
+            r2 = (xx - CENTRE[0] - x) ** 2 + (yy - CENTRE[1] + y) ** 2
+            flames.append(torch.exp(-r2 / (2 * FLAME_SIGMA**2))[..., None])
+        trail = torch.linspace(0.15, 1.0, SPARK_TRAIL, **to)[:, None]
+        heads = torch.ones(SPARK_TRAIL, RAYS, **to) * trail
 
-    def render(frame: int) -> np.ndarray:
-        s = frame / (FRAME_COUNT - 1) * DURATION
-        m = float(terms_at(s))
-        zoom = m**ZOOM
-        w = weights(m)
-        live = int(np.count_nonzero(w))
-        coeff = (w * amps).astype(np.float32)
-        canvas = static.copy()
+    def render(frame: int) -> torch.Tensor:
+        seconds = frame / (FRAME_COUNT - 1) * DURATION
+        linear = torch.zeros(HEIGHT * WIDTH, 3, **to)
+        sparks = torch.zeros(HEIGHT * WIDTH, 3, **to)
+        for c, (points, colour) in enumerate(zip(samples, colours)):
+            lit = CANDLES[c][1]
+            head = HEAD_START if c == 0 else 0.0
+            length = float(path_length(seconds, lit, head))
+            n = min(int(length / STEP) + 1, points.shape[0]) if seconds >= lit else 0
+            if n == 0:
+                continue
+            density = torch.bincount(points[:n].reshape(-1), minlength=HEIGHT * WIDTH)
+            scale = STEP * area / (RAYS * max(length, SETTLE))
+            linear += (density.to(torch.float32) * scale)[:, None] * colour
+            m = min(n, SPARK_TRAIL)
+            index = points[n - m : n].reshape(-1).long()
+            weight = heads[SPARK_TRAIL - m :].reshape(-1)
+            sparks.index_add_(0, index, weight[:, None] * colour[None, :])
+        linear = blur(linear.view(HEIGHT, WIDTH, 3), soft)
+        linear = linear + SPARK_GAIN * blur(sparks.view(HEIGHT, WIDTH, 3), soft) * 40
+        for c, flame in enumerate(flames):
+            lit = CANDLES[c][1]
+            if seconds >= lit:
+                on = float(smoothstep((seconds - lit) / 0.3))
+                flicker = 1 + 0.12 * np.sin(11.3 * seconds + 2 * c) * np.sin(
+                    3.7 * seconds
+                )
+                linear = linear + 6.0 * on * flicker * flame * colours[c]
+        glow = sum(g * wide_blur(linear, sigma, f) for sigma, f, g in GLOWS)
+        light = 1 - torch.exp(-EXPOSURE * (linear.clamp_min(0) ** GAMMA + glow))
+        image = background + (1 - background) * light
+        image = image * (1 - WALL_ALPHA * wall) + WALL_ALPHA * wall * wall_rgb
+        return image.clamp(0, 1) * 255.0
 
-        # Top: the ingredients, high k first so the big ones sit on top.
-        fan = coeff[:live, None] * basis[:live]
-        ys = px(FAN_Y - FAN_SCALE * fan)
-        xcol = px(cols)
-        for j in range(live - 1, -1, -1):
-            fresh = np.exp(-max(m - j, 0.0) / 1.5)
-            colour = np.clip(fan_colour[j] * (0.55 + 0.45 * w[j] + 0.6 * fresh), 0, 255)
-            thick = SS * (2 if j < 8 else 1)
-            pts = np.stack([xcol, ys[j]], 1)
-            cv2.polylines(
-                canvas, [pts], False, colour.tolist(), thick, cv2.LINE_AA, shift
-            )
-
-        # Middle: the sum, and the lens box at the jump.
-        total = coeff[:live] @ basis[:live]
-        pts = np.stack([xcol, px(SUM_Y - SUM_SCALE * total)], 1)
-        cv2.polylines(canvas, [pts], False, halo, 5 * SS, cv2.LINE_AA, shift)
-        cv2.polylines(canvas, [pts], False, core, 2 * SS, cv2.LINE_AA, shift)
-        x0, x1 = (screen_x(v / (2 * zoom)) for v in LENS_XI)
-        x0, x1 = max(x0, 2), min(x1, WIDTH - 2)
-        y0 = SUM_Y - SUM_SCALE * 1.24
-        y1 = SUM_Y - SUM_SCALE * LENS_S[0]
-        box_colour = hex_to_bgr(TEXT_DIM)
-        cv2.rectangle(
-            canvas,
-            (px(x0), px(y0)),
-            (px(x1), px(y1)),
-            box_colour,
-            SS,
-            cv2.LINE_AA,
-            shift,
-        )
-        for a, b in ((x0, LENS_X[0]), (x1, LENS_X[1])):
-            cv2.line(
-                canvas,
-                (px(a), px(y1)),
-                (px(b), px(LENS_TOP - 30)),
-                ghost,
-                SS,
-                cv2.LINE_AA,
-                shift,
-            )
-
-        # Bottom: the lens, S_M(ξ / 2M) against ξ.
-        lens = coeff[:live] @ np.sin(np.outer(ks[:live], xi / (2 * zoom))).astype(
-            np.float32
-        )
-        pulse = float(np.sum(np.exp(-(s - doubling_times[doubling_times <= s]) / 0.45)))
-        pulse = min(pulse, 1.0)
-        y = px(lens_y(GIBBS)) - lens_offset
-        line_colour = (overshoot * (0.55 + 0.45 * pulse)).tolist()
-        sub = canvas[lens_rows]
-        cv2.line(
-            sub,
-            (px(LENS_X[0]), y),
-            (px(LENS_X[1]), y),
-            line_colour,
-            SS * (2 if pulse > 0.5 else 1),
-            cv2.LINE_AA,
-            shift,
-        )
-        pts = np.stack([px(lens_cols), px(lens_y(lens)) - lens_offset], 1)
-        cv2.polylines(sub, [pts], False, halo, 5 * SS, cv2.LINE_AA, shift)
-        cv2.polylines(sub, [pts], False, core, 2 * SS, cv2.LINE_AA, shift)
-
-        image = cv2.resize(canvas, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-        image = image.astype(np.float32)
-        light = np.clip(image - bg, 0, None)
-        glow = cv2.GaussianBlur(light, (0, 0), GLOW_SIGMA)
-        image += GLOW_GAIN * glow
-
-        blit(image, label, WIDTH // 2, LABEL_Y, text_dim, anchor="centre")
-        count = int(np.clip(round(m), 1, TERMS))
-        blit(image, counters[count], WIDTH // 2, COUNTER_Y, text, anchor="centre")
-        blit(image, lens_label, LENS_X[0], LENS_LABEL_Y, text_dim)
-        blit(
-            image,
-            nine,
-            LENS_X[1] - nine.shape[1],
-            int(lens_y(GIBBS)) - nine.shape[0] - 10,
-            overshoot.tolist(),
-            alpha=0.7 + 0.3 * pulse,
-        )
-        out = float(smoothstep((DURATION - s) / FADE))
-        if out < 1:
-            image = bg + out * (image - bg)
-        return image
-
-    render_frames(settings, render, FRAME_COUNT)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
     tag = settings.audio_tag
-    voice = STYLES[tag].voice if tag in STYLES else audio.bell
-    track = soundtrack(voice, settings.audio_rng)
+    track = soundtrack(rooms, tag if tag in STYLES else STYLE, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

@@ -1,45 +1,42 @@
 """
-A Graph That Untangles Itself
+The Road to Chaos
 
-A random graph of 584 dots and 1,685 links: a hairball with over three
-hundred thousand crossings. Two rules untangle it. Pin the outer ring of dots
-to a circle, and let every other dot slide to the average position of its
-neighbours. The crossings melt away until there are none.
+The logistic map, x → r·x(1 − x), is one line of algebra, and this bifurcation
+diagram shows where it leads. Each column is a value of r; the dots are where x
+ends up if you apply the rule again and again. At first it settles on one value.
+Turn r up and it flips between two, then four, then eight, until at r ≈ 3.57 it
+never repeats: chaos.
 
-This always works. Tutte's spring theorem (1963): make every link a rubber
-band, nail the outer face to a convex shape, and any well-connected graph
-that can be drawn without crossings settles into exactly such a drawing. It
-is how computers lay out networks and flatten 3D meshes.
+Deep inside the chaos, a window of order opens: a cycle of three. Zoom in and the
+whole diagram is there again, in miniature, doubling its way back into chaos.
 
-Each time the number of crossings halves, a harp string is plucked one
-step higher, over a chord that only resolves when the last crossing goes.
+Below, the same rule is drawn as a staircase, and every step strikes a marimba
+note, its height on screen: you hear the map settle, trill, and fall apart, twice.
 
-Made with Python, NumPy, SciPy, Numba & OpenCV. Sound synthesized in NumPy.
-#planargraph #graphtheory #mathart #generativeart #randomplots
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#logisticmap #chaostheory #mathart #generativeart #randomplots
 """
 
 import gc
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 import matplotlib
 import numpy as np
+import torch
 from loguru import logger
-from numba import njit
 from PIL import Image, ImageDraw, ImageFont
 from scipy.interpolate import PchipInterpolator
-from scipy.spatial import Delaunay
 
 from common import audio
+from common.gpu import blur, gaussian_kernel, select_device
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale
+from common.music import STYLES, Scale, beat
 from common.video import (
     FPS,
     HEIGHT,
     WIDTH,
     frame_count,
-    hex_to_bgr,
     palette_lut,
     render_frames,
     smoothstep,
@@ -47,530 +44,521 @@ from common.video import (
 
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
-FADE = 0.4  # s of fade to black at the end
 
-# The graph: a Delaunay triangulation of a disc, the rim on the unit circle.
-RIM = 64  # nodes pinned to the circle
-INTERIOR = 520  # free nodes
-SPACING = 0.055  # minimum distance between interior nodes (unit disc)
-INNER = 0.93  # interior nodes lie within this radius
+# --- Timeline (s): 96 BPM, a bar is 2.5 s, one map step per sixteenth note -----------
+BPM = 96.0
+STEP = beat(BPM) / 4  # s per iterate of the melody orbit
+SWEEP1 = (  # (time, r): the cursor crosses the whole diagram, slowing at the doublings
+    (0.0, 2.86),
+    (1.0, 3.0),
+    (2.3, 3.449),
+    (3.3, 3.5441),
+    (4.0, 3.5644),
+    (4.5, 3.5699),
+    (5.5, 3.80),
+    (6.3, 3.8335),
+    (6.6, 3.8540),
+    (7.5, 4.0),
+)
+GLIDE = (7.5, 8.3)  # the cursor flies back into the period-3 window
+ZOOM = (7.6, 10.2)  # the camera dives into the window
+SWEEP2 = (  # inside the window: 3 -> 6 -> 12 -> chaos -> crisis
+    (10.2, 3.8350),
+    (10.9, 3.8412),
+    (11.8, 3.8472),
+    (12.4, 3.8490),
+    (13.1, 3.8530),
+    (13.6, 3.8566),
+    (13.8, 3.8582),
+)
+NOTES_END = 13.8  # s: the last map step that sounds; the image rests after it
+FADE = 0.45  # s fade to black at the very end
 
-# Timeline (s).
-PIN_START, PIN_END = 0.2, 2.3  # the rim nodes glide to the circle, one after another
-PIN_GLIDE = 0.7  # each rim node's glide
-RELAX_START = 1.9  # the springs let go
-ZERO_AT = 9.0  # the last crossing disappears (the relaxation is paced around it)
-RELAX_END = 12.2  # the drawing has (visibly) converged
-TAU_START, TAU_END = 0.006, 220.0  # spring time at RELAX_START / RELAX_END
+# --- Views (r range, x range) ---------------------------------------------------------
+MAIN_VIEW = (2.84, 4.01, -0.03, 1.03)
+WINDOW_R = 3.8350  # where the cursor waits during the dive (stable 3-cycle)
+ZOOM_VIEW = (3.8262, 3.8594, 0.4315, 0.5685)  # the middle branch of the window
 
-# Layout (output px).
-CENTRE = (540.0, 1080.0)
-RADIUS = 468.0
-COUNTER_Y = 330  # baseline-ish centre of the crossing counter
-NOTE_Y = 1700  # the closing line of text
+# --- Layout (px) ----------------------------------------------------------------------
+DIAG_Y, DIAG_H = 300, 940  # the diagram band, full width
+READ_Y = 1300  # baseline of the r / period readout
+WEB_X, WEB_Y, WEB_S = 300, 1345, 480  # cobweb panel: left, top, size
 SS = 2  # supersampling
-SHIFT = 4  # cv2 sub-pixel bits
 
-BACKGROUND = "#07060b"
-HALO = "#140f20"  # faint light behind the disc
-# Edge colour by how many other edges it crosses: none .. the most.
-SILK = "#eef6d8"
-HEAT = ["#ffd36e", "#ff8a47", "#ff3d86", "#c63cff"]
-CALM = ["#ffeeb0", "#e9f6ff", "#b7a6ff"]  # crossing-free edges, centre to rim
-RIM_COLOUR = "#ffffff"
-TEXT_COLOUR = "#eef6d8"
-FONT = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSansMono.ttf"
-FONT_NOTE = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf"
-NOTE = "every dot at the average of its neighbours"
+# --- Diagram sampling -----------------------------------------------------------------
+SAMPLES = 48  # orbits per (2x) pixel column
+TRANSIENT = 700  # iterations discarded
+RECORDED = 112  # iterations plotted per orbit
+DENSITY = 5.0  # counts per 2x pixel that reach ~63% brightness
+GHOST = 0.22  # brightness of the not-yet-swept diagram
 
-# common.music.STYLES; an --audio-only tag naming one overrides it
-STYLE = "harp"
+# --- Look -----------------------------------------------------------------------------
+BG = "#07060b"
+DENSITY_COLOURS = ["#07060b", "#2a1240", "#6a2a6e", "#c2457a", "#f59e6b", "#fff1d6"]
+ACCENT = "#7fe7ff"  # ice cyan: the cursor, the orbit, the staircase
+TTF = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
 
-
-# --- The graph -------------------------------------------------------------------
-
-
-def build_graph(rng):
-    """Nodes (rim first) of a triangulated disc, their edges, and the start tangle."""
-    points = []
-    while len(points) < INTERIOR:
-        p = rng.uniform(-1.0, 1.0, 2)
-        if p @ p > INNER**2:
-            continue
-        if points and np.min(np.sum((np.asarray(points) - p) ** 2, 1)) < SPACING**2:
-            continue
-        points.append(p)
-    angles = 2 * np.pi * np.arange(RIM) / RIM
-    rim = np.c_[np.cos(angles), np.sin(angles)]
-    nodes = np.vstack([rim, np.asarray(points)])
-    edges = set()
-    for a, b, c in Delaunay(nodes).simplices:
-        for u, v in ((a, b), (b, c), (c, a)):
-            edges.add((min(u, v), max(u, v)))
-    edges = np.array(sorted(edges), dtype=np.int64)
-    # The tangle: every node (rim included) dropped uniformly in the disc.
-    n = len(nodes)
-    r = 0.97 * np.sqrt(rng.uniform(0.0, 1.0, n))
-    theta = rng.uniform(0.0, 2 * np.pi, n)
-    start = np.c_[r * np.cos(theta), r * np.sin(theta)]
-    return rim, edges, start
+# --- Sound ----------------------------------------------------------------------------
+STYLE = (
+    "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one overrides it
+)
+MODE = "dorian"  # the melody's scale (overrides the style's)
+SPAN = 21  # scale degrees from the bottom of the view to the top (three octaves)
+LOWEST = -9  # degree at the bottom of the view
+DAMP = 0.45  # s a melody note rings before it is damped
 
 
-class Springs:
-    """
-    The spring flow of the interior with the rim held at `b`:
-    dx/dτ = -(L_II x + L_IB b), solved in closed form from the eigenvectors of L_II.
-    """
-
-    def __init__(self, n, edges):
-        weights = np.zeros((n, n))
-        weights[edges[:, 0], edges[:, 1]] = 1.0
-        weights[edges[:, 1], edges[:, 0]] = 1.0
-        laplacian = np.diag(weights.sum(1)) - weights
-        inner = np.arange(RIM, n)
-        l_ii = laplacian[np.ix_(inner, inner)]
-        l_ib = laplacian[np.ix_(inner, np.arange(RIM))]
-        self.harmonic = -np.linalg.solve(l_ii, l_ib)  # Tutte: x_I = H b
-        self.lam, self.modes = np.linalg.eigh(l_ii)
-
-    def interior(self, start_inner, rim, tau):
-        rest = self.harmonic @ rim
-        offset = self.modes.T @ (start_inner - rest)
-        return rest + self.modes @ (np.exp(-self.lam * tau)[:, None] * offset)
+PARABOLA = np.linspace(0.0, 1.0, 160)
 
 
-@njit(nogil=True, cache=True)
-def crossings(x, edges):
-    """Per edge, how many other edges it properly crosses (shared ends don't count)."""
-    m = len(edges)
-    count = np.zeros(m, np.int32)
-    for i in range(m):
-        a, b = edges[i, 0], edges[i, 1]
-        ax, ay, bx, by = x[a, 0], x[a, 1], x[b, 0], x[b, 1]
-        lox, hix = min(ax, bx), max(ax, bx)
-        loy, hiy = min(ay, by), max(ay, by)
-        for j in range(i + 1, m):
-            c, d = edges[j, 0], edges[j, 1]
-            if c == a or c == b or d == a or d == b:
-                continue
-            cx, cy, dx, dy = x[c, 0], x[c, 1], x[d, 0], x[d, 1]
-            if max(cx, dx) < lox or min(cx, dx) > hix:
-                continue
-            if max(cy, dy) < loy or min(cy, dy) > hiy:
-                continue
-            d1 = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
-            d2 = (bx - ax) * (dy - ay) - (by - ay) * (dx - ax)
-            if d1 * d2 >= 0:
-                continue
-            d3 = (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx)
-            d4 = (dx - cx) * (by - cy) - (dy - cy) * (bx - cx)
-            if d3 * d4 >= 0:
-                continue
-            count[i] += 1
-            count[j] += 1
-    return count
+def hex_to_rgb(colour):
+    """'#rrggbb' -> [r, g, b] floats in 0..255."""
+    return [float(int(colour[i : i + 2], 16)) for i in (1, 3, 5)]
 
 
-def graph_distance(n, edges, source):
-    """Breadth-first hop count from `source` to every node."""
-    neighbours = [[] for _ in range(n)]
-    for a, b in edges:
-        neighbours[a].append(b)
-        neighbours[b].append(a)
-    dist = np.full(n, -1)
-    dist[source] = 0
-    frontier = [source]
-    while frontier:
-        nxt = []
-        for u in frontier:
-            for v in neighbours[u]:
-                if dist[v] < 0:
-                    dist[v] = dist[u] + 1
-                    nxt.append(v)
-        frontier = nxt
-    return dist
+def timeline():
+    """Fine-grid curves of time: cursor r, zoom progress, and how far the diagram is lit."""
+    tau = np.linspace(0.0, DURATION, 60001)
+    s1 = PchipInterpolator(*np.array(SWEEP1).T)
+    s2 = PchipInterpolator(*np.array(SWEEP2).T)
+    r = np.empty_like(tau)
+    a = tau <= SWEEP1[-1][0]
+    r[a] = s1(tau[a])
+    glide = smoothstep((tau - GLIDE[0]) / (GLIDE[1] - GLIDE[0]))
+    b = (tau > SWEEP1[-1][0]) & (tau < SWEEP2[0][0])
+    r[b] = SWEEP1[-1][1] + (WINDOW_R - SWEEP1[-1][1]) * glide[b]
+    c = tau >= SWEEP2[0][0]
+    r[c] = s2(np.minimum(tau[c], SWEEP2[-1][0]))
+    lit = np.maximum.accumulate(r)
+    zoom = smoothstep((tau - ZOOM[0]) / (ZOOM[1] - ZOOM[0]))
+    return tau, r, lit, zoom
 
 
-class Motion:
-    """Positions of every node as a pure function of the time in seconds."""
-
-    def __init__(self, rim, edges, start):
-        self.rim, self.edges, self.start = rim, edges, start
-        self.n = len(start)
-        self.springs = Springs(self.n, edges)
-        self.final = np.vstack([rim, self.springs.harmonic @ rim])
-        # Each rim node glides to its place on the circle, in order round it.
-        order = np.arange(RIM)
-        span = PIN_END - PIN_START - PIN_GLIDE
-        self.pin_at = PIN_START + span * order / (RIM - 1)
-        self.log_tau = None
-
-    def rim_at(self, seconds):
-        u = smoothstep((seconds - self.pin_at) / PIN_GLIDE)[:, None]
-        return (1 - u) * self.start[:RIM] + u * self.rim
-
-    def tau(self, seconds):
-        if seconds <= RELAX_START:
-            return 0.0
-        if seconds >= RELAX_END:
-            return np.inf
-        return 10.0 ** float(self.log_tau(seconds))
-
-    def at(self, seconds):
-        rim = self.rim_at(seconds)
-        tau = self.tau(seconds)
-        if np.isinf(tau):
-            inner = self.final[RIM:]
-        else:
-            inner = self.springs.interior(self.start[RIM:], rim, tau)
-            # Land exactly on the drawing at RELAX_END (the leftover is far below a pixel).
-            land = smoothstep((seconds - (RELAX_END - 0.6)) / 0.6)
-            inner = (1 - land) * inner + land * self.final[RIM:]
-        return np.vstack([rim, inner])
-
-    def pace(self):
-        """
-        Spring time τ(s): log-paced from TAU_START to TAU_END, with the spring time at
-        which this graph's last crossing disappears placed exactly at ZERO_AT.
-        """
-        rim = self.rim
-        lo, hi = np.log10(0.05), np.log10(50.0)
-        for _ in range(40):  # bisection on the (eventually monotone) crossing count
-            mid = 0.5 * (lo + hi)
-            inner = self.springs.interior(self.start[RIM:], rim, 10.0**mid)
-            if crossings(np.vstack([rim, inner]), self.edges).sum() == 0:
-                hi = mid
-            else:
-                lo = mid
-        tau_zero = hi + 0.01
-        logger.info(f"Last crossing goes at spring time τ = {10 ** tau_zero:.3f}")
-        knots = [RELAX_START, RELAX_START + 0.9, ZERO_AT, RELAX_END]
-        values = [
-            np.log10(TAU_START),
-            np.log10(TAU_START) + 1.0,
-            tau_zero,
-            np.log10(TAU_END),
-        ]
-        self.log_tau = PchipInterpolator(knots, values)
+def view_at(z):
+    """(r0, r1, x0, x1) at zoom progress z: geometric zoom about each axis's fixed point."""
+    out = []
+    for lo0, hi0, lo1, hi1 in (
+        (MAIN_VIEW[0], MAIN_VIEW[1], ZOOM_VIEW[0], ZOOM_VIEW[1]),
+        (MAIN_VIEW[2], MAIN_VIEW[3], ZOOM_VIEW[2], ZOOM_VIEW[3]),
+    ):
+        w0, w1 = hi0 - lo0, hi1 - lo1
+        c0, c1 = 0.5 * (lo0 + hi0), 0.5 * (lo1 + hi1)
+        p = (c1 * w0 - c0 * w1) / (w0 - w1)  # stays put on screen
+        w = w0 ** (1 - z) * w1**z
+        c = p + (c0 - p) * w / w0
+        out += [c - w / 2, c + w / 2]
+    return tuple(out)
 
 
-# --- Drawing ---------------------------------------------------------------------
+def melody_orbit(curve_tau, curve_r):
+    """One orbit x_{k+1} = r(t_k) x_k (1 - x_k), a step per sixteenth: (times, r, x)."""
+    times = np.arange(0.0, NOTES_END + 1e-9, STEP)
+    rs = np.interp(times, curve_tau, curve_r)
+    x = 0.5
+    for _ in range(300):  # settle on the attractor of the first r
+        x = rs[0] * x * (1 - x)
+    xs = np.empty(len(times) + 1)
+    xs[0] = x
+    for k, r in enumerate(rs):
+        xs[k + 1] = r * xs[k] * (1 - xs[k])
+    return times, rs, xs
 
 
-class Text:
-    """Counter and caption bitmaps, cached per string (alpha masks in 0..1)."""
+def attractor(rs, count=64, transient=6000):
+    """Points of the attractor at every r in `rs` (float64): (len(rs), count)."""
+    x = np.full(len(rs), 0.3141)
+    for _ in range(transient):
+        x = rs * x * (1 - x)
+    pts = np.empty((len(rs), count))
+    for i in range(count):
+        x = rs * x * (1 - x)
+        pts[:, i] = x
+    return pts
 
-    def __init__(self):
-        self.big = ImageFont.truetype(str(FONT), 132)
-        self.small = ImageFont.truetype(str(FONT), 34)
-        self.note = ImageFont.truetype(str(FONT_NOTE), 40)
+
+def period_of(points, tol=2e-4):
+    """Smallest p <= 32 with x_{i+p} = x_i along each row, else 0 (chaos)."""
+    out = np.zeros(len(points), int)
+    for p in (1, 2, 3, 4, 6, 8, 12, 16, 24, 32):
+        same = np.abs(points[:, p:] - points[:, :-p]).max(axis=1) < tol
+        out[(out == 0) & same] = p
+    return out
+
+
+class Diagram:
+    """The bifurcation diagram of any (r, x) window, as a density image, on the GPU."""
+
+    def __init__(self, rng, device):
+        self.device = device
+        self.w2, self.h2 = WIDTH * SS, DIAG_H * SS
+        jitter = rng.random((SAMPLES, self.w2))
+        self.u = torch.tensor(
+            (np.arange(SAMPLES)[:, None] + jitter) / SAMPLES, device=device
+        ).double()
+        self.cols = torch.arange(self.w2, device=device).double()[None, :]
+        self.x0 = torch.tensor(
+            rng.uniform(0.05, 0.95, (SAMPLES, self.w2)), device=device
+        ).double()
+        self.col_index = torch.arange(self.w2, device=device)[None, :].expand(
+            SAMPLES, -1
+        )
+        self.soften = (
+            torch.tensor(
+                [[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]], device=device
+            ).view(1, 1, 3, 3)
+            / 16.0
+        )  # widens one-pixel cycle lines to ~3 sub-pixels
         self.cache = {}
+        self.keep = {self.key(view_at(0.0)), self.key(view_at(1.0))}  # static views
 
-    def counter(self, number):
-        key = "c", number
-        if key not in self.cache:
-            canvas = Image.new("L", (WIDTH, 260), 0)
-            draw = ImageDraw.Draw(canvas)
-            draw.text(
-                (WIDTH / 2, 150), f"{number:,}".replace(",", " "), 255, self.big, "ms"
-            )
-            draw.text((WIDTH / 2, 190), "c r o s s i n g s", 150, self.small, "mt")
-            self.cache[key] = np.asarray(canvas, np.float32) / 255.0
-        return self.cache[key]
+    @staticmethod
+    def key(view):
+        return tuple(round(float(v), 12) for v in view)
 
-    def line(self):
-        key = "n", NOTE
-        if key not in self.cache:
-            canvas = Image.new("L", (WIDTH, 80), 0)
-            ImageDraw.Draw(canvas).text((WIDTH / 2, 40), NOTE, 255, self.note, "mm")
-            self.cache[key] = np.asarray(canvas, np.float32) / 255.0
-        return self.cache[key]
+    @torch.no_grad()
+    def __call__(self, view):
+        """Brightness (DIAG_H, WIDTH) in [0, 1] for view = (r0, r1, x0, x1)."""
+        key = self.key(view)
+        if key in self.cache:
+            return self.cache[key]
+        r0, r1, y0, y1 = view
+        r = r0 + (r1 - r0) * (self.cols + self.u) / self.w2
+        x = self.x0.clone()
+        for _ in range(TRANSIENT):
+            x = r * x * (1 - x)
+        record = torch.empty((RECORDED,) + x.shape, device=self.device, dtype=x.dtype)
+        for i in range(RECORDED):
+            x = r * x * (1 - x)
+            record[i] = x
+        row = ((y1 - record) * (self.h2 / (y1 - y0))).floor().long()
+        ok = (row >= 0) & (row < self.h2)
+        idx = (row * self.w2 + self.col_index[None])[ok]
+        counts = torch.bincount(idx, minlength=self.h2 * self.w2).float()
+        counts = torch.nn.functional.conv2d(
+            counts.view(1, 1, self.h2, self.w2), self.soften, padding=1
+        )[0, 0]
+        v = 1 - torch.exp(-counts / DENSITY)
+        v = torch.nn.functional.avg_pool2d(v[None, None], SS)[0, 0]
+        if key in self.keep:
+            self.cache[key] = v
+        return v
 
 
-def blend(image, alpha, top, colour, strength=1.0):
-    """Paint `colour` (BGR floats) through an alpha mask whose top row is `top`."""
-    region = image[top : top + alpha.shape[0]]
-    a = (strength * alpha)[..., None]
-    region += (np.asarray(colour, np.float32) - region) * a
+class Fonts:
+    def __init__(self):
+        self.fonts = {}
+
+    def __call__(self, face, size):
+        key = face, int(size)
+        if key not in self.fonts:
+            self.fonts[key] = ImageFont.truetype(str(TTF / f"{face}.ttf"), int(size))
+        return self.fonts[key]
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Tutte's spring embedding, animated as a closed-form gradient flow.
+    The logistic map x -> r x (1 - x) and its bifurcation diagram, a one-shot.
 
-    The graph is the Delaunay triangulation of RIM points evenly spaced on the unit
-    circle plus INTERIOR jittered points inside it (a triangulated disc: planar,
-    3-connected, rim = outer face). Every node starts at a uniform random point of the
-    disc. From PIN_START to PIN_END the rim nodes glide (smoothstep, staggered round
-    the circle) to their circle positions b. Then the interior follows the spring flow
-    dx_I/dτ = -(L_II x_I + L_IB b), whose solution is x_I(τ) = H b + V e^{-Λτ} Vᵀ
-    (x_I(0) - H b) with H = -L_II⁻¹ L_IB (the Tutte / barycentric drawing, every
-    interior node at the mean of its neighbours) and L_II = V Λ Vᵀ. So a frame is a
-    pure function of t. The spring time τ(s) is a monotone PCHIP in log τ from
-    TAU_START at RELAX_START to TAU_END at RELAX_END, with the τ at which this graph's
-    crossing count first reaches 0 (bisection, up front) pinned to ZERO_AT; the last
-    0.6 s blend onto H b exactly.
+    Time drives one cursor value r(τ): SWEEP1 crosses r = 2.86 .. 4 with a monotone
+    PCHIP time-warp that slows through the period doublings (3, 3.449, 3.544,
+    3.5644, accumulating at r∞ = 3.5699) and the period-3 window (1 + √8 = 3.8284
+    to its crisis at 3.8568); the cursor then glides back to r = 3.835 while the
+    camera dives geometrically (each axis about its own fixed point, eased) into
+    the middle branch of the window, where the whole diagram reappears in
+    miniature (the third iterate f³ is renormalisable there), and SWEEP2 crosses
+    the copy: 3 -> 6 -> 12 -> chaos -> crisis.
 
-    Each frame counts, per edge, the proper crossings with every other edge (numba
-    O(E²) with bounding-box rejection, ~13 ms) and colours the edge by log(1 + count)
-    through HEAT, crossing-free edges in SILK; the rim cycle is drawn brighter once
-    pinned. At ZERO_AT a brightness ripple runs out from the node nearest the centre
-    by graph distance, and a line of text fades in. Lines are drawn with cv2 at 2x
-    and downsampled, plus a Gaussian glow; frames render on the thread pool.
+    Diagram (GPU, torch): for every one of 2160 sub-pixel columns, SAMPLES orbits
+    with stratified r and random starts (both drawn once from settings.rng) are
+    iterated TRANSIENT times in float64 (float32 orbits collapse onto rounding cycles), then RECORDED iterates are histogrammed
+    into rows; brightness 1 - exp(-count / DENSITY), 2x2 averaged, coloured
+    through DENSITY_COLOURS with a soft bloom. The main and final views are
+    computed once; during the dive each frame recomputes its view (~30 ms).
+    Columns beyond the furthest r the cursor has reached show at GHOST.
 
-    The soundtrack (STYLE, key from settings.audio_rng) is computed from the same
-    crossing counts sampled at 60 Hz; see `soundtrack`. Posted with seed 0.
+    Overlays (cv2 at SS x, PIL text): the cursor line with the attractor at r(τ)
+    (64 float64 iterates after 6000), sparks where the melody orbit lands, the
+    cobweb (staircase) of that orbit under the parabola of the current r, and
+    the readout r = …, period p (detected to 2e-4 after 6000 iterations, else
+    "chaos").
+
+    The melody orbit is one sequential orbit x_{k+1} = r(t_k) x_k (1 - x_k) with
+    a step every sixteenth note at BPM, precomputed up front; every frame is a
+    pure function of τ and that list. Frames render in order on the GPU.
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
+    device = select_device()
 
-    rim, edges, start = build_graph(rng)
-    motion = Motion(rim, edges, start)
-    motion.pace()
-    n = motion.n
-    crossings(start, edges)  # compile before the thread pool starts
-    reference = crossings(start, edges).max()
-    logger.info(
-        f"{n} nodes, {len(edges)} edges, {crossings(start, edges).sum() // 2} "
-        "crossings at the start"
-    )
+    curve_tau, curve_r, curve_lit, curve_zoom = timeline()
+    note_t, note_r, note_x = melody_orbit(curve_tau, curve_r)
+    frame_tau = np.arange(FRAME_COUNT) / (FRAME_COUNT - 1) * DURATION
+    frame_r = np.interp(frame_tau, curve_tau, curve_r)
+    frame_pts = attractor(frame_r)
+    frame_period = period_of(frame_pts)
 
-    rim_edge = np.array(
-        [(b - a == 1) or (a == 0 and b == RIM - 1) for a, b in edges]
-    ) & (edges[:, 1] < RIM)
-    centre_node = RIM + int(np.argmin(np.sum(motion.final[RIM:] ** 2, 1)))
-    hops = graph_distance(n, edges, centre_node)
-    edge_hops = 0.5 * (hops[edges[:, 0]] + hops[edges[:, 1]])
+    diagram = Diagram(rng, device)
+    lut = torch.tensor(palette_lut(DENSITY_COLOURS, 1024), device=device)
+    kernel = gaussian_kernel(5.0, device)
+    fonts = Fonts()
+    columns = torch.arange(WIDTH, device=device).float()
 
-    heat_lut = palette_lut(HEAT, 256)[:, ::-1] * 255.0  # BGR
-    silk = np.array(hex_to_bgr(SILK), np.float32)
-    calm_lut = palette_lut(CALM, 256)[:, ::-1] * 255.0
-    calm = calm_lut[np.round(255 * edge_hops / edge_hops.max()).astype(int)]
-    rim_colour = np.array(hex_to_bgr(RIM_COLOUR), np.float32)
-    text_colour = np.array(hex_to_bgr(TEXT_COLOUR), np.float32)
+    # Static base: the background and the rule, RGB on the GPU.
+    head = Image.new("RGBA", (WIDTH, DIAG_Y), (0, 0, 0, 0))
+    pen = ImageDraw.Draw(head)
+    it, rm = fonts("STIXGeneralItalic", 84), fonts("STIXGeneral", 84)
+    parts = [("x", it), ("  →  ", rm), ("r", it), (" x", it), (" (1 − ", rm)]
+    parts += [("x", it), (")", rm)]
+    width = sum(f.getlength(s) for s, f in parts)
+    left = (WIDTH - width) / 2
+    for s, f in parts:
+        pen.text((left, 205), s, font=f, fill=(236, 228, 214, 255), anchor="ls")
+        left += f.getlength(s)
+    head = torch.tensor(np.asarray(head, np.float32), device=device)
+    bg = torch.tensor(hex_to_rgb(BG), device=device)
+    accent = torch.tensor(hex_to_rgb(ACCENT), device=device)
+    base = bg.expand(HEIGHT, WIDTH, 3).clone()
+    base[:DIAG_Y] += (head[..., :3] - base[:DIAG_Y]) * (head[..., 3:] / 255.0)
+    glow_kernel = gaussian_kernel(7.0, device)
+    accent_rgb = tuple(int(ACCENT[i : i + 2], 16) for i in (1, 3, 5))
+    S = SS * 16  # cv2 fixed point (shift 4) on the supersampled canvas
 
-    # Background: near black with a faint halo behind the disc.
-    yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH].astype(np.float32)
-    rr = np.hypot(xx - CENTRE[0], yy - CENTRE[1]) / (1.25 * RADIUS)
-    halo = np.exp(-(rr**2))[..., None]
-    background = np.asarray(hex_to_bgr(BACKGROUND), np.float32)
-    background = background + halo * (
-        np.asarray(hex_to_bgr(HALO), np.float32) - background
-    )
-    text = Text()
-    fade_frames = FADE * FPS
+    def pt(px, py):
+        return int(round(px * S)), int(round(py * S))
 
-    def to_px(x):
-        px = CENTRE[0] + RADIUS * x[:, 0]
-        py = CENTRE[1] - RADIUS * x[:, 1]
-        return np.round(np.c_[px, py] * SS * (1 << SHIFT)).astype(np.int64)
+    def to_screen(r, x, view):
+        r0, r1, y0, y1 = view
+        return (r - r0) / (r1 - r0) * WIDTH, DIAG_Y + (y1 - x) / (y1 - y0) * DIAG_H
+
+    def web(x, y):
+        return WEB_X + x * WEB_S, WEB_Y + (1 - y) * WEB_S
+
+    def readout(r_now, period, z, view):
+        text = Image.new("RGBA", (WIDTH, 80), (0, 0, 0, 0))
+        pen = ImageDraw.Draw(text)
+        f_it, f_rm = fonts("STIXGeneralItalic", 46), fonts("STIXGeneral", 46)
+        cream = (236, 228, 214, 235)
+        pen.text((60, 60), "r", font=f_it, fill=cream, anchor="ls")
+        pen.text(
+            (60 + f_it.getlength("r"), 60),
+            f" = {r_now:.4f}",
+            font=f_rm,
+            fill=cream,
+            anchor="ls",
+        )
+        label = "settles" if period == 1 else f"period {period}"
+        label = "chaos" if period == 0 else label
+        pen.text(
+            (WIDTH - 60, 60), label, font=f_rm, fill=accent_rgb + (255,), anchor="rs"
+        )
+        if z > 0.02:
+            zoom = (MAIN_VIEW[1] - MAIN_VIEW[0]) / (view[1] - view[0])
+            pen.text(
+                (WIDTH / 2, 60),
+                f"×{zoom:.0f}",
+                font=f_rm,
+                fill=(236, 228, 214, int(200 * min(1, z * 4))),
+                anchor="ms",
+            )
+        return np.asarray(text)
 
     def render(frame):
-        t = frame / (FRAME_COUNT - 1)
-        seconds = t * DURATION
-        x = motion.at(seconds)
-        count = crossings(x, edges)
-        total = int(count.sum()) // 2
+        tau = frame_tau[frame]
+        r_now = frame_r[frame]
+        z = float(np.interp(tau, curve_tau, curve_zoom))
+        view = view_at(z)
+        lit = float(np.interp(tau, curve_tau, curve_lit))
 
-        # Edge colours.
-        heat = np.log1p(count) / np.log1p(reference)
-        colours = heat_lut[np.clip((heat * 255).astype(int), 0, 255)]
-        free = count == 0
-        colours[free] = calm[free]
-        pinned = smoothstep(
-            (seconds - motion.pin_at.max() - PIN_GLIDE) / 0.4
-        ) * rim_edge.astype(np.float32)
-        colours = colours + pinned[:, None] * (rim_colour - colours)
-        ripple = np.exp(-(((seconds - ZERO_AT - 0.07 * edge_hops) / 0.18) ** 2))
-        colours = colours + 0.85 * ripple[:, None] * (255.0 - colours)
-        # Long edges of the tangle are fainter, so the hairball reads as a texture.
-        p = x[edges]
-        length = np.hypot(*(p[:, 1] - p[:, 0]).T)
-        dim = np.clip(0.09 / np.maximum(length, 1e-6), 0.4, 1.0) ** 0.8
-        dim = np.where(free, 1.0, dim)
-        colours = colours * dim[:, None]
+        # --- the diagram
+        v = diagram(view)
+        col_r = view[0] + (view[1] - view[0]) * (columns + 0.5) / WIDTH
+        edge = (view[1] - view[0]) * 3.0 / WIDTH  # a 3 px soft edge
+        shown = GHOST + (1 - GHOST) * torch.clamp((lit - col_r) / edge + 0.5, 0, 1)
+        v = (v * shown[None, :]).clamp(0, 1)
+        rgb = lut[(v**0.8 * 1023).long()] * 255.0
+        rgb = rgb + 0.55 * blur(rgb, kernel)
+        image = base.clone()
+        image[DIAG_Y : DIAG_Y + DIAG_H] = torch.maximum(rgb, bg)
 
-        canvas = np.zeros((HEIGHT * SS, WIDTH * SS, 3), np.uint8)
-        px = to_px(x)
-        order = np.argsort(count, kind="stable")  # the most crossed on top
-        for e in order:
-            a, b = edges[e]
-            thick = 3 if rim_edge[e] else (2 if free[e] else 1)
-            cv2.line(
-                canvas,
-                tuple(px[a]),
-                tuple(px[b]),
-                tuple(float(c) for c in colours[e]),
-                thick,
-                cv2.LINE_AA,
-                SHIFT,
-            )
-        # Nodes: small beads, the pinned rim larger.
-        settle = smoothstep((seconds - RELAX_START) / 3.0)
-        bead = (0.55 + 0.45 * settle) * silk
-        for i in range(n):
-            radius = (5 if i < RIM else 3) * (1 << SHIFT)
+        # --- accent strokes (cv2, uint8): sharp at SS x, glow at 1 x
+        lines = np.zeros((HEIGHT * SS, WIDTH * SS), np.uint8)
+        glow = np.zeros((HEIGHT, WIDTH), np.uint8)
+
+        cx, _ = to_screen(r_now, 0.0, view)
+        if -5 < cx < WIDTH + 5:
+            top, bottom = pt(cx, DIAG_Y), pt(cx, DIAG_Y + DIAG_H)
+            cv2.line(lines, top, bottom, 56, SS, cv2.LINE_AA, 4)
+            for x in frame_pts[frame]:
+                px, py = to_screen(r_now, x, view)
+                if DIAG_Y < py < DIAG_Y + DIAG_H:
+                    cv2.circle(lines, pt(px, py), int(3.0 * S), 230, -1, cv2.LINE_AA, 4)
+                    cv2.circle(glow, (int(px), int(py)), 3, 64, -1, cv2.LINE_AA)
+
+        k_now = int(np.searchsorted(note_t, tau, side="right")) - 1
+        for k in range(max(0, k_now - 8), k_now + 1):
+            age = tau - note_t[k]
+            if age < 0 or age > 0.9:
+                continue
+            fade = np.exp(-age / 0.25)
+            px, py = to_screen(note_r[k], note_x[k + 1], view)
+            if DIAG_Y < py < DIAG_Y + DIAG_H and -10 < px < WIDTH + 10:
+                radius = int((4.0 + 10.0 * fade) * S)
+                cv2.circle(
+                    lines, pt(px, py), radius, int(255 * fade), -1, cv2.LINE_AA, 4
+                )
+                cv2.circle(
+                    glow,
+                    (int(px), int(py)),
+                    int(14 * fade + 4),
+                    int(230 * fade),
+                    -1,
+                    cv2.LINE_AA,
+                )
+
+        box = np.array([web(0, 0), web(1, 0), web(1, 1), web(0, 1)]) * S
+        cv2.polylines(lines, [box.astype(np.int32)], True, 46, SS, cv2.LINE_AA, 4)
+        cv2.line(lines, pt(*web(0, 0)), pt(*web(1, 1)), 64, SS, cv2.LINE_AA, 4)
+        curve = np.stack(web(PARABOLA, r_now * PARABOLA * (1 - PARABOLA)), 1) * S
+        cv2.polylines(
+            lines, [curve.astype(np.int32)], False, 140, 2 * SS, cv2.LINE_AA, 4
+        )
+        if k_now >= 0:
+            for k in range(max(0, k_now - 14), k_now + 1):
+                a, b = note_x[k], note_x[k + 1]
+                strength = int(230 * 0.82 ** (k_now - k))
+                grow = 1.0
+                if k == k_now:
+                    grow = float(smoothstep((tau - note_t[k]) / (0.6 * STEP)))
+                p0, p1, p2 = web(a, a), web(a, b), web(b, b)  # up to f(a), across
+                g1, g2 = min(1.0, 2 * grow), max(0.0, 2 * grow - 1)
+                q1 = (p0[0], p0[1] + (p1[1] - p0[1]) * g1)
+                cv2.line(lines, pt(*p0), pt(*q1), strength, SS, cv2.LINE_AA, 4)
+                if g2 > 0:
+                    q2 = (p1[0] + (p2[0] - p1[0]) * g2, p1[1])
+                    cv2.line(lines, pt(*p1), pt(*q2), strength, SS, cv2.LINE_AA, 4)
+            a, b = note_x[k_now], note_x[k_now + 1]
+            fade = 0.4 + 0.6 * np.exp(-(tau - note_t[k_now]) / 0.2)
+            hx, hy = web(a, b)
             cv2.circle(
-                canvas,
-                tuple(px[i]),
-                radius,
-                tuple(float(c) for c in bead),
-                -1,
-                cv2.LINE_AA,
-                SHIFT,
+                lines, pt(hx, hy), int(5 * S), int(255 * fade), -1, cv2.LINE_AA, 4
             )
-        lines = cv2.resize(canvas, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-        lines = lines.astype(np.float32)
-        glow = cv2.GaussianBlur(lines, (0, 0), 7.0)
-        image = background + lines + 0.7 * glow
+            cv2.circle(glow, (int(hx), int(hy)), 12, int(180 * fade), -1, cv2.LINE_AA)
 
-        # The counter, and the closing line.
-        alpha = text.counter(total)
-        blend(image, alpha, COUNTER_Y - 150, text_colour, 0.92)
-        show = smoothstep((seconds - ZERO_AT - 0.8) / 1.0)
-        if show > 0:
-            blend(image, text.line(), NOTE_Y - 40, text_colour, 0.8 * show)
+        sharp = torch.from_numpy(lines).to(device).float()[None, None] / 255.0
+        sharp = torch.nn.functional.avg_pool2d(sharp, SS)[0, 0]
+        soft = torch.from_numpy(glow).to(device).float()[..., None] / 255.0
+        soft = blur(soft, glow_kernel)[..., 0]
+        light = (sharp + soft).clamp(0, 1.4)[..., None]
+        image += (accent - image) * light.clamp(0, 1) + 60.0 * (light - 1).clamp(min=0)
 
-        fade = min(1.0, (FRAME_COUNT - 1 - frame) / fade_frames)
-        return np.clip(image * fade, 0, 255).astype(np.uint8)
+        # --- readout
+        text = torch.from_numpy(np.array(readout(r_now, frame_period[frame], z, view)))
+        text = text.to(device).float()
+        top = READ_Y - 60
+        alpha = text[..., 3:] / 255.0
+        image[top : top + 80] += (text[..., :3] - image[top : top + 80]) * alpha
 
-    render_frames(settings, render, FRAME_COUNT)
+        end = float(smoothstep((DURATION - tau) / FADE))
+        return bg + (image - bg) * end
 
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
     style_name = settings.audio_tag if settings.audio_tag in STYLES else STYLE
-    totals = crossing_curve(motion, edges)
-    track = soundtrack(totals, motion, edges, style_name, settings.audio_rng)
+    track = soundtrack(
+        curve_tau, curve_r, curve_zoom, note_t, note_r, note_x, style_name,
+        settings.audio_rng,
+    )  # fmt: skip
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
 
-# --- Sound -----------------------------------------------------------------------
+BASS_DEGREE = {1: 0, 2: 4, 3: 3, 4: 2, 6: 5, 8: 6, 12: 5, 16: 6, 24: 6, 32: 6, 0: 1}
 
 
-def crossing_curve(motion, edges, rate=60):
-    """(seconds, total crossings) sampled at `rate` Hz, the same counts the frames show."""
-    seconds = np.arange(int(DURATION * rate) + 1) / rate
-
-    def total(s):
-        return int(crossings(motion.at(s), edges).sum()) // 2
-
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        totals = np.array(list(pool.map(total, seconds)))
-    return seconds, totals
-
-
-def halvings(curve, motion, edges):
+def soundtrack(curve_tau, curve_r, curve_zoom, note_t, note_r, note_x, style_name, rng):
     """
-    (seconds, x) each time the crossing count first falls below start / 2^k, k = 1, 2,
-    ..., and finally to 0; x (-1..1) is where the remaining crossings are, on average.
-    """
-    seconds, totals = curve
-    start = totals[0]
-    events, k = [], 1
-    for s, total in zip(seconds, totals):
-        if s < RELAX_START:
-            continue
-        while k <= np.log2(start) + 1 and total < start / 2**k:
-            x = motion.at(s)
-            count = crossings(x, edges)
-            if count.sum():
-                mid = 0.5 * (x[edges[:, 0], 0] + x[edges[:, 1], 0])
-                where = float(np.average(mid, weights=count))
-            else:
-                where = 0.0
-            events.append((s, where))
-            k += 1
-        if total == 0:
-            break
-    return events
+    The melody orbit played note for note, one-shot (circular=False everywhere).
 
-
-def soundtrack(curve, motion, edges, style_name, rng):
-    """
-    A one-shot, Rise & resolve, computed from the crossing counts the frames show.
-
-    While the rim nodes are pinned to the circle, every eighth one lands with a soft
-    note of the style's voice, rising round the ring and panned to where it lands.
-    Then each halving of the crossing count strikes the voice one scale step higher
-    (from two steps under the root to two octaves above it), louder as it climbs,
-    panned to where the remaining crossings are. Under it all an augmented
-    (whole-tone) pad, fading as the crossings go, and a riser into ZERO_AT. When the
-    last crossing goes, the home chord lands (strings and a sung "o" over the bass)
-    and the voice rolls up the chord in time with the ripple; it rings to the end.
+    Every sixteenth the orbit takes one step x -> r x (1 - x) and the style's voice
+    strikes it: the pitch is the dot's height in the view on screen (SPAN degrees
+    of MODE from LOWEST at the bottom), so a fixed point is one repeated note, a
+    2-cycle a trill, a 4-cycle an arpeggio, chaos a melody that never repeats; in
+    the dive the two off-screen points of the 3-cycle are clipped to the edges
+    and played softly. Pan follows the cursor across the screen. Each change of
+    the attractor's period (sampled every 20 ms along the sweeps, independent of
+    FPS, kept if it lasts 0.12 s) strikes a bass note (BASS_DEGREE). Under it a
+    home-chord pad dims while a cluster pad (adjacent degrees) swells with the
+    chaos, both from the same period curve; when the notes stop, the home chord
+    rings out over the rest.
     """
     style = STYLES[style_name]
-    root = int(rng.choice(style.roots))
-    scale = Scale(root, style.mode)
-    home = Scale(root, "major")
-    kw = dict(circular=False)
+    scale = Scale(int(rng.choice(style.roots)), MODE)
     track = audio.silence(DURATION)
-    hz = lambda midi: float(audio.midi_to_hz(midi))
-    video = (FRAME_COUNT - 1) / FPS / DURATION  # model seconds -> video seconds
-    zero = ZERO_AT * video
+    kw = dict(circular=False)
 
-    # Pinning the rim.
-    for j in range(0, RIM, 8):
-        when = (motion.pin_at[j] + 0.8 * PIN_GLIDE) * video
-        note = style.voice(scale.hz(j // 8 - 3), 0.32)
-        audio.add(track, audio.pan(note, 0.75 * motion.rim[j, 0]), when, **kw)
-    audio.add(track, style.bass(scale.hz(0, octave=-1), 0.35), 0.05, **kw)
+    damp_t = np.arange(int(4.0 * audio.SAMPLE_RATE)) / audio.SAMPLE_RATE
+    damp = np.exp(-np.maximum(damp_t - DAMP, 0.0) / 0.12)
 
-    # The tension, thinning out as the crossings go.
-    tension = Scale(root, "whole_tone").chord(0, 3)
-    for i, (begin, end) in enumerate(
-        ((0.0, zero), (0.0, 0.7 * zero), (0.0, 0.45 * zero))
-    ):
-        for note in tension:
-            voice = audio.pad(
-                hz(note + 12 * (i == 2)), end - begin, 0.09, 1.2, 1.4, 0.35
-            )
-            audio.add(track, voice, begin, **kw)
-    audio.add(track, audio.riser(2.2, rng, 180.0, 1600.0, 0.22), zero - 2.2, **kw)
+    def strike(degree, velocity, when, x=0.0, octave=0, voice=None, damped=False):
+        velocity = round(float(np.clip(velocity, 0.05, 1.0)) * 20) / 20  # cache hits
+        note = (voice or style.voice)(scale.hz(int(degree), octave), velocity)
+        if damped:  # a dead stroke: the melody stays legible at six notes a second
+            note = note * damp[: len(note)]
+        audio.add(track, audio.pan(note, float(np.clip(x, -1, 1))), when, **kw)
 
-    # Every halving, one step up.
-    events = halvings(curve, motion, edges)[:-1]  # the last (zero) gets the chord
-    last = -np.inf
-    for k, (when, x) in enumerate(events):
-        when *= video
-        if when - last < 0.1 or zero - when < 0.12:
+    # melody: one strike per step of the orbit
+    for k, when in enumerate(note_t):
+        view = view_at(float(np.interp(when, curve_tau, curve_zoom)))
+        height = (note_x[k + 1] - view[2]) / (view[3] - view[2])
+        seen = 0.0 <= height <= 1.0
+        degree = LOWEST + int(round(np.clip(height, 0, 1) * SPAN))
+        cx = (note_r[k] - view[0]) / (view[1] - view[0])
+        velocity = (0.36 + 0.14 * (k % 4 == 0)) if seen else 0.26
+        strike(degree, velocity, when, 0.6 * (2 * np.clip(cx, 0, 1) - 1), damped=True)
+
+    # the attractor's period along the sweeps, every 20 ms
+    grid = np.arange(0.0, NOTES_END, 0.02)
+    in_glide = (grid > SWEEP1[-1][0]) & (grid < SWEEP2[0][0])
+    period = period_of(attractor(np.interp(grid, curve_tau, curve_r)))
+    chaos = (period == 0).astype(float)
+    changes, current = [], period[0]
+    for i in range(1, len(grid)):
+        if in_glide[i]:
             continue
-        degree = int(round(-2 + 12 * k / max(1, len(events) - 1)))
-        velocity = 0.5 + 0.4 * k / max(1, len(events) - 1)
-        audio.add(
-            track,
-            audio.pan(style.voice(scale.hz(degree), velocity), 0.7 * x),
-            when,
-            **kw,
-        )
-        if k % 6 == 0:
-            audio.add(track, style.bass(scale.hz(0, octave=-1), 0.3), when, **kw)
-        last = when
-
-    # Zero crossings: the home chord, and the voice rolling up it with the ripple.
-    ring = DURATION - zero - 0.3
-    for note in home.chord(0, 3):
-        audio.add(
-            track,
-            audio.strings(hz(note), ring - 1.2, 0.35, 0.05, 1.6, 0.45),
-            zero,
-            **kw,
-        )
-        audio.add(
-            track,
-            audio.choir(hz(note + 12), ring - 1.2, 0.25, 0.3, 1.6, "o"),
-            zero,
-            **kw,
-        )
-    audio.add(
-        track, audio.pad(hz(root - 12), ring - 1.5, 0.15, 0.05, 1.8, 0.3), zero, **kw
+        if period[i] != current:
+            hold = (period[i : i + 6] == period[i]).all()  # lasts 0.12 s
+            if hold:
+                changes.append((grid[i], period[i]))
+                current = period[i]
+    logger.info(
+        "Period changes: "
+        + ", ".join(f"{t:.2f}s->{'chaos' if p == 0 else p}" for t, p in changes)
     )
-    audio.add(track, style.bass(home.hz(0, octave=-1), 0.6), zero, **kw)
-    for i, note in enumerate(home.chord(0, 3, octave=1) + [home.note(0, 2)]):
-        roll = style.voice(hz(note), 0.55 - 0.06 * i)
-        audio.add(track, audio.pan(roll, 0.3 * (-1) ** i), zero + 0.14 * (i + 1), **kw)
+    strike(0, 0.55, 0.0, octave=-2, voice=style.bass)
+    for when in (GLIDE[1], 0.5 * (GLIDE[1] + SWEEP2[0][0])):  # the dive: period 3
+        strike(BASS_DEGREE[3], 0.5, when, octave=-2, voice=style.bass)
+    for when, p in changes:
+        strike(BASS_DEGREE.get(int(p), 1), 0.5, when, octave=-2, voice=style.bass)
 
-    logger.info(f"Soundtrack: {style_name}, root MIDI {root}, {len(events)} halvings")
-    track = style.room(track, rng, circular=False)
-    audio.fade(track, 0.0, FADE)
+    # pads: order dims, a cluster swells with the chaos
+    t_audio = np.arange(len(track)) / audio.SAMPLE_RATE
+    smooth = np.convolve(chaos, np.ones(15) / 15, mode="same")
+    env = np.interp(t_audio, grid, smooth, right=0.0)
+    for degrees, gain in (((0, 2, 4), 1.0 - 0.7 * env), ((0, 1, 3, 4), 0.9 * env)):
+        for degree in degrees:
+            freq = scale.hz(degree, -1)
+            pad = audio.pad(freq, NOTES_END + 0.2, 0.15, 0.6, 0.8, 0.35)[: len(track)]
+            pad = pad * gain[: len(pad), None]
+            audio.add(track, pad, 0.0, **kw)
+
+    # the notes stop: home
+    end = NOTES_END + STEP
+    strike(0, 0.6, end, octave=-2, voice=style.bass)
+    for i, degree in enumerate((0, 2, 4, 7)):
+        strike(degree, 0.4, end + 0.06 * i, 0.3 * (i % 2) - 0.15)
+    for degree in (0, 2, 4):
+        audio.add(track, audio.pad(scale.hz(degree, -1), 0.6, 0.15, 0.3, 0.6, 0.3),
+                  end, **kw)  # fmt: skip
+    track = audio.highpass(style.room(track, rng, circular=False), 60.0, circular=False)
     return audio.master(track, loop=False)
 
 

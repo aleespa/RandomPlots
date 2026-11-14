@@ -1,6 +1,6 @@
 # Reel schedule
 
-Posting days: **every day** from 2026-10-28, through 2026-12-31 (77 Reels). The first four (2026-10-12 to 10-16) went out on the earlier
+Posting days: **every day** from 2026-10-28, through 2026-12-31 (76 Reels). The first four (2026-10-12 to 10-16) went out on the earlier
 Mon, Wed, Thu, Fri, Sun plan; a six-day week (no Wednesdays) ran from 2026-10-17 to 10-27.
 Each Reel lives in `lab/2026/<MMDD>.py`, named after its posting date.
 2026-10-20 is the account's 400th post, a special Reel outside the category rotation; every
@@ -10,6 +10,9 @@ there on moved two slots later (scripts and outputs renamed), again keeping its 
 On 2026-10-28 the schedule went daily: every Reel from there on moved to the next free day
 in order (scripts and outputs renamed again), keeping its category, and the open slots
 were filled to 2026-12-31 continuing the rotation.
+Nothing was posted on 2026-11-13, so that slot was dropped and every Reel from there on
+moved one day later (scripts and outputs renamed), keeping its category; the last open
+slot (Waves & Quantum on 12-31) fell off the end.
 
 Status values: `todo` → `pitched` → `in progress` (picture being iterated) → `video ok`
 (picture approved) → `music ok` (soundtrack chosen) → `posted`. Fill in the title once the
@@ -78,57 +81,56 @@ counts stay balanced.
 | 2026-11-10 | Tue | Curves & Differential Geometry | `lab/2026/1110.py` | It Always Becomes a Circle | posted |
 | 2026-11-11 | Wed | Probability & Randomness | `lab/2026/1111.py` | Where the Bell Curve Comes From | posted |
 | 2026-11-12 | Thu | Topology & Higher Dimensions | `lab/2026/1112.py` | Inside Out | posted |
-| 2026-11-13 | Fri | Pattern Formation | `lab/2026/1113.py` | Break a Wave, Get a Spiral | music ok |
-| 2026-11-14 | Sat | Optics & Billiards | `lab/2026/1114.py` | Inside a Raindrop | music ok |
-| 2026-11-15 | Sun | Fourier & Harmonics | `lab/2026/1115.py` | How a Fourier Transform Hears a Chord | music ok |
-| 2026-11-16 | Mon | Waves & Quantum | `lab/2026/1116.py` | One Electron at a Time | music ok |
-| 2026-11-17 | Tue | Fractals | `lab/2026/1117.py` | The Third Root | music ok |
-| 2026-11-18 | Wed | Number Theory | `lab/2026/1118.py` | The Most Irrational Number | music ok |
-| 2026-11-19 | Thu | Fluids & Flow Fields | `lab/2026/1119.py` | Un-Stirring Ink | music ok |
-| 2026-11-20 | Fri | Tilings & Geometry | `lab/2026/1120.py` | Any Four Sides Tile the Floor | music ok |
-| 2026-11-21 | Sat | Chaos & Attractors | `lab/2026/1121.py` | The Road to Chaos | music ok |
-| 2026-11-22 | Sun | Graphs & Networks | `lab/2026/1122.py` | A Graph That Untangles Itself | music ok |
-| 2026-11-23 | Mon | Complex Analysis | `lab/2026/1123.py` | Lines Into Circles | music ok |
-| 2026-11-24 | Tue | Cellular Automata | `lab/2026/1124.py` | Chaos From a Single Cell | music ok |
-| 2026-11-25 | Wed | Curves & Differential Geometry | `lab/2026/1125.py` | The Star Hidden in an Ellipse | music ok |
-| 2026-11-26 | Thu | Probability & Randomness | `lab/2026/1126.py` | Random Numbers That Refuse to Touch | music ok |
-| 2026-11-27 | Fri | Topology & Higher Dimensions | `lab/2026/1127.py` | A 4D Cube Passing Through Our World | music ok |
-| 2026-11-28 | Sat | Pattern Formation | `lab/2026/1128.py` | Why a Cheetah's Tail Ends in Rings | music ok |
-| 2026-11-29 | Sun | Optics & Billiards | `lab/2026/1129.py` | The Room You Can't Light | music ok |
-| 2026-11-30 | Mon | Fourier & Harmonics | `lab/2026/1130.py` | The 9% That Never Goes Away | music ok |
+| 2026-11-14 | Sat | Pattern Formation | `lab/2026/1114.py` | Break a Wave, Get a Spiral | posted |
+| 2026-11-15 | Sun | Optics & Billiards | `lab/2026/1115.py` | Inside a Raindrop | music ok |
+| 2026-11-16 | Mon | Fourier & Harmonics | `lab/2026/1116.py` | How a Fourier Transform Hears a Chord | music ok |
+| 2026-11-17 | Tue | Waves & Quantum | `lab/2026/1117.py` | One Electron at a Time | music ok |
+| 2026-11-18 | Wed | Fractals | `lab/2026/1118.py` | The Third Root | music ok |
+| 2026-11-19 | Thu | Number Theory | `lab/2026/1119.py` | The Most Irrational Number | music ok |
+| 2026-11-20 | Fri | Fluids & Flow Fields | `lab/2026/1120.py` | Un-Stirring Ink | music ok |
+| 2026-11-21 | Sat | Tilings & Geometry | `lab/2026/1121.py` | Any Four Sides Tile the Floor | music ok |
+| 2026-11-22 | Sun | Chaos & Attractors | `lab/2026/1122.py` | The Road to Chaos | music ok |
+| 2026-11-23 | Mon | Graphs & Networks | `lab/2026/1123.py` | A Graph That Untangles Itself | music ok |
+| 2026-11-24 | Tue | Complex Analysis | `lab/2026/1124.py` | Lines Into Circles | music ok |
+| 2026-11-25 | Wed | Cellular Automata | `lab/2026/1125.py` | Chaos From a Single Cell | music ok |
+| 2026-11-26 | Thu | Curves & Differential Geometry | `lab/2026/1126.py` | The Star Hidden in an Ellipse | music ok |
+| 2026-11-27 | Fri | Probability & Randomness | `lab/2026/1127.py` | Random Numbers That Refuse to Touch | music ok |
+| 2026-11-28 | Sat | Topology & Higher Dimensions | `lab/2026/1128.py` | A 4D Cube Passing Through Our World | music ok |
+| 2026-11-29 | Sun | Pattern Formation | `lab/2026/1129.py` | Why a Cheetah's Tail Ends in Rings | music ok |
+| 2026-11-30 | Mon | Optics & Billiards | `lab/2026/1130.py` | The Room You Can't Light | music ok |
 
 ## December 2026
 
 | Date | Day | Category | Script | Title | Status |
 |---|---|---|---|---|---|
-| 2026-12-01 | Tue | Waves & Quantum | `lab/2026/1201.py` | Why Hydrogen Glows Red | music ok |
-| 2026-12-02 | Wed | Fractals | `lab/2026/1202.py` | Every Circle Is a Whole Number | music ok |
-| 2026-12-03 | Thu | Number Theory | `lab/2026/1203.py` | Fermat's Christmas Theorem | music ok |
-| 2026-12-04 | Fri | Fluids & Flow Fields | `lab/2026/1204.py` | Two Smoke Rings Playing Leapfrog | music ok |
-| 2026-12-05 | Sat | Tilings & Geometry | `lab/2026/1205.py` | A Cube Through a Cube | music ok |
-| 2026-12-06 | Sun | Chaos & Attractors | `lab/2026/1206.py` | The Cat That Always Comes Back | music ok |
-| 2026-12-07 | Mon | Graphs & Networks | `lab/2026/1207.py` | The Knight's Tour | music ok |
-| 2026-12-08 | Tue | Complex Analysis | `lab/2026/1208.py` | The Hole in Escher's Print Gallery | music ok |
-| 2026-12-09 | Wed | Cellular Automata | `lab/2026/1209.py` | Langton's Ant | music ok |
-| 2026-12-10 | Thu | Curves & Differential Geometry | `lab/2026/1210.py` | A Square Wheel That Rolls Smoothly | music ok |
-| 2026-12-11 | Fri | Probability & Randomness | `lab/2026/1211.py` | Three Answers to One Probability Question | music ok |
-| 2026-12-12 | Sat | Topology & Higher Dimensions | `lab/2026/1212.py` |  | todo |
-| 2026-12-13 | Sun | Pattern Formation | `lab/2026/1213.py` |  | todo |
-| 2026-12-14 | Mon | Optics & Billiards | `lab/2026/1214.py` |  | todo |
-| 2026-12-15 | Tue | Fourier & Harmonics | `lab/2026/1215.py` |  | todo |
-| 2026-12-16 | Wed | Waves & Quantum | `lab/2026/1216.py` |  | todo |
-| 2026-12-17 | Thu | Fractals | `lab/2026/1217.py` |  | todo |
-| 2026-12-18 | Fri | Number Theory | `lab/2026/1218.py` |  | todo |
-| 2026-12-19 | Sat | Fluids & Flow Fields | `lab/2026/1219.py` |  | todo |
-| 2026-12-20 | Sun | Tilings & Geometry | `lab/2026/1220.py` |  | todo |
-| 2026-12-21 | Mon | Chaos & Attractors | `lab/2026/1221.py` |  | todo |
-| 2026-12-22 | Tue | Graphs & Networks | `lab/2026/1222.py` |  | todo |
-| 2026-12-23 | Wed | Complex Analysis | `lab/2026/1223.py` |  | todo |
-| 2026-12-24 | Thu | Cellular Automata | `lab/2026/1224.py` |  | todo |
-| 2026-12-25 | Fri | Curves & Differential Geometry | `lab/2026/1225.py` |  | todo |
-| 2026-12-26 | Sat | Probability & Randomness | `lab/2026/1226.py` |  | todo |
-| 2026-12-27 | Sun | Topology & Higher Dimensions | `lab/2026/1227.py` |  | todo |
-| 2026-12-28 | Mon | Pattern Formation | `lab/2026/1228.py` |  | todo |
-| 2026-12-29 | Tue | Optics & Billiards | `lab/2026/1229.py` |  | todo |
-| 2026-12-30 | Wed | Fourier & Harmonics | `lab/2026/1230.py` |  | todo |
-| 2026-12-31 | Thu | Waves & Quantum | `lab/2026/1231.py` |  | todo |
+| 2026-12-01 | Tue | Fourier & Harmonics | `lab/2026/1201.py` | The 9% That Never Goes Away | music ok |
+| 2026-12-02 | Wed | Waves & Quantum | `lab/2026/1202.py` | Why Hydrogen Glows Red | music ok |
+| 2026-12-03 | Thu | Fractals | `lab/2026/1203.py` | Every Circle Is a Whole Number | music ok |
+| 2026-12-04 | Fri | Number Theory | `lab/2026/1204.py` | Fermat's Christmas Theorem | music ok |
+| 2026-12-05 | Sat | Fluids & Flow Fields | `lab/2026/1205.py` | Two Smoke Rings Playing Leapfrog | music ok |
+| 2026-12-06 | Sun | Tilings & Geometry | `lab/2026/1206.py` | A Cube Through a Cube | music ok |
+| 2026-12-07 | Mon | Chaos & Attractors | `lab/2026/1207.py` | The Cat That Always Comes Back | music ok |
+| 2026-12-08 | Tue | Graphs & Networks | `lab/2026/1208.py` | The Knight's Tour | music ok |
+| 2026-12-09 | Wed | Complex Analysis | `lab/2026/1209.py` | The Hole in Escher's Print Gallery | music ok |
+| 2026-12-10 | Thu | Cellular Automata | `lab/2026/1210.py` | Langton's Ant | music ok |
+| 2026-12-11 | Fri | Curves & Differential Geometry | `lab/2026/1211.py` | A Square Wheel That Rolls Smoothly | music ok |
+| 2026-12-12 | Sat | Probability & Randomness | `lab/2026/1212.py` | Three Answers to One Probability Question | music ok |
+| 2026-12-13 | Sun | Topology & Higher Dimensions | `lab/2026/1213.py` |  | todo |
+| 2026-12-14 | Mon | Pattern Formation | `lab/2026/1214.py` |  | todo |
+| 2026-12-15 | Tue | Optics & Billiards | `lab/2026/1215.py` |  | todo |
+| 2026-12-16 | Wed | Fourier & Harmonics | `lab/2026/1216.py` |  | todo |
+| 2026-12-17 | Thu | Waves & Quantum | `lab/2026/1217.py` |  | todo |
+| 2026-12-18 | Fri | Fractals | `lab/2026/1218.py` |  | todo |
+| 2026-12-19 | Sat | Number Theory | `lab/2026/1219.py` |  | todo |
+| 2026-12-20 | Sun | Fluids & Flow Fields | `lab/2026/1220.py` |  | todo |
+| 2026-12-21 | Mon | Tilings & Geometry | `lab/2026/1221.py` |  | todo |
+| 2026-12-22 | Tue | Chaos & Attractors | `lab/2026/1222.py` |  | todo |
+| 2026-12-23 | Wed | Graphs & Networks | `lab/2026/1223.py` |  | todo |
+| 2026-12-24 | Thu | Complex Analysis | `lab/2026/1224.py` |  | todo |
+| 2026-12-25 | Fri | Cellular Automata | `lab/2026/1225.py` |  | todo |
+| 2026-12-26 | Sat | Curves & Differential Geometry | `lab/2026/1226.py` |  | todo |
+| 2026-12-27 | Sun | Probability & Randomness | `lab/2026/1227.py` |  | todo |
+| 2026-12-28 | Mon | Topology & Higher Dimensions | `lab/2026/1228.py` |  | todo |
+| 2026-12-29 | Tue | Pattern Formation | `lab/2026/1229.py` |  | todo |
+| 2026-12-30 | Wed | Optics & Billiards | `lab/2026/1230.py` |  | todo |
+| 2026-12-31 | Thu | Fourier & Harmonics | `lab/2026/1231.py` |  | todo |

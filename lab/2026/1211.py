@@ -1,24 +1,25 @@
 """
-Three Answers to One Probability Question
+A Square Wheel That Rolls Smoothly
 
-Pick a random chord of a circle. What is the probability it is longer than a
-side of the triangle inside? Three circles answer with 20,000 random chords
-each, and disagree: 1/3, 1/2 and 1/4.
+A square wheel can roll as smoothly as a round one, if the road is right. Its
+road is a row of upside-down catenaries, the curve a hanging chain makes:
+y = −r·cosh(x/r). Watch the dashed lines: every axle glides perfectly level.
 
-This is Bertrand's paradox (1889), and no answer is wrong. Two random points
-on the circle, a random point on a random radius, a random midpoint inside:
-each is a fair way to pick a chord "at random", but they are different ways,
-and probability must know which. Red chords are the long ones: their midpoints
-lie in the triangle's inner circle.
+Every regular polygon has a road of its own. More sides mean smaller bumps,
+until the circle's road is flat. Only the triangle fails: its corners would dig
+into the next bump. Square-wheeled tricycles really ride on roads like this,
+at New York's Museum of Mathematics.
 
-Listen: a note for each early chord and as each circle passes 10, 100 and 1,000
-chords; at the end, three notes at 3, 2 and 4 times one pitch.
+Listen: each wheel plucks a harp whenever a corner settles into a dip, the
+square lowest and slowest, over a slow chord that moves with the words. The
+circle never plucks.
 
 Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#bertrandparadox #probability #mathart #generativeart #randomplots
+#squarewheel #catenary #mathart #generativeart #randomplots
 """
 
 import gc
+import math
 
 import cv2
 import numpy as np
@@ -39,432 +40,328 @@ from common.video import (
     smoothstep,
 )
 
-DURATION = 15.0  # seconds, one-shot
+DURATION = 15.0  # seconds, a one-shot
 FRAME_COUNT = frame_count(DURATION)
+SS = 2  # supersampling
+SHIFT = 2  # cv2 fixed-point bits for sub-pixel drawing
 
-# --- The chords ----------------------------------------------------------------------
-CHORDS = 20000  # per circle
-SLOW = 5  # the first chords of each circle land one at a time, shown being built
-SLOW_START, SLOW_STEP = 0.15, 0.8  # s
-METHOD_LAG = 0.27  # s between the three circles' slow chords
-FAST_END = 11.0  # s, the last chord lands
-REVEAL = 11.4  # s, the exact answers appear
-ANSWERS = (3, 2, 4)  # 1 / k for the three methods
-MILESTONES = (10, 100, 1000)
+BACKGROUND = "#f4f0e7"
+INK = "#2a2723"
+GROUND = "#e4dccb"
+SIDES = (4, 5, 6, 8, 0)  # 0 = the circle
+COLOURS = ("#c8553d", "#d99a2b", "#4f8a83", "#3d5a80", "#7b4b94")
 
-# --- Layout (px) -----------------------------------------------------------------------
-R = 212  # circle radius
-CX = 292
-CYS = (612, 1102, 1592)
-MARGIN = 10
-SIDE = 2 * (R + MARGIN)  # crop around a circle, 1x
-SS = 2  # supersampling of the ink
-STEP = 0.7  # sample spacing along a chord, supersampled px
-TX = 572  # left edge of the panel text
-TITLE_YS = (112, 186)
-LEGEND_Y = 282
+APOTHEM = 104.0  # px: every wheel's inradius r, so all roads share y = -r cosh(x/r)
+AXLE_X = 600.0  # px: the camera follows the wheels, the road scrolls
+GROUND_DEPTH = 28.0  # px of ground under the deepest dip
+LANE_GAP = 50.0
+TEXT_BAND = 300  # px at the top kept for text
+TRAIL = 560.0  # px of road behind each wheel over which its marked corner is traced
 
-# --- Look ------------------------------------------------------------------------------
-PAPER = "#f4f0e7"
-LONG = "#b8432f"  # brick red: longer than the triangle's side
-SHORT = "#27466b"  # ink blue: shorter
-LINE = "#4a4440"  # circle and triangle
-TEXT, TEXT_DIM = "#2a2622", "#7a7068"
-INK = 0.04  # absorbance per unit of chord coverage, with every chord laid
-INK_FIRST = 0.7  # ... and the most it reaches while only a few chords are down
-INK_POWER = 0.5  # ink per chord ~ n^-0.5, so the density grows like sqrt(n)
-FLASH = 0.6  # s for a new chord's highlight to fade by e
+SQUARE_SIDES_ROLLED = 7.5  # the square rolls this many sides from frame 0 to rest
+CRUISE_END, REST = 12.2, 13.8  # s: constant speed, then ease to rest
+FADE = 0.35  # s fade to the background at the very end
 
-# --- Sound -----------------------------------------------------------------------------
-# "box" (bells over pad and choir, posted) or "keys" (Rhodes over pad and strings)
-STYLE = "box"
-VARIANTS = {
-    # lead voice, mode, MIDI roots, second bed voice
-    "keys": (audio.rhodes, "dorian", range(55, 61), "strings"),
-    "box": (audio.bell, "lydian", range(67, 73), "choir"),
-}
-PROGRESSION = (0, 5, 3, 4)  # one chord per ~2.9 s, then home at the reveal
+PHASES = (  # (start, end, words) of the top line
+    (0.0, 5.0, r"$\mathrm{A\ square\ wheel\ can\ roll\ smoothly}$"),
+    (5.0, 10.0, r"$\mathrm{on\ a\ road\ of\ upturned\ hanging\ chains}$"),
+    (10.0, 99.0, r"$\mathrm{Every\ polygon\ has\ its\ own\ road}$"),
+)
+FORMULA = r"$y = -r\,\cosh\frac{x}{r}$"
+
+BEDS = ("strings", "choir")  # --audio-only tag picks one
+BED = "strings"
+ROOTS = range(55, 61)  # G3 .. C4, major key
+CHORDS = ((0, 0.0), (5, 5.0), (3, 10.0), (0, REST))  # (degree, start s): I vi IV I
 
 
-def chord_times():
-    """Landing time (s) of chord i of a circle, before the circle's lag."""
-    i = np.arange(CHORDS, dtype=float)
-    slow = SLOW_START + SLOW_STEP * i
-    last_slow = SLOW_START + SLOW_STEP * (SLOW - 1)
-    # then exponentially faster: chord i lands at a time linear in log i
-    u = np.log(np.maximum(i, SLOW - 1) / (SLOW - 1)) / np.log((CHORDS - 1) / (SLOW - 1))
-    fast = last_slow + (FAST_END - 2 * METHOD_LAG - last_slow) * u
-    return np.where(i < SLOW, slow, fast)
+def lane_period(n: int) -> float:
+    """Road period of an n-gon of inradius r: 2 r asinh(tan(pi/n)), 0 for the circle."""
+    return 2.0 * APOTHEM * math.asinh(math.tan(math.pi / n)) if n else 0.0
 
 
-def ink_strength(n):
+def circumradius(n: int) -> float:
+    return APOTHEM / math.cos(math.pi / n) if n else APOTHEM
+
+
+def position(seconds):
+    """Distance rolled (px) at time `seconds`: constant speed, then a smooth stop."""
+    period = lane_period(4)
+    speed = SQUARE_SIDES_ROLLED * period / (0.5 * (CRUISE_END + REST))
+    end = 2 * period * 10  # rest with the square flat on top of a bump
+    start = end - speed * 0.5 * (CRUISE_END + REST)
+    s = np.asarray(seconds, float)
+    u = np.clip((s - CRUISE_END) / (REST - CRUISE_END), 0.0, 1.0)
+    eased = CRUISE_END + (REST - CRUISE_END) * (u - u**3 + 0.5 * u**4)
+    return start + speed * np.where(s < CRUISE_END, s, eased)
+
+
+def wheel_angle(x, n):
     """
-    Absorbance per unit coverage with n chords down: strong for the first chords
-    so each one shows, thinning as they pile up so the finished weave stays
-    readable instead of turning black.
+    Rotation (radians, counter-clockwise, y up) of an n-gon rolled a distance x on its
+    road: whole sides done plus the road's tangent angle at the contact point.
     """
-    return min(INK_FIRST, INK * (CHORDS / n) ** INK_POWER)
+    if not n:
+        return -x / APOTHEM
+    period = lane_period(n)
+    k = np.round(x / period)
+    u = x - k * period
+    return -2.0 * np.pi * k / n - np.arctan(np.sinh(u / APOTHEM))
 
 
-def sample_chords(rng):
-    """
-    CHORDS chords of the unit circle for each of Bertrand's three methods, as
-    (endpoints (n, 2, 2), midpoint distance d (n,), construction (n, 2)).
-    Construction: method 0, the angle of the second endpoint; 1 and 2, the
-    midpoint's angle phi.
-    """
-    out = []
-    # 0: two independent uniform points on the circle
-    a, b = rng.uniform(0, 2 * np.pi, (2, CHORDS))
-    ends = np.stack(
-        [np.stack([np.cos(a), np.sin(a)], 1), np.stack([np.cos(b), np.sin(b)], 1)], 1
-    )
-    out.append((ends, np.abs(np.cos((a - b) / 2)), np.stack([a, b], 1)))
-    # 1: a uniform radius, a uniform point on it; 2: a uniform point in the disc
-    for method in (1, 2):
-        phi = rng.uniform(0, 2 * np.pi, CHORDS)
-        u = rng.uniform(0, 1, CHORDS)
-        d = u if method == 1 else np.sqrt(u)
-        mid = d[:, None] * np.stack([np.cos(phi), np.sin(phi)], 1)
-        along = np.stack([-np.sin(phi), np.cos(phi)], 1) * np.sqrt(1 - d * d)[:, None]
-        ends = np.stack([mid - along, mid + along], 1)
-        out.append((ends, d, np.stack([phi, phi], 1)))
-    return out
+def road_depth(x, n):
+    """How far below the axle the road lies at road position x (px, down positive)."""
+    if not n:
+        return np.full_like(x, APOTHEM)
+    period = lane_period(n)
+    u = x - np.round(x / period) * period
+    return APOTHEM * np.cosh(u / APOTHEM)
 
 
-def ink_samples(ends, long):
-    """
-    Pixel indices (into a (2, S, S) supersampled crop, class 0 = long, 1 = short)
-    of points every STEP px along each chord, concatenated in chord order, and the
-    offset where each chord's samples start.
-    """
-    s = SS * SIDE
-    p = (SIDE / 2 + R * ends * [1, -1]) * SS  # (n, 2, 2) supersampled px
-    length = np.linalg.norm(p[:, 1] - p[:, 0], axis=1)
-    counts = np.ceil(length / STEP).astype(int) + 1
-    offsets = np.concatenate([[0], np.cumsum(counts)])
-    chord = np.repeat(np.arange(len(ends)), counts)
-    u = (np.arange(offsets[-1]) - offsets[chord]) / (counts[chord] - 1)
-    xy = p[chord, 0] + u[:, None] * (p[chord, 1] - p[chord, 0])
-    xy = np.clip(np.rint(xy).astype(np.int64), 0, s - 1)
-    index = xy[:, 1] * s + xy[:, 0] + np.where(long[chord], 0, s * s)
-    return index.astype(np.int32), offsets
+def dip_times(n):
+    """Seconds at which a corner of the n-gon settles into a dip of its road."""
+    if not n:
+        return np.array([])
+    period = lane_period(n)
+    grid = np.linspace(0.0, DURATION, 30001)
+    x = position(grid)
+    first = math.ceil(x[0] / period - 0.5)
+    last = math.floor(x[-1] / period - 0.5)
+    cusps = (np.arange(first, last + 1) + 0.5) * period
+    return np.interp(cusps, x, grid)
 
 
-def glyphs(size):
-    """Digit and point masks for a running estimate, built once."""
-    return {c: latex_mask(rf"$\mathrm{{{c}}}$", size) for c in "0123456789."}
-
-
-def blit_number(image, masks, text, x, bottom, colour, advance):
-    """Draw `text` digit by digit, bottoms on a common baseline, digits monospaced."""
-    for c in text:
-        m = masks[c]
-        if c == ".":
-            blit_mask(image, m, x + 2, bottom - m.shape[0], colour)
-            x += m.shape[1] + 6
-        else:
-            blit_mask(
-                image, m, x + (advance - m.shape[1]) // 2, bottom - m.shape[0], colour
-            )
-            x += advance
+def lanes_layout():
+    """Axle heights of the lanes, stacked under the text band and centred."""
+    heights = [2 * circumradius(n) + GROUND_DEPTH for n in SIDES]
+    total = sum(heights) + LANE_GAP * (len(SIDES) - 1)
+    top = TEXT_BAND + (HEIGHT - 40 - TEXT_BAND - total) / 2
+    axles = []
+    for n, h in zip(SIDES, heights):
+        axles.append(top + circumradius(n))
+        top += h + LANE_GAP
+    return axles
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Bertrand's paradox (1889) as a 15 s one-shot. "A random chord is longer than
-    the side of the inscribed equilateral triangle" (length > sqrt(3) R, i.e. its
-    midpoint lies within R/2 of the centre, the triangle's incircle) has
-    probability 1/3, 1/2 or 1/4 depending on how the chord is chosen: two uniform
-    endpoints on the circle (P(d < 1/2) for d = |cos(dtheta/2)| is 1/3), a uniform
-    point on a uniform radius (d uniform: 1/2), or a uniform midpoint in the disc
-    (d = sqrt(u): 1/4).
+    Roads and wheels (Hall & Wagon, 1992), as a 15 s one-shot. A regular n-gon of
+    inradius r rolls without slipping on a road of upside-down catenary arcs
+    y = -r cosh(u/r), |u| <= r asinh(tan(pi/n)), repeated with period
+    L_n = 2 r asinh(tan(pi/n)); the arc length of half an arc, r tan(pi/n), is half a
+    side, and the axle stays exactly at height 0, directly above the contact point.
+    The wheel's angle after rolling a distance x is -(2 pi k / n) - atan(sinh(u/r))
+    with k = round(x / L_n), u = x - k L_n: the side lies along the road's tangent.
 
-    Data: 20000 chords per method from settings.rng, drawn up front, so the picture
-    depends on the seed (the posted video uses --seed 0). Chord i of a circle
-    lands at a fixed time: the first five 0.8 s apart (each circle 0.27 s behind
-    the one above), then at times linear in log i, so the count grows
-    exponentially to 20000 at 11 s. The exact answers fade in from 11.4 s and the
-    finished image rests to the end.
+    Five lanes share r = 104 px and the same rolled distance x(t): square, pentagon,
+    hexagon, octagon and the circle on a flat road. The camera follows the wheels
+    (the road scrolls); x(t) is constant speed until 12.2 s, then a C1 ease to rest at
+    13.8 s with the square flat on a bump, a 1.2 s rest and a 0.35 s fade. Each frame
+    is closed form in t: dashed axle lines anchored to the road, and the trace of one
+    marked corner, evaluated at the distances rolled over the last 560 px. Drawn with
+    cv2 at 2x and downsampled, on a thread pool. The top line of LaTeX text changes at
+    5 s and 10 s; the formula and the lane labels hold. The picture uses no randomness.
 
-    Frame at time s (t = frame / (FRAME_COUNT - 1), s = 15 t): for each circle the
-    first n(s) chords are laid as ink. Every chord is precomputed as samples 0.7 px
-    apart on a 2x grid; a frame bincounts the first n chords' samples (long and
-    short separately), area-downsamples to coverage, and multiplies the paper by
-    exp(-k(n) coverage A), k(n) = min(0.7, 0.04 sqrt(20000 / n)), with A the absorbance of brick red (long) or ink blue
-    (short) -- subtractive, like ink. New chords flash as thick lines with their
-    construction (the two endpoints; the radius and the point on it; the
-    midpoint), fading over 0.6 s, only during the first ~5 s. Running estimates
-    (long / n, three decimals) are composed from LaTeX digit masks built once; all
-    text is LaTeX (latex_mask / blit_mask). Pure function of s on the render_frames
-    thread pool.
-
-    Sound (posted: --seed 0, no --audio-only tag, STYLE "box" = music_box bells
-    in lydian over pad and "u" choir, audio seed = seed, root 70):
-    see soundtrack().
+    Soundtrack (ambient, one-shot, from the same x(t)): a slow bed, I-vi-IV-I with
+    the home chord landing as the wheels stop, of strings (posted, --seed 0) or a "o"
+    choir with a pad (the "choir" tag). A harp pluck each time a corner of a polygon
+    settles into a dip (x = (k + 1/2) L_n), a chord tone of the current chord, lower for
+    fewer sides and quieter for shallower dips; the lanes join the music one by one
+    with the words (square from the start, pentagon at 5 s, hexagon and octagon at
+    10 s), a rolled harp chord on the rest. The circle never plucks.
     """
     settings = settings or ImageProcessingSettings(1)
-    rng = settings.rng
+    background = np.array(hex_to_bgr(BACKGROUND), np.float32)
+    ink, ground = hex_to_bgr(INK), hex_to_bgr(GROUND)
+    axles = lanes_layout()
 
-    methods = sample_chords(rng)
-    base = chord_times()
-    times = [base + k * METHOD_LAG for k in range(3)]
-    longs = [d < 0.5 for _, d, _ in methods]
-    ink = [ink_samples(ends, long) for (ends, _, _), long in zip(methods, longs)]
-    running = [np.cumsum(long) / np.arange(1, CHORDS + 1) for long in longs]
-    for k, long in enumerate(longs):
-        logger.info(f"Method {k}: {long.mean():.4f} long (exact 1/{ANSWERS[k]})")
-
-    paper = np.array(hex_to_bgr(PAPER), np.float32)
-    colours = {
-        name: np.array(hex_to_bgr(c), np.float32)
-        for name, c in (("long", LONG), ("short", SHORT), ("line", LINE))
-    }
-    text_c, dim_c = hex_to_bgr(TEXT), hex_to_bgr(TEXT_DIM)
-    absorb = np.stack(
-        [-np.log(colours["long"] / paper), -np.log(colours["short"] / paper)]
-    )  # (2, 3)
-
-    # --- Static picture: paper, labels, legend --------------------------------------
-    background = np.empty((HEIGHT, WIDTH, 3), np.float32)
-    background[:] = paper
-    labels = (
-        (r"$\mathrm{two\ random\ points}$", r"$\mathrm{on\ the\ circle}$"),
-        (r"$\mathrm{a\ random\ point\ on}$", r"$\mathrm{a\ random\ radius}$"),
-        (r"$\mathrm{a\ random\ midpoint}$", r"$\mathrm{inside\ the\ disc}$"),
-    )
-    for (first, second), cy in zip(labels, CYS):
-        blit_mask(background, latex_mask(first, 40), TX, cy - 178, dim_c)
-        blit_mask(background, latex_mask(second, 40), TX, cy - 128, dim_c)
-    approx = latex_mask(r"$P\ \approx$", 70)  # drawn once a circle has a chord
-    # Legend: a red and a blue stroke with their meaning.
-    long_word = latex_mask(r"$\mathrm{longer\ than\ its\ side}$", 38)
-    short_word = latex_mask(r"$\mathrm{shorter}$", 38)
-    stroke, gap = 56, 14
-    total = 2 * (stroke + gap) + long_word.shape[1] + 60 + short_word.shape[1]
-    x = (WIDTH - total) // 2
-    for word, colour in ((long_word, LONG), (short_word, SHORT)):
-        y_mid = LEGEND_Y + word.shape[0] // 2
-        cv2.line(
-            background,
-            (x, y_mid),
-            (x + stroke, y_mid),
-            hex_to_bgr(colour),
-            5,
-            cv2.LINE_AA,
-        )
-        x += stroke + gap
-        blit_mask(background, word, x, LEGEND_Y, dim_c)
-        x += word.shape[1] + 60
-
-    titles = [
-        (
-            latex_mask(r"$\mathrm{Pick\ a\ chord\ of\ a\ circle\ at\ random.}$", 52),
-            latex_mask(
-                r"$\mathrm{Is\ it\ longer\ than\ the\ triangle\text{'}s\ side?}$", 52
-            ),
-        ),
-        (
-            latex_mask(r"$\mathrm{Three\ fair\ ways\ to\ pick\ it{,}}$", 52),
-            latex_mask(r"$\mathrm{three\ different\ answers.}$", 52),
-        ),
+    # Text, typeset once.
+    words = [(a, b, latex_mask(tex, 50)) for a, b, tex in PHASES]
+    formula = latex_mask(FORMULA, 58)
+    labels = [
+        latex_mask(r"$n = %d$" % n if n else r"$n \to \infty$", 40) for n in SIDES
     ]
-    for pair in titles:
-        for m in pair:
-            assert m.shape[1] < WIDTH - 60, m.shape
-    exact = [
-        latex_mask(rf"$\mathrm{{exactly}}\ \ \dfrac{{1}}{{{k}}}$", 66) for k in ANSWERS
-    ]
-    digits = glyphs(70)
-    advance = max(digits[c].shape[1] for c in "0123456789") + 3
-    number_x = TX + approx.shape[1] + 16
 
-    # Circle and triangle outlines, one alpha mask shared by the three crops.
-    outline = np.zeros((SIDE, SIDE), np.uint8)
-    centre = (SIDE * 8, SIDE * 8)  # 4-bit subpixel
-    cv2.circle(outline, centre, R * 16, 150, 2, cv2.LINE_AA, 4)
-    vertices = np.array(
-        [
-            [SIDE / 2 + R * np.cos(a), SIDE / 2 - R * np.sin(a)]
-            for a in np.pi / 2 + 2 * np.pi / 3 * np.arange(3)
-        ]
-    )
-    cv2.polylines(
-        outline, [np.rint(vertices * 16).astype(np.int32)], True, 95, 1, cv2.LINE_AA, 4
-    )
-    outline_alpha = outline.astype(np.float32)[..., None] / 255
+    sx = np.arange(0, WIDTH + 2, 2, dtype=np.float64)  # road samples, screen px
+    scale = SS * (1 << SHIFT)
 
-    def to_px(point):
-        """Unit-circle point -> 4-bit subpixel crop coordinates."""
-        return (
-            int(round((SIDE / 2 + R * point[0]) * 16)),
-            int(round((SIDE / 2 - R * point[1]) * 16)),
-        )
+    def pts(x, y):
+        return np.round(np.stack([x, y], -1) * scale).astype(np.int32)
 
-    def flash(k, s):
-        """Highlight masks (long, short, construction) of circle k's recent chords."""
-        gate = 1.0 - float(smoothstep((s - 3.6) / 1.4))
-        if gate <= 0:
-            return None
-        ends, d, angle = methods[k]
-        age = s - times[k]
-        recent = np.flatnonzero((age >= 0) & (age < 5 * FLASH))
-        if len(recent) == 0:
-            return None
-        masks = np.zeros((3, SIDE, SIDE), np.uint8)
-        for i in recent[np.argsort(-age[recent])]:  # oldest first
-            h = gate * np.exp(-age[i] / FLASH) * float(smoothstep(age[i] / 0.08))
-            value = int(255 * h)
-            if value < 2:
+    def blend(colour, a):
+        """colour faded towards the background by 1 - a."""
+        return tuple(float(c * a + b * (1 - a)) for c, b in zip(colour, background))
+
+    def draw_lane(image, n, axle, colour, x):
+        aa, sh = cv2.LINE_AA, SHIFT
+        radius = circumradius(n)
+        # Road: ground below the arcs, ink along them.
+        road_y = axle + road_depth(x + sx - AXLE_X, n)
+        bottom = axle + circumradius(n) + GROUND_DEPTH
+        outline = pts(sx, road_y)
+        poly = np.vstack([outline, pts(np.array([sx[-1], 0.0]), np.full(2, bottom))])
+        cv2.fillPoly(image, [poly], ground, aa, sh)
+        cv2.polylines(image, [outline], False, ink, 2 * SS, aa, sh)
+        # Axle line: dashes anchored to the road, so they scroll with it.
+        dash = 26.0
+        first = math.floor((x - AXLE_X) / dash)
+        for m in range(first, first + int(AXLE_X / dash) + 2):
+            if m % 2:
                 continue
-            target = masks[0] if longs[k][i] else masks[1]
-            a, b = to_px(ends[i, 0]), to_px(ends[i, 1])
-            cv2.line(target, a, b, value, 3, cv2.LINE_AA, 4)
-            mark = masks[2]
-            dot = int(6.5 * 16)
-            if k == 0:
-                cv2.circle(mark, a, dot, value, -1, cv2.LINE_AA, 4)
-                cv2.circle(mark, b, dot, value, -1, cv2.LINE_AA, 4)
-            else:
-                phi = angle[i, 0]
-                mid = d[i] * np.array([np.cos(phi), np.sin(phi)])
-                if k == 1:
-                    rim = to_px((np.cos(phi), np.sin(phi)))
-                    cv2.line(mark, to_px((0, 0)), rim, value // 2, 2, cv2.LINE_AA, 4)
-                cv2.circle(mark, to_px(mid), dot, value, -1, cv2.LINE_AA, 4)
-        return masks.astype(np.float32) / 255
+            a = max(m * dash - x + AXLE_X, 0.0)
+            b = min((m + 1) * dash - x + AXLE_X, AXLE_X)
+            if b > a:
+                cv2.line(
+                    image,
+                    tuple(pts(np.array(a), np.array(axle))),
+                    tuple(pts(np.array(b), np.array(axle))),
+                    blend(colour, 0.85),
+                    2 * SS,
+                    aa,
+                    sh,
+                )
+        # Trace of the marked corner over the last TRAIL px rolled.
+        offset = -np.pi / 2 + (np.pi / n if n else 0.0)
+        back = np.linspace(x - TRAIL, x, 240)
+        angle = wheel_angle(back, n) + offset
+        trace = pts(
+            AXLE_X + back - x + radius * np.cos(angle), axle - radius * np.sin(angle)
+        )
+        chunks = 12
+        for c in range(chunks):
+            part = trace[c * 20 : (c + 1) * 20 + 1]
+            cv2.polylines(
+                image, [part], False, blend(colour, (c + 1) / chunks), 2 * SS, aa, sh
+            )
+        # The wheel.
+        angle = float(wheel_angle(np.array(x), n)) + offset
+        centre = pts(np.array(AXLE_X), np.array(axle))
+        if n:
+            a = angle + 2 * np.pi * np.arange(n) / n
+            corners = pts(AXLE_X + radius * np.cos(a), axle - radius * np.sin(a))
+            cv2.fillPoly(image, [corners], blend(colour, 0.8), aa, sh)
+            for corner in corners:
+                cv2.line(image, tuple(centre), tuple(corner), colour, SS, aa, sh)
+            cv2.polylines(image, [corners], True, colour, 3 * SS, aa, sh)
+        else:
+            cv2.circle(
+                image,
+                tuple(centre),
+                int(radius * scale),
+                blend(colour, 0.8),
+                -1,
+                aa,
+                sh,
+            )
+            for j in range(6):
+                a = angle + np.pi * j / 3
+                end = pts(AXLE_X + radius * np.cos(a), axle - radius * np.sin(a))
+                cv2.line(image, tuple(centre), tuple(end), colour, SS, aa, sh)
+            cv2.circle(
+                image, tuple(centre), int(radius * scale), colour, 3 * SS, aa, sh
+            )
+        mark = pts(AXLE_X + radius * np.cos(angle), axle - radius * np.sin(angle))
+        cv2.circle(image, tuple(mark), 9 * scale, ink, -1, aa, sh)
+        cv2.circle(image, tuple(centre), 7 * scale, ink, -1, aa, sh)
 
-    s2 = SS * SIDE
+    canvas = np.empty((HEIGHT * SS, WIDTH * SS, 3), np.uint8)
+    canvas[:] = hex_to_bgr(BACKGROUND)
+    ink_f = np.array(ink, np.float32)
 
     def render(frame):
-        s = DURATION * frame / (FRAME_COUNT - 1)
-        image = background.copy()
-
-        for k, cy in enumerate(CYS):
-            n = int(np.searchsorted(times[k], s, side="right"))
-            index, offsets = ink[k]
-            y0, x0 = cy - SIDE // 2, CX - SIDE // 2
-            crop = image[y0 : y0 + SIDE, x0 : x0 + SIDE]
-            if n:
-                hits = np.bincount(index[: offsets[n]], minlength=2 * s2 * s2)
-                hits = hits.astype(np.float32).reshape(2, s2, s2)
-                cover = [
-                    cv2.resize(h, (SIDE, SIDE), interpolation=cv2.INTER_AREA) * STEP
-                    for h in hits
-                ]
-                density = (
-                    cover[0][..., None] * absorb[0] + cover[1][..., None] * absorb[1]
-                )
-                crop *= np.exp(-ink_strength(n) * density)
-            crop += outline_alpha * (colours["line"] - crop)
-            masks = flash(k, s)
-            if masks is not None:
-                for mask, name in zip(masks, ("long", "short", "line")):
-                    a = mask[..., None]
-                    crop += a * (colours[name] - crop)
-
-            # Running estimate, then the exact answer.
-            if n:
-                shown = float(smoothstep((s - times[k][0]) / 0.15))
-                top = cy + 18 - approx.shape[0]
-                blit_mask(image, approx, TX, top, colours["long"], alpha=shown)
-                value = f"{running[k][n - 1]:.3f}"
-                blit_number(
-                    image, digits, value, number_x, cy + 18, colours["long"], advance
-                )
-            fade = float(smoothstep((s - REVEAL - 0.25 * k) / 0.5))
-            if fade > 0:
-                blit_mask(image, exact[k], TX, cy + 52, text_c, alpha=fade)
-
-        # The question, then the conclusion.
-        swap = float(smoothstep((s - REVEAL) / 0.5))
-        for pair, alpha in ((titles[0], 1 - swap), (titles[1], swap)):
-            if alpha <= 0:
-                continue
-            for m, y in zip(pair, TITLE_YS):
-                blit_mask(image, m, WIDTH // 2, y, text_c, alpha=alpha, anchor="centre")
+        seconds = frame / (FRAME_COUNT - 1) * DURATION
+        x = float(position(seconds))
+        big = canvas.copy()
+        for n, axle, colour in zip(SIDES, axles, COLOURS):
+            draw_lane(big, n, axle, hex_to_bgr(colour), x)
+        image = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
+        image = image.astype(np.float32)
+        for a, b, mask in words:
+            alpha = float(
+                smoothstep((seconds - a) / 0.4) * smoothstep((b - seconds) / 0.4)
+            )
+            if a == 0.0:
+                alpha = float(smoothstep((b - seconds) / 0.4))
+            if alpha > 0:
+                blit_mask(image, mask, WIDTH // 2, 92, ink_f, alpha, "centre")
+        blit_mask(image, formula, WIDTH // 2, 178, ink_f, 1.0, "centre")
+        for label, axle, colour in zip(labels, axles, COLOURS):
+            y = int(axle - label.shape[0] / 2)
+            blit_mask(image, label, 945, y, hex_to_bgr(colour), 1.0, "centre")
+        fade = float(smoothstep((DURATION - seconds) / FADE))
+        if fade < 1:
+            image = fade * image + (1 - fade) * background
         return image
 
     render_frames(settings, render, FRAME_COUNT)
-    track = soundtrack(
-        times, longs, methods, settings.audio_tag or STYLE, settings.audio_rng
-    )
+    bed = settings.audio_tag if settings.audio_tag in BEDS else BED
+    track = soundtrack(bed, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
 
-def soundtrack(times, longs, methods, variant, rng):
+def soundtrack(bed, rng):
     """
-    Ambient one-shot: a sustained bed with sparse struck accents from the chords.
-
-    Bed: pad chords I vi IV V in the variant's mode (dorian for "keys", lydian for
-    "box"), ~2.9 s each, an octave and a half under the lead, with strings
-    ("keys") or an "u" choir ("box") an octave above; it swells as the ink
-    builds, then lands on the home chord at the reveal and rings out.
-    Accents (Rhodes for "keys", bells for "box"): each of the first five chords of
-    every circle, as it lands -- longer chords lower, panned by the chord's
-    midpoint x; one note per circle as its count passes 10, 100 and 1000 (tones
-    of the current bed chord, rising); at the reveal, three notes at 3, 2 and 4
-    times one frequency, one per circle as its exact answer 1/3, 1/2, 1/4
-    appears (the answers as harmonics). Echo, long room, circular=False,
-    master(loop=False).
+    Ambient one-shot (nothing wraps). The bed holds I, vi, IV, then the home chord I
+    from the moment the wheels stop, with a low root under each; strings, or a soft
+    "o" choir over a pad. On top, the harp: one pluck per corner settling into a dip,
+    a tone of the chord sounding at that moment, the square lowest. Lanes join with
+    the words; a rolled harp chord as the wheels come to rest.
     """
-    voice, mode, roots, second = VARIANTS[variant]
-    root = int(rng.choice(roots))
-    scale = Scale(root, mode)
-    bed_octave = -2 if variant == "box" else -1
+    root = int(rng.choice(ROOTS))
+    scale = Scale(root, "major")
+    sr = audio.SAMPLE_RATE
     track = audio.silence(DURATION)
 
-    bed = audio.silence(DURATION)
-    bar = REVEAL / len(PROGRESSION)
-    sections = [(i * bar, bar, deg) for i, deg in enumerate(PROGRESSION)]
-    sections.append((REVEAL, DURATION - REVEAL, 0))
-    for i, (start, length, degree) in enumerate(sections):
-        level = 0.2 + 0.1 * i / len(PROGRESSION)
-        notes = scale.chord(degree, 3, octave=bed_octave)
-        for midi in notes:
-            hz = float(audio.midi_to_hz(midi))
-            attack = 0.5 if i == 0 else 1.2
-            held = audio.pad(hz, length + 0.6, level, attack, 2.5, brightness=0.3)
-            audio.add(bed, held, start - (0 if i == 0 else 0.6), circular=False)
-            upper = float(audio.midi_to_hz(midi + 12))
-            if second == "strings":
-                sound = audio.strings(upper, length + 0.6, 0.55 * level, 1.4, 2.5, 0.3)
-            else:
-                sound = audio.choir(upper, length + 0.6, 0.6 * level, 1.4, 2.5, "u")
-            audio.add(bed, sound, start - (0 if i == 0 else 0.6), circular=False)
-    track += audio.lowpass(bed, 2400.0, circular=False)
+    def chord_at(seconds):
+        return [d for d, start in CHORDS if start <= seconds][-1]
 
-    accents = audio.silence(DURATION)
-    count = 0
-    for k in range(3):
-        ends, d, _ = methods[k]
-        for i in range(SLOW):
-            length = 2 * np.sqrt(1 - d[i] ** 2)  # 0 .. 2 radii
-            degree = int(round((1 - length / 2) * 7))
-            x = float(ends[i, :, 0].mean())
-            note = voice(scale.hz(degree), 0.42)
-            audio.add(accents, audio.pan(note, 0.6 * x), times[k][i], circular=False)
-            count += 1
-        for j, n in enumerate(MILESTONES):
-            when = times[k][n - 1]
-            chord = scale.chord(PROGRESSION[min(int(when // bar), 3)], 3)
-            midi = chord[k] + 12 * (j // 2)
-            note = voice(float(audio.midi_to_hz(midi)), 0.34)
-            audio.add(accents, audio.pan(note, 0.4 * (k - 1)), when, circular=False)
-            count += 1
-    base = scale.hz(0, octave=-1)
-    for k, harmonic in enumerate(ANSWERS):
-        when = REVEAL + 0.25 * k + 0.15
-        note = voice(harmonic * base, 0.5)
-        audio.add(accents, audio.pan(note, 0.4 * (k - 1)), when, circular=False)
-        count += 1
-    accents = audio.lowpass(accents, 6000.0, circular=False)
-    accents = audio.delay(accents, 0.45, feedback=0.3, wet=0.22, circular=False)
-    track += accents
-    track = audio.highpass(track, 80.0, circular=False)
+    # The bed.
+    bounds = [start for _, start in CHORDS] + [DURATION]
+    for (degree, start), end in zip(CHORDS, bounds[1:]):
+        length = end - start + (0.9 if end < DURATION else 0.0)
+        tones = scale.chord(degree, 3)
+        for i, midi in enumerate(tones):
+            hz = float(audio.midi_to_hz(midi))
+            if bed == "strings":
+                held = audio.strings(hz, length, 0.30, attack=1.2, release=1.8)
+            else:
+                held = audio.choir(hz, length, 0.26, attack=1.4, release=2.0)
+                held = held + audio.pad(hz, length, 0.16, attack=1.4, release=2.0)
+            audio.add(track, held, start - (0.0 if start == 0 else 0.6), False)
+        low = float(audio.midi_to_hz(tones[0] - 12))
+        audio.add(
+            track,
+            audio.strings(low, length, 0.18, attack=1.5, release=2.0),
+            max(start - 0.6, 0.0),
+            False,
+        )
+    track = audio.highpass(track, 85.0, circular=False)
+    track = audio.lowpass(track, 3200.0, circular=False)
+
+    # The harp.
+    joins = {4: 0.0, 5: 5.0, 6: 10.0, 8: 10.0}
+    lane = {4: 0, 5: 1, 6: 2, 8: 3}
+    pans = {4: -0.35, 5: 0.35, 6: -0.15, 8: 0.2}
+    plucks = 0
+    for n in SIDES[:-1]:
+        depth = circumradius(n) - APOTHEM  # how deep its dips are
+        velocity = 0.18 + 0.9 * depth / (circumradius(4) - APOTHEM) * 0.32
+        for when in dip_times(n):
+            if when < joins[n] or when > REST + 0.05:
+                continue
+            tones = scale.chord(chord_at(when), 4, octave=1)
+            midi = tones[lane[n]] - (12 if n == 4 else 0)
+            note = audio.pluck(float(audio.midi_to_hz(midi)), round(velocity, 3), 3.0)
+            audio.add(track, audio.pan(note, pans[n]), when, False)
+            plucks += 1
+    for j, midi in enumerate(scale.chord(0, 5, octave=0)):
+        note = audio.pluck(float(audio.midi_to_hz(midi + 12)), 0.42 - 0.04 * j, 4.0)
+        audio.add(track, audio.pan(note, -0.4 + 0.2 * j), REST + 0.09 * j, False)
+
+    track = audio.delay(track, 0.48, feedback=0.3, wet=0.16, circular=False)
     track = audio.reverb(track, rng, rt60=4.5, wet=0.4, tone=4200.0, circular=False)
-    logger.info(f"Soundtrack ({variant}): root {root} {mode}, {count} accents")
+    logger.info(f"Soundtrack ({bed}): root {root}, {plucks} harp plucks, {sr} Hz")
     return audio.master(track, loop=False)
 
 

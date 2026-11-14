@@ -1,431 +1,388 @@
 """
-The Third Root
+One Electron at a Time
 
-A Newton's method fractal. Every point on screen is a first guess for
-Newton's method, the classic recipe for solving an equation, and is coloured
-by the root its guesses settle on.
+The double-slit experiment, one electron at a time. Each electron leaves
+the gun as a little packet of quantum wave, goes through both slits at
+once, and the two halves overlap: crest on crest here, crest on trough
+there. Then it touches the screen and the whole wave vanishes into one
+green dot.
 
-With two roots it is easy: you reach the nearer one, and the plane splits
-along a straight line. Arthur Cayley proved that in 1879, then tried three
-roots and called it a problem of "considerable difficulty". Watch the third
-root fly in: the line erupts into chains of beads, and wherever two colours
-meet, the third is there too. It is a fractal: zoom into the centre and the
-beads repeat forever.
+Each dot lands at random. But dots only land where the two halves of the
+wave added up, never where they cancelled, and the stripes of an
+interference pattern build up out of single electrons. The chance of a dot
+at each point is the brightness of the wave there, |ψ|²: Born's rule.
 
-A harp climbs as the third root nears, and the chord is complete when it
-lands. In the zoom, each new generation of beads plucks one more step of a
-scale that keeps rising without ever getting higher.
+Each landing strikes a note set by the stripe it falls in, so you hear the
+electrons find the pattern too.
 
-Made with Python, NumPy, Numba & OpenCV. Sound synthesized in NumPy.
-#newtonfractal #fractal #mathart #generativeart #randomplots
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#doubleslit #quantummechanics #mathart #generativeart #randomplots
 """
 
 import gc
 
 import numpy as np
+import torch
 from loguru import logger
-from numba import njit
 
 from common import audio
+from common.gpu import blur, gaussian_kernel, select_device, splat, wide_blur
 from common.image_processing import ImageProcessingSettings
 from common.music import STYLES, Scale
-from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
+from common.video import (
+    FPS,
+    HEIGHT,
+    WIDTH,
+    frame_count,
+    palette_lut,
+    render_frames,
+    smoothstep,
+)
 
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
+FADE = 0.4  # s of fade to black at the end
 
-# --- Story (seconds) ------------------------------------------------------------------
-ARRIVE = 5.0  # the third root lands
-FAR = 30.0  # its distance at t = 0, in units of the final root circle
-LANDING = 2.5  # ease-out power of its approach: fast at first, a gentle landing
-SWOOP = 0.9  # rad: how far round it curls on the way in (sign from the seed)
-ZOOM_START, ZOOM_END = 5.8, 13.4  # zoom into the centre
-GENERATIONS = 24  # bead generations passed by the zoom: depth (3/2)^(G/2)
-TWIST = np.pi / 3  # rad the view turns during the zoom (the flower is 6-fold)
-FADE = 0.4  # s of fade to black at the very end
+# Geometry, px.
+CX = WIDTH / 2
+Y_GUN = 150.0
+Y_WALL = 600.0
+WALL_HALF = 5.0  # wall thickness / 2
+Y_SCREEN = 1340.0
+PLATE = (1372.0, 1868.0)  # the photographic plate under the screen
+SLIT_GAP = 130.0  # centre to centre
+SLIT_WIDTH = 34.0
+POINTS_PER_SLIT = 6  # Huygens sources across each slit
+BEAM_WIDTH = 210.0  # sd of the incoming packet across x
 
-# --- Maths ----------------------------------------------------------------------------
-HALF_WIDTH = 1.55  # complex units across half the screen, before the zoom
-MAX_ITER = 80
-EPS = 1e-3  # converged: within this of a root
-FAR_FIELD = 20.0  # beyond this |z|, act 2 jumps z -> (2/3)^k z in one go
-SS = 2  # supersampling per axis, on boundary pixels
-AA_TOL = 10.0  # 0..255: corners closer than this need no supersampling
+# The wave. de Broglie: phase speed is half the group speed.
+WAVELENGTH = 18.0
+GROUP_SPEED = 600.0  # px/s, the packets
+PHASE_SPEED = GROUP_SPEED / 2
+PACKET_SD = 42.0  # px along the path
+FRONT = 40.0  # px, softness of the continuous beam's front
+R0 = 60.0  # softens 1/sqrt(r) next to the slits
 
-# --- Look -----------------------------------------------------------------------------
-PALETTE = ["#ff5a3c", "#20d6a8", "#a77bff"]  # ember, jade, lilac: one per root
-GLOW_BASE = 3.0  # steps every pixel gets for free: below this it stays dark
-GLOW_SCALE = 8.0  # steps more for the boundary glow to saturate
-DOT = 7.0  # px: root marker core
+# Story, s.
+EMISSIONS = (-0.62, 1.05, 2.5, 3.65, 4.55, 5.25, 5.8, 6.25, 6.62, 6.95)
+COLLAPSE = 0.07  # s for a packet to vanish once it touches the screen
+BEAM_ON = 6.4  # the continuous beam leaves the gun
+BEAM_FULL = 9.0
+BEAM_OFF = (12.9, 13.9)
+RATE_START = 3.0  # beam hits per second at first ...
+RATE_GROWTH = 0.42  # ... growing e-fold every this many seconds ...
+RATE_MAX = 5200.0  # ... up to this
+HITS_END = 13.6  # s, the last hit
 
-# --- Sound ----------------------------------------------------------------------------
-STYLE = "harp"  # common.music.STYLES; an --audio-only tag naming one overrides it
-APPROACH_STEP = 2 ** (
-    1 / 3
-)  # a note each time the third root's distance shrinks by this
-SHEPARD_CENTRE, SHEPARD_WIDTH = 74.0, 9.0  # MIDI: where the endless climb is loudest
-RISER = 1.4  # s of build-up into the landing
+# Look.
+WAVE_PALETTE = ["#000000", "#1a0f45", "#4b2bb8", "#9a7bff", "#e6dcff", "#ffffff"]
+WAVE_GAIN = 2.2
+DOT = np.array([0.32, 1.0, 0.58])  # phosphor green, RGB
+FLASH = np.array([0.85, 1.0, 0.9])
+DOT_GAIN = 1.0
+BEAM_DOT = 4.0  # splat weight of a beam electron's dot
+LONE_DOT = 60.0  # and of a lone electron's
+WALL_RGB = (58, 52, 80)
+SCREEN_RGB = (40, 90, 60)
+PLATE_RGB = (7, 13, 10)
+
+STYLE = (
+    "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one overrides it
+)
+FRINGE = WAVELENGTH * (Y_SCREEN - Y_WALL) / SLIT_GAP  # px between bright stripes
+NOTE_GAP = (0.32, 0.13)  # s between beam notes: sparse at first, then a rain
 
 
-def root_lut(colour, size=256):
-    """A (size, 3) BGR ramp 0..255: near black -> the root's colour -> pale."""
-    rgb = np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
-    u = np.linspace(0.0, 1.0, size)[:, None]
-    dark = 0.07 * rgb
-    pale = 0.35 * rgb + 0.65
-    lo = dark + (rgb - dark) * np.clip(u / 0.65, 0, 1)
-    hi = rgb + (pale - rgb) * np.clip((u - 0.65) / 0.35, 0, 1)
-    return (np.where(u < 0.65, lo, hi)[:, ::-1] * 255).astype(np.float32)
+def slit_sources():
+    """x of the Huygens point sources across both slits, and their weights."""
+    offsets = (np.arange(POINTS_PER_SLIT) + 0.5) / POINTS_PER_SLIT - 0.5
+    xs = np.concatenate(
+        [CX + side * SLIT_GAP / 2 + SLIT_WIDTH * offsets for side in (-1, 1)]
+    )
+    weights = np.exp(-0.5 * ((xs - CX) / BEAM_WIDTH) ** 2) / POINTS_PER_SLIT
+    return xs, weights
 
 
-@njit(nogil=True, fastmath=True, cache=True, inline="always")
-def sample(zr, zi, rre, rim, rs, tre, tim, cubic):
+def screen_amplitude(x):
+    """Steady complex amplitude on the screen line, from the same Huygens sum."""
+    k = 2 * np.pi / WAVELENGTH
+    xs, weights = slit_sources()
+    dy = Y_SCREEN - Y_WALL
+    r = np.hypot(x[:, None] - xs[None], dy)
+    tilt = dy / r
+    terms = weights * tilt / np.sqrt((r + R0) / WAVELENGTH) * np.exp(1j * k * r)
+    return terms.sum(1)
+
+
+def beam_rate(t):
+    """Hits per second from the continuous beam."""
+    first = BEAM_ON + (Y_SCREEN - Y_GUN) / GROUP_SPEED
+    rate = RATE_START * np.exp((t - first) / RATE_GROWTH)
+    rate = np.minimum(rate, RATE_MAX)
+    rate *= np.clip((HITS_END - t) / 0.5, 0, 1)
+    return np.where(t >= first, rate, 0.0)
+
+
+def hits(rng):
+    """Every detection: time, x, y on the plate, and whether it was a lone packet."""
+    xs = np.arange(0, WIDTH, 0.25)
+    density = np.abs(screen_amplitude(xs)) ** 2
+    cdf = np.cumsum(density)
+    cdf /= cdf[-1]
+
+    travel = (Y_SCREEN - Y_GUN) / GROUP_SPEED
+    lone = np.array(EMISSIONS) + travel
+    grid = np.linspace(0, DURATION, 30001)
+    cum = np.cumsum(beam_rate(grid)) * (grid[1] - grid[0])
+    count = int(cum[-1])
+    beam = np.interp(np.sort(rng.uniform(0, cum[-1], count)), cum, grid)
+    times = np.concatenate([lone, beam])
+    x = np.interp(rng.random(len(times)), cdf, xs)
+    y = rng.uniform(PLATE[0] + 8, PLATE[1] - 8, len(times))
+    is_lone = np.arange(len(times)) < len(lone)
+    return times, x, y, is_lone
+
+
+def soundtrack(style_name, times, x, is_lone, rng):
     """
-    Newton's method from z = zr + i zi: (index of the root reached, smooth step
-    count v = sum over steps of clip(log(d / EPS) / log(1 / EPS), 0, 1), d the
-    distance to the nearest root).
-
-    General case: p(z) = prod (z - r_j / s_j) up to a constant, step
-    z <- z - 1 / sum_j s_j / (s_j z - r_j), so a root with s_j -> 0 recedes to
-    infinity continuously. cubic (exactly z^3 - 1 turned by a quarter turn,
-    worked in the rotated frame w = -i z, whose roots are the cube roots of
-    unity): N(w) = 2w/3 + 1/(3 w^2), and any
-    |w| > FAR_FIELD jumps to (2/3)^n w at once (n steps counted), since there
-    N(w) = 2w/3 to 1e-4.
-    """
-    inv_log = 1.0 / np.log(1.0 / EPS)
-    nr = rre.shape[0]
-    v = 0.0
-    if cubic:
-        wr, wi = zi, -zr  # w = -i z: the up-pointing root goes to w = 1
-        for it in range(MAX_ITER):
-            r2 = wr * wr + wi * wi
-            if r2 > FAR_FIELD * FAR_FIELD:
-                n = int((0.5 * np.log(r2) - np.log(FAR_FIELD)) / np.log(1.5)) + 1
-                f = (2.0 / 3.0) ** n
-                wr *= f
-                wi *= f
-                v += n
-                continue
-            sr = wr * wr - wi * wi  # w^2
-            si = 2.0 * wr * wi
-            dx = wr + 0.5  # squared distance to the nearest cube root of unity
-            dy = abs(wi) - 0.8660254037844386
-            d2 = min((wr - 1.0) * (wr - 1.0) + wi * wi, dx * dx + dy * dy)
-            if d2 < EPS * EPS:
-                break
-            if d2 < 1.0:
-                v += 0.5 * np.log(d2 / (EPS * EPS)) * inv_log
-            else:
-                v += 1.0
-            q = 1.0 / (3.0 * (sr * sr + si * si) + 1e-300)
-            wr = 2.0 / 3.0 * wr + q * sr
-            wi = 2.0 / 3.0 * wi - q * si
-        # nearest cube root of unity in w: 1 (k 0), e^{2 pi i/3} (k 1), e^{-2 pi i/3} (k 2)
-        if wr >= 0.0 and abs(wi) * 0.5773502691896258 <= wr:
-            return 0, v
-        return (1 if wi > 0.0 else 2), v
-    k = 0
-    for it in range(MAX_ITER):
-        dmin = 1e300
-        k = 0
-        for j in range(nr):
-            dx = zr - tre[j]
-            dy = zi - tim[j]
-            d = dx * dx + dy * dy
-            if d < dmin:
-                dmin = d
-                k = j
-        if dmin < EPS * EPS:
-            break
-        if dmin < 1.0:
-            v += 0.5 * np.log(dmin / (EPS * EPS)) * inv_log
-        else:
-            v += 1.0
-        sre = 0.0
-        sim = 0.0
-        for j in range(nr):
-            ure = rs[j] * zr - rre[j]
-            uim = rs[j] * zi - rim[j]
-            q = rs[j] / (ure * ure + uim * uim + 1e-300)
-            sre += q * ure
-            sim -= q * uim
-        q = 1.0 / (sre * sre + sim * sim + 1e-300)
-        zr -= q * sre
-        zi += q * sim
-    return k, v
-
-
-@njit(nogil=True, fastmath=True, cache=True)
-def newton_frame(scale, rot, rre, rim, rs, luts, offset, cubic, out):
-    """
-    One frame into out (H, W, 3) float32 BGR. The point at p (pixels from the
-    centre, y up) is z = scale e^{i rot} p. Every pixel corner is sampled and
-    coloured (lut of its root at 1 - exp(-(v - offset) / GLOW_SCALE)); a pixel
-    whose four corners agree (same root, colours within AA_TOL) is their mean,
-    any other gets SS x SS interior samples: adaptive anti-aliasing, so the
-    flat basins cost one sample per pixel and only the boundaries pay for more.
-    """
-    h, w = out.shape[0], out.shape[1]
-    nr = rre.shape[0]
-    cr, sr = np.cos(rot) * scale, np.sin(rot) * scale
-    tre = np.empty(nr)
-    tim = np.empty(nr)
-    for j in range(nr):
-        tre[j] = rre[j] / rs[j]
-        tim[j] = rim[j] / rs[j]
-    corner = np.empty((h + 1, w + 1, 3), np.float32)
-    root = np.empty((h + 1, w + 1), np.int8)
-    for i in range(h + 1):
-        py = 0.5 * h - i
-        for jx in range(w + 1):
-            px = jx - 0.5 * w
-            k, v = sample(
-                cr * px - sr * py, sr * px + cr * py, rre, rim, rs, tre, tim, cubic
-            )
-            v = max(v - offset, 0.0)
-            idx = int((1.0 - np.exp(-v / GLOW_SCALE)) * 255.0)
-            root[i, jx] = k
-            for c in range(3):
-                corner[i, jx, c] = luts[k, idx, c]
-    inv_ss = 1.0 / SS
-    for i in range(h):
-        for jx in range(w):
-            k = root[i, jx]
-            same = (
-                root[i, jx + 1] == k
-                and root[i + 1, jx] == k
-                and root[i + 1, jx + 1] == k
-            )
-            if same:
-                for c in range(3):
-                    lo = min(
-                        corner[i, jx, c],
-                        corner[i, jx + 1, c],
-                        corner[i + 1, jx, c],
-                        corner[i + 1, jx + 1, c],
-                    )
-                    hi = max(
-                        corner[i, jx, c],
-                        corner[i, jx + 1, c],
-                        corner[i + 1, jx, c],
-                        corner[i + 1, jx + 1, c],
-                    )
-                    if hi - lo > AA_TOL:
-                        same = False
-            if same:
-                for c in range(3):
-                    out[i, jx, c] = 0.25 * (
-                        corner[i, jx, c]
-                        + corner[i, jx + 1, c]
-                        + corner[i + 1, jx, c]
-                        + corner[i + 1, jx + 1, c]
-                    )
-                continue
-            br = 0.0
-            bg = 0.0
-            bb = 0.0
-            for a in range(SS):
-                for b in range(SS):
-                    px = jx + (b + 0.5) * inv_ss - 0.5 * w
-                    py = 0.5 * h - i - (a + 0.5) * inv_ss
-                    k, v = sample(
-                        cr * px - sr * py,
-                        sr * px + cr * py,
-                        rre,
-                        rim,
-                        rs,
-                        tre,
-                        tim,
-                        cubic,
-                    )
-                    v = max(v - offset, 0.0)
-                    idx = int((1.0 - np.exp(-v / GLOW_SCALE)) * 255.0)
-                    br += luts[k, idx, 0]
-                    bg += luts[k, idx, 1]
-                    bb += luts[k, idx, 2]
-            n = SS * SS
-            out[i, jx, 0] = br / n
-            out[i, jx, 1] = bg / n
-            out[i, jx, 2] = bb / n
-
-
-def story(tau, swoop_sign):
-    """
-    The state at time tau (s): roots (re, im) and weights s (root j sits at
-    r_j / s_j), the view's complex units per pixel, its rotation, the zoom depth.
-    """
-    angles = np.pi / 2 + 2 * np.pi * np.arange(3) / 3
-    a = 1 - (1 - min(tau / ARRIVE, 1.0)) ** LANDING
-    distance = np.exp(np.log(FAR) * (1 - a))  # log-distance eases from FAR to 1
-    angles[0] += swoop_sign * SWOOP * (1 - a) ** 2
-    rre, rim = np.cos(angles), np.sin(angles)
-    rs = np.array([1.0 / distance, 1.0, 1.0])
-    z = smoothstep((tau - ZOOM_START) / (ZOOM_END - ZOOM_START))
-    depth = 1.5 ** (GENERATIONS / 2 * z)
-    scale = 2 * HALF_WIDTH / WIDTH / depth
-    return rre, rim, rs, scale, swoop_sign * TWIST * z, depth
-
-
-def add_marker(image, x, y, colour, strength):
-    """A root: a soft halo in its colour round a white core, at pixel (x, y)."""
-    r = int(6 * DOT)
-    x0, x1 = max(0, int(x) - r), min(WIDTH, int(x) + r + 1)
-    y0, y1 = max(0, int(y) - r), min(HEIGHT, int(y) + r + 1)
-    if x0 >= x1 or y0 >= y1:
-        return
-    yy, xx = np.mgrid[y0:y1, x0:x1]
-    d2 = (xx - x) ** 2 + (yy - y) ** 2
-    halo = np.exp(-d2 / (2 * (2.2 * DOT) ** 2))[..., None] * colour * 0.9
-    core = np.exp(-((np.sqrt(d2) / DOT) ** 6))[..., None] * 255.0
-    patch = image[y0:y1, x0:x1]
-    patch += strength * (halo + core - patch * np.minimum(1, core / 255.0))
-
-
-def soundtrack(swoop_sign, style_name, rng):
-    """
-    Cinematic swell with a struck voice on top, every onset from the closed
-    forms of the picture (one-shot: circular=False, master(loop=False)).
-
-    Two roots: a bare fifth (root and fifth, strings) from the first frame,
-    struck once at t = 0. The approach: a note each time the third root's
-    distance FAR^((1-u)^LANDING) shrinks by APPROACH_STEP, climbing the scale
-    (a step every two notes) to the chord's third an octave up, panned by the root's x on screen and louder as it nears,
-    then a riser into ARRIVE, where the third lands: struck triad, strings and
-    choir complete the chord. The zoom: one note per bead generation (depth
-    crossing (3/2)^(g/2), solved through the smoothstep), each a Shepard tone
-    (the same pitch class in several octaves, weighted by a bell curve round
-    SHEPARD_CENTRE), stepping up the scale every generation: a climb that never
-    gets higher, like beads that never get smaller. Louder where the zoom is
-    fastest, panned round the twist. A low root and a high chord close it at
-    ZOOM_END and ring out.
+    Every lone electron strikes a clear note when it lands: the scale degree
+    is the stripe it lands in, n = round((x - CX) / FRINGE) (the centre stripe
+    is the root, outer stripes higher to the right and lower to the left),
+    panned by x. As each lone packet passes the slits a soft fifth an octave
+    down sounds, one note per slit. The continuous beam swells a choir chord
+    ("u") with its amplitude; its hits ring quietly, at most one per NOTE_GAP
+    (shrinking as the rate grows), with the same stripe-to-pitch rule. When
+    the hits stop, the home chord is struck and rings over the rest.
     """
     style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
-    root = scale.root
-    third = scale.note(2) - root  # a major or minor third in every catalogue mode
     track = audio.silence(DURATION)
     kw = dict(circular=False)
 
-    def hz(midi):
-        return float(audio.midi_to_hz(midi))
+    def stripe(xi):
+        return int(np.clip(round((xi - CX) / FRINGE), -5, 5))
 
-    def strike(midi, velocity, when, x=0.0):
-        velocity = round(float(np.clip(velocity, 0.05, 1.0)) * 20) / 20  # cache hits
-        note = style.voice(hz(midi), velocity)
-        audio.add(track, audio.pan(note, float(np.clip(x, -1, 1))), when, **kw)
+    through = (Y_WALL - Y_GUN) / GROUP_SPEED
+    for e in EMISSIONS:
+        when = e + through
+        if 0 <= when < DURATION:
+            for degree, side in ((0, -0.35), (4, 0.35)):
+                note = style.bass(scale.hz(degree, -1), 0.2)
+                audio.add(track, audio.pan(note, side), when, **kw)
 
-    def screen_x(tau):
-        rre, rim, rs, scale_, rot, _ = story(tau, swoop_sign)
-        z = complex(rre[0], rim[0]) / rs[0] * np.exp(-1j * rot) / scale_
-        return z.real / (WIDTH / 2)
+    for when, xi in zip(times[is_lone], x[is_lone]):
+        note = style.voice(scale.hz(stripe(xi)), 0.6)
+        audio.add(track, audio.pan(note, 0.8 * (xi - CX) / CX), when, **kw)
 
-    # Two roots: the open fifth, the easy case.
-    for semitones, vel in ((-12, 0.4), (-5, 0.3)):
-        voice = audio.strings(hz(root + semitones), ARRIVE + 0.6, vel, 0.25, 1.5, 0.35)
-        audio.add(track, voice, 0.0, **kw)
-    strike(root - 12, 0.55, 0.02, -0.35)
-    strike(root + 7 - 12, 0.5, 0.02, 0.35)
+    order = np.argsort(times)
+    beam = order[~is_lone[order]]
+    start, end = times[beam].min(), times[beam].max()
+    last = -1.0
+    for i in beam:
+        when = times[i]
+        progress = smoothstep((when - start) / (end - start - 1.0))
+        if when - last < NOTE_GAP[0] + (NOTE_GAP[1] - NOTE_GAP[0]) * progress:
+            continue
+        last = when
+        note = style.voice(scale.hz(stripe(x[i]), 1), 0.18 + 0.17 * progress)
+        audio.add(track, audio.pan(note, 0.8 * (x[i] - CX) / CX), when, **kw)
 
-    # The approach: log-distance log(FAR) (1-u)^LANDING crosses each step.
-    levels = np.log(FAR) - np.log(APPROACH_STEP) * np.arange(1, 100)
-    levels = levels[levels > 0.05]
-    times = ARRIVE * (1 - (levels / np.log(FAR)) ** (1 / LANDING))
-    n = len(times)
-    for k, when in enumerate(times):
-        # climbing a step every two notes to the third, an octave up, at the landing
-        degree = 2 + len(scale.steps) - (n - k) // 2
-        distance = np.exp(levels[k])
-        strike(scale.note(degree), 0.25 + 0.35 / distance**0.5, when, screen_x(when))
-    audio.add(track, audio.riser(RISER, rng, 220.0, 1800.0, 0.18), ARRIVE - RISER, **kw)
-    logger.info(f"{n} approach notes, {times[0]:.2f}-{times[-1]:.2f} s")
-
-    # The landing: the third completes the chord.
-    for i, semitones in enumerate((0, 7, third + 12, 12 + 7)):
-        strike(
-            root + semitones, 0.6 - 0.07 * i, ARRIVE + 0.07 * i, 0.5 * (i % 2) - 0.25
+    held = BEAM_OFF[1] - BEAM_ON
+    for degree in (0, 2, 4):
+        voice = audio.choir(
+            scale.hz(degree, -1), held, 0.5, attack=BEAM_FULL - BEAM_ON, vowel="u"
         )
-    strike(root - 24, 0.6, ARRIVE)
-    hold = DURATION - ARRIVE
-    for semitones in (-12, -5, third):
-        voice = audio.strings(hz(root + semitones), hold - 0.8, 0.4, 0.4, 1.6, 0.45)
-        audio.add(track, voice, ARRIVE, **kw)
-    for semitones in (0, 7, third + 12):
-        voice = audio.choir(hz(root + semitones), hold - 2.0, 0.22, 2.5, 1.6, "a")
-        audio.add(track, voice, ARRIVE + 0.3, **kw)
-
-    # The zoom: one Shepard step per bead generation.
-    grid = np.linspace(0.0, 1.0, 4001)
-    eased = smoothstep(grid)
-    span = ZOOM_END - ZOOM_START
-    for g in range(1, GENERATIONS + 1):
-        when = ZOOM_START + span * float(np.interp(g / GENERATIONS, eased, grid))
-        u = (when - ZOOM_START) / span
-        speed = 6 * u * (1 - u)  # d(smoothstep)/du, 1.5 at the middle
-        pitch_class = scale.note(g)
-        x = 0.6 * np.sin(2 * np.pi * g / 6)
-        for octave in range(-3, 4):
-            midi = pitch_class + 12 * octave
-            weight = np.exp(-0.5 * ((midi - SHEPARD_CENTRE) / SHEPARD_WIDTH) ** 2)
-            if weight > 0.12 and 40 <= midi <= 96:
-                strike(midi, (0.2 + 0.25 * speed) * weight, when, x)
-
-    # The end: home, ringing out over the rest.
-    strike(root - 24, 0.65, ZOOM_END)
-    for i, semitones in enumerate((12, 12 + third, 19, 24)):
-        strike(root + semitones, 0.45, ZOOM_END + 0.09 * i, 0.4 * (i % 2) - 0.2)
+        audio.add(track, voice, BEAM_ON, **kw)
+    ending = HITS_END
+    for j, degree in enumerate((0, 2, 4, 7)):
+        audio.add(track, style.voice(scale.hz(degree), 0.5), ending + 0.07 * j, **kw)
+    audio.add(track, style.bass(scale.hz(0, -2), 0.6), ending, **kw)
     return audio.master(style.room(track, rng, circular=False), loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Newton's method on p(z) = (z - r0)(z - r1)(z - r2), the cube roots of unity
-    turned so that r0 points up. Each pixel (2x2 supersampled) is iterated
-    z <- z - p/p' (written as z - 1 / sum 1/(z - r_j)) until it is within EPS
-    of a root, and coloured by that root: dark where it converges at once,
-    glowing where it takes many steps, i.e. along the basin boundaries.
+    A double slit in 2D, a closed-form Huygens model evaluated per pixel on the
+    GPU. A packet emitted at time e is psi_in = T(x) G(y - Y_GUN - v_g tau)
+    exp(i(k (y - Y_GUN) - w tau)) above the wall (tau = t - e, G a Gaussian of
+    sd PACKET_SD, T a Gaussian of sd BEAM_WIDTH). Below the wall it is a sum over
+    POINTS_PER_SLIT point sources across each slit: a_m cos(theta_m)
+    / sqrt(r_m + R0) G(P + r_m - v_g tau) exp(i(k (P + r_m) - w tau)), P the gun-
+    to-wall distance, so every source is a delayed copy of the incoming wave
+    and the slits' single-slit envelope and two-slit fringes both come out of
+    the sum. Phase speed w/k = v_g/2 (de Broglie). Shown as
+    |psi|^2 (0.55 + 0.45 cos arg psi): the probability density with its crests.
 
-    Act 1 (0-5 s): r0 starts FAR = 30 units away and its log-distance eases
-    down to 1 (ease-out, power LANDING), curling SWOOP rad round on the way (direction from
-    the seed). With r0 far, only r1 and r2 matter and the boundary is their
-    perpendicular bisector, Cayley's straight line; as r0 nears, beads of its
-    basin grow along the line. The receding root enters through a weight s:
-    sum s / (s z - r) is continuous as s -> 0.
-    Act 2 (5.8-13.4 s): a smoothstep-in-log zoom into z = 0, the double
-    critical point of z^3 - 1, where N(z) ~ 1/(3z^2): the picture there is the
-    far field inverted, self-similar under zooming by sqrt(3/2), so the zoom
-    passes GENERATIONS bead generations (depth (3/2)^12 ~ 130) while the view
-    turns TWIST. A pixel near 0 takes one more step per generation, so that
-    baseline is subtracted to keep the glow the same at every depth. Then the
-    image rests and fades out.
-
-    Each frame is a pure function of t, computed by a numba kernel (nogil),
-    frames in parallel on the thread pool. The seed picks which colour goes to
-    which root and which way the third root curls in.
+    Ten lone packets (EMISSIONS) each collapse COLLAPSE s after reaching the
+    screen: the wave fades and a dot appears. From BEAM_ON a continuous beam
+    (the same sum with G replaced by a soft front) fades in; its hits arrive at
+    a rate growing exponentially to RATE_MAX. Every hit's x is drawn from the
+    steady |psi|^2 on the screen line (Born's rule) and its y uniformly on the
+    plate, all up front from settings.rng; a dot is splatted with a decaying
+    white flash, and lone hits also flash on the screen line. Frames render in
+    order on the GPU.
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
-    swoop_sign = float(rng.choice([-1.0, 1.0]))
-    order = rng.permutation(3)
-    colours = [PALETTE[k] for k in order]
-    luts = np.stack([root_lut(c) for c in colours])
-    marker_bgr = [luts[k, 166] for k in range(3)]  # the root's own colour
+    device = select_device()
+    f32 = dict(device=device, dtype=torch.float32)
+
+    times, hx, hy, is_lone = hits(rng)
+    logger.info(f"{len(times)} electrons ({is_lone.sum()} lone)")
+
+    k = 2 * np.pi / WAVELENGTH
+    omega = k * PHASE_SPEED
+    path_wall = Y_WALL - Y_GUN
+
+    # Incoming region, rows [0, Y_WALL).
+    n_in = int(Y_WALL)
+    yy = torch.arange(n_in, **f32)[:, None] + 0.5
+    xx = torch.arange(WIDTH, **f32)[None] + 0.5
+    profile = torch.exp(-0.5 * ((xx - CX) / BEAM_WIDTH) ** 2)
+    gun_mask = torch.clamp((yy - Y_GUN + 25) / 40, 0, 1)
+    in_path = (yy - Y_GUN).expand(n_in, WIDTH)
+    in_amp = profile * gun_mask * torch.exp(1j * k * in_path)
+
+    # Outgoing region, rows [Y_WALL, Y_SCREEN).
+    n_out = int(Y_SCREEN - Y_WALL)
+    yo = torch.arange(n_out, **f32)[:, None] + 0.5
+    src_x, src_w = slit_sources()
+    out_path, out_amp = [], []
+    for x0, w in zip(src_x, src_w):
+        r = torch.sqrt((xx - x0) ** 2 + yo**2)
+        tilt = yo / r
+        out_path.append(path_wall + r)
+        amp = w * tilt / torch.sqrt((r + R0) / WAVELENGTH)
+        out_amp.append(amp * torch.exp(1j * k * (path_wall + r)))
+    out_path = torch.stack(out_path)  # (S, n_out, W)
+    out_amp = torch.stack(out_amp).to(torch.complex64)
+
+    # Brightness at the screen matches the incoming peak.
+    steady = out_amp.sum(0)
+    out_amp /= steady[-40:, int(CX) - 60 : int(CX) + 60].abs().mean()
+
+    wave_lut = torch.tensor(palette_lut(WAVE_PALETTE, 1024), **f32)
+    dot_rgb = torch.tensor(DOT, **f32)
+    flash_rgb = torch.tensor(FLASH, **f32)
+    soft = gaussian_kernel(1.1, device)
+    lone_kernel = gaussian_kernel(2.6, device)
+
+    # The static set: wall with two gaps, screen line, plate.
+    stage = torch.zeros(HEIGHT, WIDTH, 3, **f32)
+    wall_rows = slice(int(Y_WALL - WALL_HALF), int(Y_WALL + WALL_HALF))
+    stage[wall_rows] = torch.tensor(WALL_RGB, **f32)
+    for side in (-1, 1):
+        left = int(round(CX + side * SLIT_GAP / 2 - SLIT_WIDTH / 2))
+        stage[wall_rows, left : left + int(SLIT_WIDTH)] = 0
+    stage[int(PLATE[0]) : int(PLATE[1])] = torch.tensor(PLATE_RGB, **f32)
+    stage[int(Y_SCREEN) : int(Y_SCREEN) + 2] = torch.tensor(SCREEN_RGB, **f32)
+    open_air = torch.ones(HEIGHT, WIDTH, 1, **f32)
+    open_air[wall_rows] = (stage[wall_rows].sum(-1, keepdim=True) == 0).float()
+    wall = stage * (1 - open_air)
+    gun = torch.zeros(HEIGHT, WIDTH, 3, **f32)
+    gun[int(Y_GUN) - 3 : int(Y_GUN) + 3, int(CX) - 3 : int(CX) + 3] = 1.0
+    gun = 255 * wide_blur(gun, 14, 2) * torch.tensor([0.6, 0.45, 1.0], **f32) * 40
+
+    t_hit = torch.tensor(times, **f32)
+    px = torch.tensor(hx, **f32)
+    py = torch.tensor(hy, **f32)
+    lone = torch.tensor(is_lone, device=device)
+    travel = (Y_SCREEN - Y_GUN) / GROUP_SPEED
+
+    steady = out_amp.sum(0)
+    out_path_max = float(out_path.max())
+    top = int(Y_SCREEN) - 40  # the dots layer covers rows [top, HEIGHT)
+
+    def packet(tau, front):
+        """The field of one packet (or of the beam with `front`), both regions."""
+        if front and GROUP_SPEED * tau > out_path_max + 8 * FRONT:
+            spin = np.exp(-1j * omega * tau)  # fully on: the steady field
+            return in_amp * spin, steady * spin
+        if front:
+            shape_in = torch.sigmoid((GROUP_SPEED * tau - in_path) / FRONT)
+            shape_out = torch.sigmoid((GROUP_SPEED * tau - out_path) / FRONT)
+        else:
+            shape_in = torch.exp(
+                -0.5 * ((in_path - GROUP_SPEED * tau) / PACKET_SD) ** 2
+            )
+            shape_out = torch.exp(
+                -0.5 * ((out_path - GROUP_SPEED * tau) / PACKET_SD) ** 2
+            )
+        spin = np.exp(-1j * omega * tau)
+        psi_in = in_amp * shape_in * spin
+        psi_out = (out_amp * shape_out).sum(0) * spin
+        return psi_in, psi_out
 
     def render(frame):
-        tau = frame / FPS
-        rre, rim, rs, scale, rot, depth = story(tau, swoop_sign)
-        offset = GLOW_BASE + 2 * np.log(depth) / np.log(1.5)
-        image = np.empty((HEIGHT, WIDTH, 3), np.float32)
-        newton_frame(scale, rot, rre, rim, rs, luts, offset, tau >= ARRIVE, image)
-        for j in range(3):
-            z = complex(rre[j], rim[j]) / rs[j] * np.exp(-1j * rot) / scale
-            add_marker(image, WIDTH / 2 + z.real, HEIGHT / 2 - z.imag, marker_bgr[j], 1)
-        image *= smoothstep((DURATION - tau) / FADE)
+        t = frame / (FRAME_COUNT - 1) * DURATION
+        psi_in = torch.zeros(n_in, WIDTH, dtype=torch.complex64, device=device)
+        psi_out = torch.zeros(n_out, WIDTH, dtype=torch.complex64, device=device)
+
+        for e in EMISSIONS:
+            tau = t - e
+            age = tau - travel
+            if tau < -0.3 or age > 6 * COLLAPSE:
+                continue
+            fade = 1.0 if age < 0 else float(np.exp(-age / COLLAPSE))
+            a, b = packet(tau, False)
+            psi_in += fade * a
+            psi_out += fade * b
+
+        beam = np.clip((t - BEAM_ON) / (BEAM_FULL - BEAM_ON), 0, 1) ** 0.5
+        beam *= 1 - np.clip((t - BEAM_OFF[0]) / (BEAM_OFF[1] - BEAM_OFF[0]), 0, 1)
+        if beam > 0:
+            a, b = packet(t - BEAM_ON, True)
+            psi_in += 0.75 * beam * a
+            psi_out += 0.75 * beam * b
+
+        psi = torch.cat([psi_in, psi_out])
+        mag = psi.abs()
+        density = mag**2 * 0.55 + 0.45 * mag * psi.real
+        light = 1 - torch.exp(-WAVE_GAIN * density.clamp(min=0))
+        index = (light * 1023).long().clamp(0, 1023)
+        wave = wave_lut[index] * 255
+        image = stage.clone()
+        image[: int(Y_SCREEN)] += wave
+        image[: int(Y_SCREEN)] += 0.5 * wide_blur(wave, 10, 4)
+        image += gun
+        image = image * open_air + wall
+
+        # Dots: everything that has landed, flashing as it lands.
+        seen = t_hit <= t
+        if seen.any():
+            age = t - t_hit[seen]
+            is_l = lone[seen]
+            flash = torch.exp(-age / 0.25) * torch.where(is_l, 0.0, 6.0)
+            dots = torch.zeros(HEIGHT - top, WIDTH, 3, **f32)
+            colour = BEAM_DOT * dot_rgb + flash[:, None] * flash_rgb
+            beam_hit = ~is_l
+            splat(dots, px[seen][beam_hit], py[seen][beam_hit] - top, colour[beam_hit])
+            dots = blur(dots, soft)
+            if is_l.any():  # lone electrons: bigger dots, a long flash, a spark
+                a = age[is_l]
+                big = torch.zeros(HEIGHT - top, WIDTH, 3, **f32)
+                flash = 300 * torch.exp(-a / 0.35)
+                colour = LONE_DOT * dot_rgb + flash[:, None] * flash_rgb
+                splat(big, px[seen][is_l], py[seen][is_l] - top, colour)
+                spark = 400 * torch.exp(-a / 0.15)
+                splat(
+                    big,
+                    px[seen][is_l],
+                    torch.full_like(spark, Y_SCREEN - 2 - top),
+                    spark[:, None] * flash_rgb,
+                )
+                dots += blur(big, lone_kernel)
+            glow = wide_blur(dots, 14, 4)
+            light = 1 - torch.exp(-DOT_GAIN * (dots + 1.5 * glow))
+            image[top:] += 255 * light
+
+        image *= float(np.clip((DURATION - t) / FADE, 0, 1))
         return image
 
-    render_frames(settings, render, FRAME_COUNT)
-    style_name = settings.audio_tag if settings.audio_tag in STYLES else STYLE
-    track = soundtrack(swoop_sign, style_name, settings.audio_rng)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
+    tag = settings.audio_tag
+    style = tag if tag in STYLES else STYLE
+    track = soundtrack(style, times, hx, is_lone, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

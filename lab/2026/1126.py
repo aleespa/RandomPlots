@@ -1,371 +1,281 @@
 """
-Random Numbers That Refuse to Touch
+The Star Hidden in an Ellipse
 
-Each thread is one eigenvalue of a random matrix, a 72×72 grid of random numbers
-that slowly changes. At the top only its diagonal is switched on, so the eigenvalues
-are just independent random numbers: they wander, collide and cross freely. Going
-down, the other entries fade in and the eigenvalues start to feel each other.
+Ripples run inwards from the rim of an ellipse, every point moving straight
+along the ellipse's normal at the same speed. Near the middle they crumple into
+folds and sharp cusps, and every cusp slides along one glowing four-pointed
+star. Green is a ripple on its way in, coral is where it has turned inside out.
 
-By the bottom, no two threads touch. They swerve apart at the last moment and keep
-an almost even spacing. This is level repulsion, the heart of random matrix theory:
-Eugene Wigner found it in the energy levels of heavy nuclei, and the same spacings
-turn up in the zeros of the Riemann zeta function and in bus arrivals in Cuernavaca.
+That star is the ellipse's evolute, the curve of its centres of curvature: a
+ripple folds exactly where it has travelled one radius of curvature. Huygens
+invented evolutes in 1673 to build a better pendulum clock. By the four-vertex
+theorem, every smooth closed oval that isn't a circle has an evolute with at
+least four cusps; an ellipse has exactly four.
 
-Every collision strikes a marimba bar, pitched by where it happens. The clatter
-thins to the odd near miss as the threads learn to dodge, a soft chord settles in,
-and the last row of eigenvalues plays itself, each note waiting out the gap to
-its neighbour.
+Listen: every ripple leaves the rim with a soft pluck. The bright ones play a
+bamboo flute, held for exactly as long as their folds live: from the moment
+the cusps are born at the top and bottom points of the star until they meet
+again at its sides.
 
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#randommatrixtheory #eigenvalues #probability #mathart #randomplots
+Made with Python, NumPy & PyTorch. Sound synthesized in NumPy.
+#evolute #differentialgeometry #mathart #generativeart #randomplots
 """
 
 import gc
 
-import cv2
 import numpy as np
+import torch
 from loguru import logger
 
 from common import audio
+from common.gpu import blur, gaussian_kernel, select_device, splat, wide_blur
 from common.image_processing import ImageProcessingSettings
 from common.music import STYLES, Scale
-from common.video import (
-    FPS,
-    HEIGHT,
-    WIDTH,
-    frame_count,
-    hex_to_bgr,
-    palette_lut,
-    render_frames,
-    smoothstep,
-)
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
 
-DURATION = 15.0  # seconds, one-shot
+DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The matrices -------------------------------------------------------------------
-N = 72  # levels
-SIGMA_D = 0.8  # spread of the independent (diagonal) levels
-EPS = 0.45  # how far the free levels wander: M0 + EPS (M1 cos θ + M2 sin θ)
-EPS_G = 1.2  # the same for the coupled matrix, whose levels move less
-TURNS = 1.1  # turns of θ from the top of the screen to the bottom
-U_ON, U_FULL = 0.22, 0.78  # coupling starts / is full at these fractions of the height
-G_MIN = 0.01  # the first notch of the mixing angle, as a fraction of 90°
+# --- Geometry (pixels; x right, y up, origin at the centre of the ellipse) ----------
+SEMI_X, SEMI_Y = 430.0, 600.0  # semi-axes: the major axis is vertical
+CENTRE = (WIDTH / 2, HEIGHT / 2)
+EMISSIONS = 45  # ripples per loop: three a second
+SPEED = 165.0  # px/s along the normals
+REACH = 1400.0  # px travelled before a ripple has faded away
+STRONG = 6  # bright ripples per loop
+STRONG_GAP = 6  # at least this many emissions between two bright ones
+POINTS = 12288  # points per ripple, uniform in arclength of the rim
 
-# --- Layout & time --------------------------------------------------------------------
-Y_TOP, Y_BOTTOM = 150, 1790  # px: the drawing area
-X_LEFT, X_RIGHT = 40, WIDTH - 40
-LAMBDA_MAX = 2.25  # |λ| mapped to the margins
-T_PEN = 13.3  # s: the pen reaches the bottom
-FADE = 0.4  # s fade at the end
-SS = 2  # supersampling of the static drawing
+# --- Look ---------------------------------------------------------------------------
+BACKGROUND = "#040908"
+BEFORE, AFTER = "#3fe0a8", "#ff8a7a"  # jade until a point focuses, coral after
+FOLD_WIDTH = 0.12  # |J| over which the colour turns at a fold
+RIM_LIGHT = 1.0
+FOLD_BOOST, FOLD_CAP = 0.35, 3.0  # extra light near folds: min(cap, |J|^-boost)
+STAR_LIGHT = 0.12  # the evolute, always faintly there
+SPARK_LIGHT, SPARK_TRAIL = (
+    2.5,
+    45.0,
+)  # cusp sparks and their trail along the star (px of d)
+EXPOSURE, GAMMA = 1.3, 0.75
+SOFT = 0.7
+GLOWS = ((6.0, 2, 0.18), (30.0, 6, 0.10))  # (sigma px, shrink, gain)
+FADE_IN = 60.0  # px: a ripple brightens as it leaves the rim
+FADE_OUT = 0.5  # last fraction of REACH over which it dims away
 
-# --- Collisions ----------------------------------------------------------------------
-TOUCH = 0.12  # a closest approach under this many local spacings is a touch
-CLOSE = 0.45  # ... and under this, once coupled, a close call (sound only)
-U_CLOSE = 0.6  # close calls are heard below this height
-FLASH = 0.55  # s of afterglow for a touch
-
-# --- Look -------------------------------------------------------------------------
-BACKGROUND = "#05070d"
-PALETTE = ["#2f6bff", "#6fc3e8", "#f3eedb", "#ffb94a", "#ff6a3d"]  # by position
-BEAD = hex_to_bgr("#fff4dc")
-SPARK = np.array(hex_to_bgr("#fffaf0"), np.float32)
-LINE_W = 1.6  # px
-
-# --- Sound ----------------------------------------------------------------------------
+# --- Sound --------------------------------------------------------------------------
 STYLE = (
-    "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one overrides it
+    "bamboo_flute"  # common.music.STYLES; an --audio-only tag naming one overrides it
 )
-NOTE_GAP = 0.13  # s: at most one touch note per gap
-CLOSE_GAP = 0.4  # s: ... and one close-call note
-ROLL = 9  # central levels of the last row played as the closing roll
+MELODY = (4, 2, 3, 0, 1, -1, 2, 0)  # scale degrees, walked by the bright ripples
 
 
-def gue(rng):
-    """A complex Hermitian Gaussian matrix with E|H_ij|^2 = 1/N (spectrum ~ [-2, 2])."""
-    x = (rng.standard_normal((N, N)) + 1j * rng.standard_normal((N, N))) / np.sqrt(2)
-    return (x + x.conj().T) / np.sqrt(2 * N)
+def _rgb(colour: str) -> np.ndarray:
+    return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
 
 
-def mixing(u):
+def rim():
     """
-    The mixing angle φ(u): 0 above U_ON, then (π/2) G_MIN^(1 - w), w eased from
-    0 to 1 by U_FULL, so the coupling sin φ grows geometrically and lands
-    smoothly on a pure random matrix.
+    POINTS points of the ellipse, uniform in arclength: position, outward unit
+    normal, signed radius of curvature, and the angle parameter theta.
     """
-    w = smoothstep((np.asarray(u, float) - U_ON) / (U_FULL - U_ON))
-    phi = 0.5 * np.pi * G_MIN ** (1.0 - w)
-    return np.where(np.asarray(u) < U_ON, 0.0, phi)
-
-
-def pen_u(t):
-    """Fraction of the height drawn at time t: steady, easing into the bottom."""
-    x = np.clip(np.asarray(t, float) / T_PEN, 0.0, 1.0)
-    return 0.06 + 0.94 * (1.0 - (1.0 - x) ** 1.6)
-
-
-def pen_time(u):
-    """Inverse of pen_u (u below its start maps to 0)."""
-    x = np.clip((np.asarray(u, float) - 0.06) / 0.94, 0.0, 1.0)
-    return T_PEN * (1.0 - (1.0 - x) ** (1 / 1.6))
-
-
-def spectra(rng, rows):
-    """Sorted eigenvalues of H(u) for the given heights u: shape (len(rows), N)."""
-    diag = [SIGMA_D * rng.standard_normal(N) for _ in range(3)]
-    full = [gue(rng) for _ in range(3)]
-    norm, norm_g = np.sqrt(1 + EPS**2), np.sqrt(1 + EPS_G**2)
-    out = np.empty((len(rows), N))
-    for k, u in enumerate(rows):
-        theta = 2 * np.pi * TURNS * u
-        c, s = np.cos(theta), np.sin(theta)
-        d = (diag[0] + EPS * (c * diag[1] + s * diag[2])) / norm
-        f = (full[0] + EPS_G * (c * full[1] + s * full[2])) / norm_g
-        phi = float(mixing(u))
-        out[k] = np.linalg.eigvalsh(np.cos(phi) * np.diag(d) + np.sin(phi) * f)
-    return out
-
-
-def touches(lam, limit=TOUCH):
-    """
-    Closest approaches of neighbouring levels: local minima in u of the gap,
-    in units of the local mean spacing (the mean of the 7 surrounding gaps).
-    Returns arrays (row index, pair index, normalised gap) with gap < limit.
-    """
-    gaps = np.diff(lam, axis=1)  # (rows, N - 1)
-    pad = np.pad(gaps, ((0, 0), (3, 3)), mode="edge")
-    local = np.mean([pad[:, k : k + N - 1] for k in range(7)], axis=0)
-    s = gaps / local
-    minimum = (s[1:-1] <= s[:-2]) & (s[1:-1] < s[2:]) & (s[1:-1] < limit)
-    r, i = np.nonzero(minimum)
-    return r + 1, i, s[r + 1, i]
-
-
-def lam_to_x(lam):
-    return X_LEFT + (X_RIGHT - X_LEFT) * (np.asarray(lam) + LAMBDA_MAX) / (
-        2 * LAMBDA_MAX
+    theta = np.linspace(0.0, 2 * np.pi, 200_001)
+    speed = np.hypot(SEMI_X * np.sin(theta), SEMI_Y * np.cos(theta))
+    arc = np.concatenate([[0.0], np.cumsum(0.5 * (speed[1:] + speed[:-1]))])
+    arc *= 2 * np.pi / 200_000
+    perimeter = arc[-1]
+    s = (np.arange(POINTS) + 0.5) * perimeter / POINTS
+    th = np.interp(s, arc, theta)
+    pos = np.stack([SEMI_X * np.cos(th), SEMI_Y * np.sin(th)], 1)
+    normal = np.stack([SEMI_Y * np.cos(th), SEMI_X * np.sin(th)], 1)
+    normal /= np.linalg.norm(normal, axis=1, keepdims=True)
+    rho = (SEMI_X**2 * np.sin(th) ** 2 + SEMI_Y**2 * np.cos(th) ** 2) ** 1.5 / (
+        SEMI_X * SEMI_Y
     )
+    return pos, normal, rho, th, perimeter
 
 
-def soundtrack(lam, rows, events, style_name, rng):
+def evolute():
     """
-    One-shot. Touches (closest approaches under TOUCH spacings) in the order the
-    pen reaches them strike the style's voice, at most one per NOTE_GAP s: pitch
-    from the position (left low, right high, scale degrees -4 .. 9), louder the
-    closer the touch, panned by x. They are dense while the levels are free and
-    thin out as the coupling grows. Below U_CLOSE, close calls (closest
-    approaches between TOUCH and CLOSE spacings, the swerves of repelled
-    levels) strike softer notes, at most one per CLOSE_GAP s. A soft pad on the
-    home chord swells in with the coupling. When the pen lands, the ROLL central levels of the last row
-    are struck left to right with onsets proportional to their positions, so
-    the rhythm is their (repelled, near-even) spacing, over a bass note.
+    POINTS points of the evolute P - rho N, uniform in its own arclength, with
+    the radius of curvature rho of the rim point each one belongs to.
+    """
+    theta = np.linspace(0.0, 2 * np.pi, 200_001)
+    a2s, b2c = SEMI_X**2 * np.sin(theta) ** 2, SEMI_Y**2 * np.cos(theta) ** 2
+    rho = (a2s + b2c) ** 1.5 / (SEMI_X * SEMI_Y)
+    c = SEMI_Y**2 - SEMI_X**2
+    ex = -c / SEMI_X * np.cos(theta) ** 3  # the ellipse's evolute (an "astroid")
+    ey = c / SEMI_Y * np.sin(theta) ** 3
+    arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(ex), np.diff(ey)))])
+    s = (np.arange(POINTS) + 0.5) * arc[-1] / POINTS
+    th = np.interp(s, arc, theta)
+    pts = np.stack([np.interp(th, theta, ex), np.interp(th, theta, ey)], 1)
+    return pts, np.interp(th, theta, rho), arc[-1]
+
+
+def ripple_amplitudes(rng):
+    """Weak ripples with a little variety, and STRONG bright ones spread round the loop."""
+    amp = rng.uniform(0.25, 0.45, EMISSIONS)
+    while True:
+        strong = np.sort(rng.choice(EMISSIONS, STRONG, replace=False))
+        gaps = np.diff(np.r_[strong, strong[0] + EMISSIONS])
+        if gaps.min() >= STRONG_GAP:
+            break
+    amp[strong] = rng.uniform(1.2, 1.4, STRONG)
+    return amp, strong
+
+
+def soundtrack(amp, strong, style_name, rng):
+    """
+    Bamboo flute over plucked drops; a loop, so every tail wraps.
+
+    Ripple e leaves the rim at e * DURATION / EMISSIONS: a soft high pluck,
+    velocity from its amplitude, panned alternately. A ripple travelled d
+    folds where d equals the local radius of curvature, so its cusps are born
+    at d = rho_min = SEMI_X^2 / SEMI_Y (the star's top and bottom tips) and
+    die at d = rho_max = SEMI_Y^2 / SEMI_X (its side tips). Each bright ripple
+    holds a flute note over exactly that span, pitched by MELODY. A quiet low
+    pad on the root and fifth keeps the room breathing.
     """
     style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
     track = audio.silence(DURATION)
-    kw = dict(circular=False)
+    period = DURATION / EMISSIONS
+    rho_min, rho_max = SEMI_X**2 / SEMI_Y, SEMI_Y**2 / SEMI_X
+    born, held = rho_min / SPEED, (rho_max - rho_min) / SPEED
 
-    when, xs, s = events
-    last = -1.0
-    notes = 0
-    for k in np.argsort(when):
-        if when[k] - last < NOTE_GAP or when[k] > T_PEN:
-            continue
-        last = when[k]
-        pos = float(np.clip(xs[k] / LAMBDA_MAX, -1, 1))
-        degree = int(round(-4 + 13 * (pos + 1) / 2))
-        velocity = 0.2 + 0.4 * (1 - s[k] / TOUCH)
-        note = audio.pan(style.voice(scale.hz(degree), velocity), 0.7 * pos)
-        audio.add(track, note, float(when[k]), **kw)
-        notes += 1
+    for e in range(EMISSIONS):
+        degree = 7 + (e * 3) % 5
+        drop = audio.pluck(scale.hz(degree), 0.15 + 0.1 * float(amp[e]), 1.5)
+        side = 0.45 if e % 2 else -0.45
+        audio.add(track, audio.pan(audio.lowpass(drop, 3500.0), side), e * period)
 
-    r, i, s = touches(lam, CLOSE)
-    keep = (rows[r] >= U_CLOSE) & (s >= TOUCH)
-    r, i, s = r[keep], i[keep], s[keep]
-    close_when = pen_time(rows[r])
-    close_lam = 0.5 * (lam[r, i] + lam[r, i + 1])
-    last = -1.0
-    calls = 0
-    for k in np.argsort(close_when):
-        if close_when[k] - last < CLOSE_GAP or close_when[k] > T_PEN:
-            continue
-        last = close_when[k]
-        pos = float(np.clip(close_lam[k] / LAMBDA_MAX, -1, 1))
-        degree = int(round(-4 + 13 * (pos + 1) / 2))
-        velocity = 0.12 + 0.2 * (1 - s[k] / CLOSE)
-        note = audio.pan(style.voice(scale.hz(degree), velocity), 0.7 * pos)
-        audio.add(track, note, float(close_when[k]), **kw)
-        calls += 1
+    for k, e in enumerate(strong):
+        degree = MELODY[k % len(MELODY)]
+        if style.voice is audio.flute:
+            note = audio.flute(scale.hz(degree), 0.55, held)
+        else:
+            note = style.voice(scale.hz(degree), 0.55)
+        audio.add(track, audio.pan(note, 0.0), e * period + born)
 
-    on = float(pen_time(U_ON + 0.25 * (U_FULL - U_ON)))
-    length = DURATION - on
-    for degree in (0, 2, 4):
-        voice = audio.pad(scale.hz(degree, -1), length, 0.16, 4.0, 1.5, 0.3)
-        audio.add(track, voice, on, **kw)
+    for semitones in (0, 7):
+        hz = float(audio.midi_to_hz(scale.root - 24 + semitones))
+        audio.add(track, audio.pad(hz, DURATION, 0.16, 2.0, 2.0, 0.3), 0.0)
 
-    last_row = lam[-1]
-    centre = N // 2 - ROLL // 2
-    roll = last_row[centre : centre + ROLL]
-    land = T_PEN + 0.1
-    span = 1.4  # s for the whole roll
-    onsets = land + span * (roll - roll[0]) / (roll[-1] - roll[0])
-    for j, (at, value) in enumerate(zip(onsets, roll)):
-        pos = float(value / LAMBDA_MAX)
-        note = audio.pan(style.voice(scale.hz(j), 0.45), 0.7 * pos)
-        audio.add(track, note, float(at), **kw)
-    audio.add(track, style.bass(scale.hz(0, -2), 0.55, length=3.0), land, **kw)
     logger.info(
-        f"Soundtrack: {style_name}, root MIDI {scale.root}, {notes} touch notes, "
-        f"{calls} close calls, "
-        f"roll gaps {np.round(np.diff(onsets), 3)}"
+        f"Soundtrack: {style_name}, root MIDI {scale.root}, flute held {held:.2f} s "
+        f"from {born:.2f} s after each bright ripple"
     )
-    return audio.master(style.room(track, rng, circular=False), loop=False)
+    return audio.master(style.room(track, rng))
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Level dynamics of a random Hermitian matrix with a coupling switched on.
+    Parallel curves (wavefronts) of an ellipse, a loop.
 
-    H(u) = cos φ(u) D(u) + sin φ(u) G(u), where u in [0, 1] is the height on screen,
-    D(u) is diagonal (N independent N(0, SIGMA_D²) levels) and G(u) a GUE matrix
-    (E|G_ij|² = 1/N, semicircle on [-2, 2]); both wander as M0 + EPS (M1 cos θ +
-    M2 sin θ), normalised, with θ = 2π TURNS u, so each stays in its ensemble.
-    φ(u) = 0 above U_ON (the levels are independent and cross), then grows from
-    (π/2) G_MIN geometrically to π/2 at U_FULL (`mixing`; Wigner-Dyson
-    repulsion, P(s) ~ s²). The
-    sorted eigenvalues (eigvalsh) are computed once for every output pixel row
-    (seconds) and drawn as polylines, each segment coloured by position, into a
-    static 2x image.
+    The rim is the ellipse (SEMI_X cos th, SEMI_Y sin th), sampled with POINTS
+    points uniform in arclength. A ripple that has travelled d inwards is
+    X = P - d N (N the outward unit normal): the parallel curve at distance
+    d, i.e. the wavefront of light leaving the rim along its normals. Its
+    length element is J = 1 - d / rho times the rim's (rho the radius of
+    curvature), so it folds into cusps where d = rho, and those cusps lie on
+    the evolute P - rho N, the four-cusped "astroid" of the ellipse.
 
-    A frame is a pure function of t: the pen height pen_u(t) reveals the static
-    drawing above it (a soft edge and a fading "wet ink" glow just behind it),
-    beads sit at the interpolated eigenvalues on the pen row with a blurred glow,
-    and every touch (closest approach of neighbours, under TOUCH local mean
-    spacings) the pen has passed in the last FLASH s sparks. Frames render on the
-    thread pool. The posted video and soundtrack use --seed 0 (the default).
+    A ripple leaves the rim every DURATION / EMISSIONS s and moves at SPEED,
+    so ripple e has d = SPEED (tau - e DURATION / EMISSIONS); a ripple lives
+    REACH / SPEED < DURATION s, and emission indices are taken mod EMISSIONS,
+    so the loop closes exactly. `settings.rng` draws each ripple's amplitude
+    and which STRONG ripples are bright (that is all the seed changes).
+
+    Rendering (torch, GPU when available): every live ripple's points are
+    splatted bilinearly with equal weight per unit of rim length, so the
+    brightness of a front is its ray density, proportional to 1 / |J|: the
+    folds blaze on their own and trace the evolute. Colour is jade where
+    J > 0 and coral where J < 0 (the point has passed its centre of
+    curvature), mixed over |J| < FOLD_WIDTH. Near a fold each point is further
+    brightened by min(FOLD_CAP, |J|^-FOLD_BOOST). The evolute itself (closed form
+    (-(a^2-b^2)/b cos^3 th, (a^2-b^2)/a sin^3 th)) is drawn faintly, and each
+    ripple lights the evolute points with rho <= d with an exp(-(d - rho) /
+    SPARK_TRAIL) tail: sparks riding its cusps along the star. A faint rim, two-scale bloom,
+    exponential tone mapping. The soundtrack is `soundtrack`; the posted
+    one used --seed 0 (audio seed 0).
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
+    amp, strong = ripple_amplitudes(rng)
+    logger.info(f"Bright ripples: {strong.tolist()}")
 
-    rows = (np.arange(Y_TOP, Y_BOTTOM + 1) - Y_TOP) / (Y_BOTTOM - Y_TOP)
-    lam = spectra(rng, rows)
-    xs = lam_to_x(lam)
-    ys = Y_TOP + rows * (Y_BOTTOM - Y_TOP)
+    device = select_device()
+    f32 = dict(device=device, dtype=torch.float32)
+    pos, normal, rho, _, perimeter = rim()
+    weight = perimeter / POINTS  # rim length per point: a J = 1 front sums ~1 per px
+    px0 = torch.tensor(CENTRE[0] + pos[:, 0], **f32)
+    py0 = torch.tensor(CENTRE[1] - pos[:, 1], **f32)
+    nx = torch.tensor(normal[:, 0], **f32)
+    ny = torch.tensor(-normal[:, 1], **f32)
+    inv_rho = torch.tensor(1.0 / rho, **f32)
+    before = torch.tensor(_rgb(BEFORE), **f32)
+    after = torch.tensor(_rgb(AFTER), **f32)
+    background = torch.tensor(_rgb(BACKGROUND), **f32)
 
-    r, i, s = touches(lam)
-    ev_time = pen_time(rows[r])
-    ev_lam = 0.5 * (lam[r, i] + lam[r, i + 1])
-    ev_x, ev_y = lam_to_x(ev_lam), ys[r]
-    ev_strength = 1.0 - s / TOUCH
-    logger.info(
-        f"{len(r)} touches; {np.sum(rows[r] < U_ON)} free, "
-        f"{np.sum(rows[r] >= U_FULL)} fully coupled"
+    soft = gaussian_kernel(SOFT, device)
+    rim_canvas = torch.zeros(HEIGHT, WIDTH, 3, **f32)
+    splat(
+        rim_canvas,
+        px0,
+        py0,
+        (RIM_LIGHT * weight) * before.expand(POINTS, 3).contiguous(),
     )
-
-    # The static drawing.
-    bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
-    lut = (palette_lut(PALETTE) * 255)[:, ::-1]
-    big = np.zeros((HEIGHT * SS, WIDTH * SS, 3), np.uint8)
-    shift = 4
-    px = np.round(xs * SS * (1 << shift)).astype(np.int64)
-    py = np.round(ys * SS * (1 << shift)).astype(np.int64)
-    colour_index = np.clip(
-        np.round(255 * (lam + LAMBDA_MAX) / (2 * LAMBDA_MAX)), 0, 255
-    ).astype(int)
-    width = max(1, int(round(LINE_W * SS)))
-    for n in range(N):
-        for k in range(len(rows) - 1):
-            c = tuple(float(v) for v in lut[colour_index[k, n]])
-            cv2.line(
-                big,
-                (int(px[k, n]), int(py[k])),
-                (int(px[k + 1, n]), int(py[k + 1])),
-                c,
-                width,
-                cv2.LINE_AA,
-                shift,
-            )
-    drawing = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-    drawing = drawing.astype(np.float32)
-    top_fade = smoothstep((np.arange(HEIGHT) - Y_TOP + 4) / 70.0).astype(np.float32)
-    drawing *= top_fade[:, None, None]  # the threads emerge from the dark
-    del big
-    y_axis = np.arange(HEIGHT, dtype=np.float32)
+    star, star_rho, star_length = evolute()
+    star_weight = star_length / POINTS
+    sx = torch.tensor(CENTRE[0] + star[:, 0], **f32)
+    sy = torch.tensor(CENTRE[1] - star[:, 1], **f32)
+    star_rho = torch.tensor(star_rho, **f32)
+    white = torch.ones(3, **f32)
+    spark_colour = 0.5 * (before + after) + 0.5 * white
+    splat(
+        rim_canvas,
+        sx,
+        sy,
+        (STAR_LIGHT * star_weight) * spark_colour.expand(POINTS, 3).contiguous(),
+    )
+    canvas = torch.zeros(HEIGHT, WIDTH, 3, **f32)
+    period = DURATION / EMISSIONS
 
     def render(frame):
-        t = frame / (FRAME_COUNT - 1) * DURATION
-        u = float(pen_u(t))
-        pen_y = Y_TOP + u * (Y_BOTTOM - Y_TOP)
-        behind = pen_y - y_axis
-        reveal = np.clip(behind / 4.0 + 0.5, 0.0, 1.0)
-        wet = 1.0 + 0.35 * np.exp(-np.maximum(behind, 0.0) / 90.0) * reveal
-        if t > T_PEN:  # the ink dries over the rest
-            wet = 1.0 + (wet - 1.0) * np.exp(-(t - T_PEN) / 0.4)
-        image = bg + drawing * (reveal * wet)[:, None, None]
+        tau = frame / FRAME_COUNT * DURATION
+        canvas.copy_(rim_canvas)
+        newest = int(np.floor(tau / period))
+        oldest = int(np.ceil((tau - REACH / SPEED) / period))
+        for e in range(oldest, newest + 1):
+            d = SPEED * (tau - e * period)
+            if d <= 0 or d >= REACH:
+                continue
+            level = float(amp[e % EMISSIONS])
+            level *= float(smoothstep(d / FADE_IN))
+            level *= float(smoothstep((1 - d / REACH) / FADE_OUT))
+            if level <= 0:
+                continue
+            jac = 1.0 - d * inv_rho
+            mix = (0.5 - 0.5 * torch.tanh(jac / FOLD_WIDTH))[:, None]
+            colour = (1 - mix) * before + mix * after
+            boost = jac.abs().clamp_min(1e-6) ** -FOLD_BOOST
+            colour = colour * boost.clamp_max(FOLD_CAP)[:, None]
+            splat(canvas, px0 - d * nx, py0 - d * ny, (level * weight) * colour)
+            # The cusps of this ripple sit where rho = d; light the star behind them.
+            behind = d - star_rho
+            trail = torch.exp(-behind / SPARK_TRAIL) * (behind >= 0)
+            trail = trail * (behind < 6 * SPARK_TRAIL)
+            spark = (SPARK_LIGHT * level * star_weight) * trail
+            splat(canvas, sx, sy, spark[:, None] * spark_colour)
+        light = blur(canvas, soft)
+        glow = sum(g * wide_blur(canvas, s, f) for s, f, g in GLOWS)
+        image = 1 - torch.exp(-EXPOSURE * (light + glow).clamp_min(0) ** GAMMA)
+        return (background + image).clamp(0, 1) * 255.0
 
-        glow = np.zeros((HEIGHT, WIDTH, 3), np.float32)
-        # Sparks at touches the pen has just passed.
-        age = t - ev_time
-        live = np.nonzero((age >= 0) & (age < FLASH))[0]
-        for k in live:
-            a = 1.0 - age[k] / FLASH
-            amp = ev_strength[k] * a * a
-            centre = (int(round(ev_x[k] * 16)), int(round(ev_y[k] * 16)))
-            cv2.circle(
-                glow,
-                centre,
-                int((6 + 22 * (1 - a)) * 16),
-                tuple(float(v) for v in SPARK * amp * 1.2),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
-            cv2.circle(
-                glow,
-                centre,
-                int(3 * 16),
-                tuple(float(v) for v in SPARK * amp * 3.0),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
-
-        # Beads on the pen row, while the pen moves (they fade into the rest).
-        if t <= T_PEN + 1.0:
-            fade_beads = 1.0 - smoothstep((t - T_PEN) / 1.0)
-            row = u * (len(rows) - 1)
-            k0 = min(int(row), len(rows) - 2)
-            f = row - k0
-            bx = xs[k0] * (1 - f) + xs[k0 + 1] * f
-            colour = tuple(float(v) * fade_beads for v in BEAD)
-            for x in bx:
-                c = (int(round(x * 16)), int(round(pen_y * 16)))
-                cv2.circle(image, c, 4 * 16, colour, -1, cv2.LINE_AA, 4)
-                cv2.circle(
-                    glow, c, 9 * 16, tuple(0.5 * v for v in colour), -1, cv2.LINE_AA, 4
-                )
-            cv2.line(
-                glow,
-                (0, int(pen_y)),
-                (WIDTH - 1, int(pen_y)),
-                tuple(25.0 * fade_beads for _ in range(3)),
-                1,
-            )
-
-        image += cv2.GaussianBlur(glow, (0, 0), 7) * 1.3 + glow * 0.3
-        image *= smoothstep((DURATION - t) / FADE)
-        return image
-
-    render_frames(settings, render, FRAME_COUNT)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
     tag = settings.audio_tag
-    track = soundtrack(
-        lam,
-        rows,
-        (ev_time, ev_lam, s),
-        tag if tag in STYLES else STYLE,
-        settings.audio_rng,
-    )
+    track = soundtrack(amp, strong, tag if tag in STYLES else STYLE, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

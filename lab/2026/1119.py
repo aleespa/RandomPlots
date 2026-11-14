@@ -1,464 +1,390 @@
 """
-Un-Stirring Ink
+The Most Irrational Number
 
-Five drops of ink in thick syrup, between two glass walls. The inner cylinder turns ten
-times and the drops are stirred into fine spirals until the ink seems mixed for good. Then
-it turns back ten times, and every drop comes home, round again.
+Ford circles: over every fraction p/q on the number line sits a circle
+q² times smaller than the one over 1. They never overlap; they only kiss.
+Here the camera dives towards the golden ratio, φ = 1.618…, almost a
+billion times closer.
 
-In syrup, viscosity beats inertia. The flow has no memory of speed, only of how far the wall
-has turned: each ring of fluid rotates by ω(r)·φ, with ω(r) ∝ 1/r² − 1/R². Turn the wall
-back by φ and every bit of ink retraces its path exactly. G. I. Taylor filmed this in the 1960s
-with dyed corn syrup. The ink never mixed: it was sheared into layers too thin to see.
+The circles that reach nearest to φ are always 1/1, 2/1, 3/2, 5/3, 8/5,
+13/8…: ratios of neighbouring Fibonacci numbers, closing in alternately
+from the left and the right. The golden ratio is the hardest number of
+all to approximate with fractions (Hurwitz, 1891), so the gaps never get
+any easier: every zoom looks just like the last one, forever.
 
-Each drop strikes its own piano note every time it comes round. Wound back, the tune plays in
-reverse, and the chord clears as the drops come home.
+Each new Fibonacci fraction strikes a piano note: the Fibonacci numbers
+themselves, counted round a seven-note scale.
 
-Made with Python & PyTorch. Sound synthesized in NumPy.
-#taylorcouette #fluiddynamics #reversibility #mathart #randomplots
+Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
+#fordcircles #numbertheory #mathart #generativeart #randomplots
 """
 
 import gc
 from pathlib import Path
 
+import cv2
 import matplotlib
 import numpy as np
-import torch
-import torch.nn.functional as F
+from loguru import logger
 from PIL import Image, ImageDraw, ImageFont
-from scipy.special import betainc
 
 from common import audio
-from common.gpu import select_device
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale
-from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames
+from common.music import PROGRESSIONS, STYLES, Scale
+from common.video import (
+    FPS,
+    HEIGHT,
+    WIDTH,
+    frame_count,
+    hex_to_bgr,
+    palette_lut,
+    render_frames,
+    smoothstep,
+)
 
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
-TAU = 2 * np.pi
 
-# Apparatus: radii in units of the outer wall.
-R_INNER = 0.40
-R_PX = 500.0  # outer wall radius on screen
-CENTRE = (WIDTH / 2, HEIGHT * 0.535)
-SHEAR = R_INNER**2 / (1 - R_INNER**2)  # omega(r) / Omega = SHEAR * (1/r^2 - 1)
+# --- The dive -------------------------------------------------------------------------
+PHI = (1 + 5**0.5) / 2
+VIEW_START, VIEW_END = 1.8, 2.0e-9  # number-line units across the screen
+ZOOM_START, ZOOM_END = 0.0, 13.2  # s: the dive (eased in and out)
+EASE_IN, EASE_OUT = 1.4, 2.2  # s of speed ramp at either end
+FADE = 0.4  # s fade to the paper at the very end
 
-# The crank: rest, wind TURNS forward, hold, unwind (the mirror image), rest.
-TURNS = 10
-CRANK_SHAPE = (3.2, 2.0)  # beta(a, b) speed profile: a > b lingers in the first turns
-WIND = (0.15, 6.55)  # seconds
-UNWIND = (8.05, 14.45)
+# --- Layout ---------------------------------------------------------------------------
+LINE_Y = 1420  # px: the number line; the circles stand on it, mirrored below
+MIRROR = 0.32  # reflection strength just under the line, fading downwards
+SS = 2  # supersampling of the circle layer
+MIN_RADIUS = 0.3  # px: smaller circles are not drawn
+LABEL_IN = (48.0, 78.0)  # px radius over which a circle's fraction fades in
 
-# Ink. Drops: (radius, angle) are jittered by the seed.
-DROP_RADII = (0.50, 0.59, 0.68, 0.78, 0.88)
-DROP_SIZE = 0.062  # radius, outer radii
-DROP_EDGE = 0.010  # softness of the rim
-DROP_DENSITY = 1.5  # optical density at the centre, in units of the ink colour
-SPOKE_WIDTH = 0.0045  # half-width of the line of ink across the gap
-SPOKE_DENSITY = 1.4
-INKS = ("#c8102e", "#1f3fb8", "#0b8a68", "#f0a400", "#7a2aa8")  # at density 1
-SPOKE_INK = "#20202c"
-SHUTTER = 0.5  # motion blur: fraction of a frame the shutter is open
+# --- Look -----------------------------------------------------------------------------
+PAPER = "#f4f0e7"
+INK = "#1f2a55"  # indigo
+ACCENT = "#d6452a"  # vermilion: the Fibonacci fractions
+FILLS = ["#1f2a55", "#3d5a8a", "#7d9cb8", "#cdbf9f", "#e9dfc9"]  # tiny -> huge
+CM = Path(matplotlib.get_data_path()) / "fonts" / "ttf"  # BaKoMa Computer Modern
+PHI_GLYPH, TIMES = chr(193), chr(163)  # in cmmi10, cmsy10
 
-# Polar texture of the ink at the start, with angular blur levels.
-TEX_R, TEX_THETA = 640, 4096
-LEVELS = 13  # blur sigma of level k: 2^k texels (level 0 unblurred)
-
-# Light
-BACKGROUND = "#0a0908"
-SYRUP_CENTRE = "#fbf3e2"  # backlit syrup, brightest in the middle
-SYRUP_EDGE = "#e8d3a8"
-STEEL = ("#15171c", "#3a3f48", "#8c929c")  # inner cylinder: dark, body, highlight
-NOTCHES = 6
-
-# Turn counter above the apparatus
-FONT = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "cmr10.ttf"
-COUNTER_Y = 300  # px, centre of the number
-COUNTER_SIZES = (118, 40)  # number, label
-COUNTER_COLOUR = "#e9dcc0"
-
-# Sound
+# --- Sound ----------------------------------------------------------------------------
 STYLE = "felt_piano"  # common.music.STYLES; an --audio-only tag naming one overrides it
-DROP_DEGREES = (7, 5, 4, 2, 0)  # innermost drop (fastest) highest
+EVENT_RADIUS = 78.0  # px: a Fibonacci circle sounds when its label is fully in
+PROGRESSION = "drift"  # common.music.PROGRESSIONS, a chord per four Fibonacci notes
 
 
-def ease(x):
-    """
-    Regularized incomplete beta I_x(CRANK_SHAPE): the crank's speed grows like
-    x^(a-1) and dies like (1-x)^(b-1), so it starts moving at once but gently,
-    lingers in the first few turns, and comes to rest smoothly.
-    """
-    return betainc(*CRANK_SHAPE, np.clip(x, 0.0, 1.0))
-
-
-def crank(seconds):
-    """
-    Angle the inner cylinder has turned (radians) at video time `seconds`:
-    eased, slow at first while the drops are still drops; the unwinding is the
-    exact mirror image in time.
-    """
-    s = np.asarray(seconds, float)
-    up = ease((s - WIND[0]) / (WIND[1] - WIND[0]))
-    back = ease((UNWIND[1] - s) / (UNWIND[1] - UNWIND[0]))
-    return TAU * TURNS * np.where(s < UNWIND[0], up, back)
-
-
-def crank_rate(seconds, h=1e-3):
-    return (crank(seconds + h) - crank(seconds - h)) / (2 * h)
-
-
-def omega(r):
-    """Couette flow: angular velocity of the ring at r per unit inner-wall rotation."""
-    return SHEAR * (1.0 / r**2 - 1.0)
-
-
-def drops(rng):
-    """(radius, angle, ink, shape harmonics) per drop, and the spoke's angle."""
-    order = rng.permutation(len(INKS))
-    start = rng.uniform(0, TAU)
-    out = []
-    for i, r in enumerate(DROP_RADII):
-        angle = start + TAU * (0.21 * i + 0.5 * (i % 2)) + rng.normal(0, 0.12)
-        wobble = rng.normal(0, 0.035, 3), rng.uniform(0, TAU, 3)
-        out.append((r + rng.normal(0, 0.008), angle, INKS[order[i]], wobble))
-    spoke = start + TAU * 0.11
-    return out, spoke
-
-
-def _rgb(colour):
-    return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
-
-
-def _absorbance(ink):
-    """Beer-Lambert absorbance per channel that turns the syrup into `ink`."""
-    return -np.log(np.clip(_rgb(ink) / _rgb(SYRUP_CENTRE), 0.02, 1))
-
-
-def ink_texture(drop_list, spoke, device):
-    """
-    Optical density (RGB absorbance) of the ink at the start, on a polar grid
-    r in [R_INNER, 1] x theta0 in [-pi, pi), then LEVELS copies blurred along
-    theta by Gaussians of 2^k texels (exact on the circle, via FFT): the
-    pixel footprint picks the level, so sub-pixel threads average correctly.
-    Returned as (1, 3, LEVELS, TEX_R, TEX_THETA + 2), wrapped one column
-    each side for grid_sample.
-    """
-    f = dict(device=device, dtype=torch.float32)
-    r = torch.linspace(R_INNER, 1.0, TEX_R, **f)[:, None]
-    theta = (-np.pi + (torch.arange(TEX_THETA, **f) + 0.5) * TAU / TEX_THETA)[None]
-    x, y = r * torch.cos(theta), r * torch.sin(theta)
-    density = torch.zeros(3, TEX_R, TEX_THETA, **f)
-    for r0, a0, ink, (amp, phase) in drop_list:
-        dx, dy = x - r0 * np.cos(a0), y - r0 * np.sin(a0)
-        dist, angle = torch.sqrt(dx * dx + dy * dy), torch.atan2(dy, dx)
-        wobble = sum(
-            a * torch.cos((k + 2) * angle + p)
-            for k, (a, p) in enumerate(zip(amp, phase))
-        )
-        edge = DROP_SIZE * (1 + wobble)
-        inside = torch.sigmoid((edge - dist) / (0.5 * DROP_EDGE))
-        rim = 0.35 * torch.exp(-(((dist - 0.85 * edge) / (0.12 * DROP_SIZE)) ** 2))
-        d = DROP_DENSITY * inside * (1 + rim)
-        density += torch.tensor(_absorbance(ink), **f)[:, None, None] * d
-    # The spoke: a straight line of ink right across the gap.
-    across = r * torch.sin(theta - spoke)
-    along = r * torch.cos(theta - spoke)
-    line = torch.sigmoid((SPOKE_WIDTH - across.abs()) / 0.0015)
-    ends = torch.sigmoid((along - R_INNER - 0.012) / 0.004) * torch.sigmoid(
-        (0.988 - along) / 0.004
+def dive_curve():
+    """(times, log view width) on a fine grid: speed eased in and out, then rest."""
+    tau = np.linspace(0.0, DURATION, 30001)
+    speed = smoothstep((tau - ZOOM_START) / EASE_IN) * smoothstep(
+        (ZOOM_END - tau) / EASE_OUT
     )
-    density += torch.tensor(_absorbance(SPOKE_INK), **f)[:, None, None] * (
-        SPOKE_DENSITY * line * ends
-    )
-
-    spectrum = torch.fft.rfft(density, dim=-1)
-    n = torch.arange(spectrum.shape[-1], **f)
-    levels = [density]
-    for k in range(1, LEVELS):
-        sigma = (2.0**k) * TAU / TEX_THETA
-        gain = torch.exp(-0.5 * (n * sigma) ** 2)
-        levels.append(torch.fft.irfft(spectrum * gain, n=TEX_THETA, dim=-1))
-    tex = torch.stack(levels, 1)  # (3, LEVELS, TEX_R, TEX_THETA)
-    tex = torch.cat((tex[..., -1:], tex, tex[..., :1]), -1)
-    return tex[None].contiguous()
+    progress = np.concatenate([[0.0], np.cumsum(0.5 * (speed[1:] + speed[:-1]))])
+    progress /= progress[-1]
+    log_view = np.log(VIEW_START) + (np.log(VIEW_END) - np.log(VIEW_START)) * progress
+    return tau, log_view
 
 
-class Renderer:
-    """Per pixel, closed form: back-rotate each pixel to the start, sample the ink."""
-
-    def __init__(self, device, rng):
-        self.device = device
-        f = dict(device=device, dtype=torch.float32)
-        self.f = f
-        ys = (torch.arange(HEIGHT, **f) + 0.5 - CENTRE[1]) / R_PX
-        xs = (torch.arange(WIDTH, **f) + 0.5 - CENTRE[0]) / R_PX
-        y, x = torch.meshgrid(-ys, xs, indexing="ij")  # y up
-        self.r = torch.sqrt(x * x + y * y)
-        self.theta = torch.atan2(y, x)
-        rc = self.r.clamp(R_INNER, 1.0)
-        self.omega = SHEAR * (1 / rc**2 - 1)
-        self.domega = 2 * SHEAR / rc**3
-        self.s_pixel2 = (0.4 / (R_PX * rc)) ** 2
-        self.grid_r = 2 * (rc - R_INNER) / (1 - R_INNER) - 1
-
-        # Masks with analytic anti-aliasing.
-        cover = lambda edge: ((self.r - edge) * R_PX + 0.5).clamp(0, 1)
-        self.syrup = cover(R_INNER) * (1 - cover(1.0))
-        self.steel = 1 - cover(R_INNER)
-        self.glass = cover(1.0) * (1 - cover(1.035))
-
-        # Backlight: bright centre, amber edge, shadows at both walls, a soft key.
-        g = ((self.r - R_INNER) / (1 - R_INNER)).clamp(0, 1)[..., None]
-        light = torch.tensor(_rgb(SYRUP_CENTRE), **f) * (1 - g**1.6) + torch.tensor(
-            _rgb(SYRUP_EDGE), **f
-        ) * (g**1.6)
-        shade = (
-            1
-            - 0.22 * torch.exp(-(self.r - R_INNER) / 0.035)
-            - 0.18 * torch.exp(-(1 - self.r) / 0.03)
-        )
-        key = 1 + 0.05 * (-x * 0.6 + y * 0.8)
-        self.light = light * (shade * key)[..., None]
-
-        # Background with the light spilling past the glass; the glass rim.
-        bg = torch.tensor(_rgb(BACKGROUND), **f)
-        spill = torch.exp(-((self.r - 1).clamp_min(0) / 0.09)) * 0.10
-        self.background = bg + spill[..., None] * torch.tensor(_rgb(SYRUP_EDGE), **f)
-        rim = torch.exp(-(((self.r - 1.012) / 0.006) ** 2))
-        rim_hi = rim * (0.55 + 0.45 * torch.clamp(-x * 0.5 + y * 0.85, -1, 1))
-        self.glass_colour = (
-            self.background * 0.6
-            + torch.tensor(_rgb("#d9e2e6"), **f) * (0.18 + 0.7 * rim_hi)[..., None]
-        )
-
-        # Steel: radial ramp, a lit edge, a dark hub.
-        dark, body, hi = (torch.tensor(_rgb(c), **f) for c in STEEL)
-        rr = (self.r / R_INNER).clamp(0, 1)[..., None]
-        lit = 0.5 + 0.5 * torch.clamp(-x * 0.5 + y * 0.85, -1, 1) / R_INNER
-        lit = lit.clamp(0, 1)[..., None]
-        steel = dark + (body - dark) * (0.35 + 0.65 * lit) * (1 - rr**6)
-        edge = torch.exp(-(((self.r - R_INNER * 0.985) / 0.006) ** 2))[..., None]
-        steel = steel + (hi - body) * edge * lit
-        hub = torch.exp(-((self.r / 0.05) ** 2))[..., None]
-        self.steel_colour = steel * (1 - 0.6 * hub)
-        self.hi = hi
-        self.notch_band = torch.exp(-(((self.r - 0.86 * R_INNER) / 0.02) ** 2))
-
-        # Ink.
-        self.drops, spoke = drops(rng)
-        self.tex = ink_texture(self.drops, spoke, device)
-
-        # Counter text, cached per string.
-        self.fonts = [ImageFont.truetype(str(FONT), size) for size in COUNTER_SIZES]
-        self.counter_colour = torch.tensor(_rgb(COUNTER_COLOUR), **f)
-        self.texts = {}
-
-    def counter_alpha(self, number, label):
-        key = number, label
-        if key not in self.texts:
-            height = 2 * COUNTER_SIZES[0]
-            canvas = Image.new("L", (WIDTH, height), 0)
-            draw = ImageDraw.Draw(canvas)
-            big, small = self.fonts
-            draw.text((WIDTH / 2, 0.42 * height), number, 255, big, "ms")
-            draw.text((WIDTH / 2, 0.62 * height), label, 150, small, "mt")
-            alpha = torch.tensor(np.asarray(canvas), **self.f) / 255.0
-            self.texts[key] = alpha[..., None]
-        return self.texts[key]
-
-    def counter(self, image, seconds, phi):
-        """The inner cylinder's turns so far, as a number with a small label."""
-        if WIND[0] < seconds < WIND[1]:
-            label = "turns forward"
-        elif UNWIND[0] < seconds < UNWIND[1]:
-            label = "turning back"
-        else:
-            label = "turns"
-        alpha = self.counter_alpha(f"{abs(phi) / TAU:.1f}", label)
-        top = COUNTER_Y - int(0.42 * alpha.shape[0]) + COUNTER_SIZES[0] // 3
-        region = image[top : top + alpha.shape[0]]
-        region += (self.counter_colour - region) * alpha
-        return image
-
-    @staticmethod
-    def wrapped(d, sigma, sigma_eff):
-        """A wrapped Gaussian of width `sigma`, smoothed to `sigma_eff`, peak 1."""
-        d = torch.remainder(d + np.pi, TAU) - np.pi
-        near = sum(
-            torch.exp(-0.5 * ((d + TAU * k) / sigma_eff) ** 2) for k in (-1, 0, 1)
-        )
-        return near * (sigma / sigma_eff)
-
-    def frame(self, seconds):
-        phi = float(crank(seconds))
-        rate = abs(float(crank_rate(seconds)))
-
-        # Where each pixel's fluid started, and its footprint there (in theta0).
-        theta0 = torch.remainder(self.theta - self.omega * phi + np.pi, TAU)
-        foot2 = (
-            self.s_pixel2
-            + (self.omega * rate * SHUTTER / FPS) ** 2 / 12
-            + (0.4 * self.domega * phi / R_PX) ** 2
-        )
-        texel = TAU / TEX_THETA
-        level = (0.5 * torch.log2(foot2 / texel**2)).clamp(0, LEVELS - 1)
-        column = theta0 / texel + 0.5  # in the padded texture
-        grid = torch.stack(
-            (
-                2 * column / (TEX_THETA + 1) - 1,
-                self.grid_r,
-                2 * level / (LEVELS - 1) - 1,
-            ),
-            -1,
-        )[None, None]
-        optical = F.grid_sample(self.tex, grid, align_corners=True)[0, :, 0]
-        syrup = self.light * torch.exp(-optical.permute(1, 2, 0))
-
-        # The inner cylinder turns rigidly by phi: notches on its rim.
-        s_n = 0.035
-        s_eff = np.sqrt(s_n**2 + (rate * SHUTTER / FPS) ** 2 / 12)
-        notch = self.wrapped(
-            (self.theta - phi) * NOTCHES, s_n * NOTCHES, s_eff * NOTCHES
-        )
-        steel = self.steel_colour + self.hi * 0.9 * (notch * self.notch_band)[..., None]
-
-        image = self.background * (1 - self.syrup - self.steel - self.glass)[..., None]
-        image = image + syrup * self.syrup[..., None]
-        image = image + steel * self.steel[..., None]
-        image = image + self.glass_colour * self.glass[..., None]
-        image = self.counter(image, seconds, phi)
-        return (image.clamp(0, 1) * 255.0).flip(-1)  # BGR
+def fibonacci(count):
+    """[(p, q)]: the Fibonacci ratios F(k+1)/F(k), k = 1 .. count."""
+    pairs, a, b = [], 1, 1
+    for _ in range(count):
+        pairs.append((b, a))
+        a, b = b, a + b
+    return pairs
 
 
-# ------------------------------------------------------------------- the sound
-def drop_crossings(drop_list):
+def ford_circles(view):
     """
-    (time, drop index, whole turn?) whenever a drop's centre comes round to
-    its starting angle or to the opposite side: omega(r0) * crank(t) crosses
-    a multiple of half a turn.
+    Every Ford circle that touches the screen when it is `view` units wide,
+    centred on φ: arrays p, q (coprime) and the circle's centre x offset from φ
+    and radius, in px. The circle over p/q has radius 1/(2q²) and touches the
+    line at p/q; it is kept if its radius is at least MIN_RADIUS px and it
+    meets the rectangle above the line that the screen shows.
     """
-    t = np.linspace(0, DURATION, 60001)
-    phi = crank(t)
-    events = []
-    for i, (r0, *_) in enumerate(drop_list):
-        turns = 2 * omega(r0) * phi / TAU  # in half turns
-        k = np.floor(turns + 1e-9)
-        for j in np.nonzero(np.diff(k))[0]:
-            level = max(k[j], k[j + 1])
-            a, b = turns[j], turns[j + 1]
-            when = t[j] + (level - a) / (b - a) * (t[j + 1] - t[j])
-            events.append((float(when), i, bool(level % 2 == 0)))
-    return sorted(events)
+    scale = WIDTH / view  # px per unit
+    half = 0.5 * WIDTH / scale + 8 / scale
+    top = (LINE_Y + 8) / scale
+    q_max = int(np.sqrt(scale / (2 * MIN_RADIUS)))
+    q = np.arange(1, q_max + 1, dtype=np.int64)
+    reach = 1.0 / (2.0 * q * q)  # the circle's radius in units
+    lo = np.ceil((PHI - half - reach) * q).astype(np.int64)
+    hi = np.floor((PHI + half + reach) * q).astype(np.int64)
+    count = np.maximum(hi - lo + 1, 0)
+    q = np.repeat(q, count)
+    start = np.repeat(lo, count)
+    offset = np.arange(len(q)) - np.repeat(np.cumsum(count) - count, count)
+    p = start + offset
+    keep = np.gcd(p, q) == 1
+    p, q = p[keep], q[keep]
+    radius = 1.0 / (2.0 * q * q)
+    dx = (p - q * PHI) / q  # tangent point minus φ
+    # Does the circle meet the box |x - φ| <= half, 0 <= y <= top? (no cancellation)
+    gap = np.maximum(np.abs(dx) - half, 0.0)
+    near = top * (2 * radius - top)
+    meets = (gap * gap < near) | (top >= radius) & (gap < radius)
+    p, q, dx, radius = p[meets], q[meets], dx[meets], radius[meets]
+    return p, q, dx * scale, radius * scale
 
 
-def coherence(drop_list, seconds):
-    """How whole the drops still look: mean of 1 / sqrt(1 + stretch^2), 1 .. ~0."""
-    phi = np.abs(crank(seconds))
-    c = 0
-    for r0, *_ in drop_list:
-        stretch = 2 * SHEAR / r0**3 * DROP_SIZE * phi / (DROP_SIZE / r0)
-        c = c + 1 / np.sqrt(1 + stretch**2)
-    return c / len(drop_list)
+def circle_polygon(cx, cy, r, w, h):
+    """Points of the part of a large circle near the box [0, w] x [0, h], in px."""
+    corners = np.array([[0, 0], [w, 0], [0, h], [w, h]], float) - (cx, cy)
+    inside = abs(cx - w / 2) < w / 2 and abs(cy - h / 2) < h / 2
+    if inside:
+        a0, a1 = 0.0, 2 * np.pi
+    else:
+        mid = np.arctan2(h / 2 - cy, w / 2 - cx)
+        angles = np.arctan2(corners[:, 1], corners[:, 0]) - mid
+        angles = (angles + np.pi) % (2 * np.pi) - np.pi
+        a0, a1 = mid + angles.min() - 0.02, mid + angles.max() + 0.02
+    n = int(np.clip((a1 - a0) * r / 3.0, 16, 20000))
+    a = np.linspace(a0, a1, n)
+    return np.stack([cx + r * np.cos(a), cy + r * np.sin(a)], axis=1)
 
 
-def soundtrack(drop_list, style_name, rng):
-    """
-    Drone & pad under phase-like struck notes. Every time a drop's centre
-    comes round to its starting angle (drop_crossings) its own note sounds,
-    and softer on the far side half a turn later. The inner drops turn faster,
-    so they are higher and more frequent; panned by where the drop is,
-    louder when the crank turns faster. Wound back,
-    the same notes play in reverse order. Two pads, the home chord and a
-    clouded seventh chord a step up, crossfade with the drops' coherence
-    (1 / sqrt(1 + stretch^2)): the harmony smears as the ink smears and
-    clears as it comes home. Low notes mark the start of the winding, the
-    turn back, and the moment the drops are whole again, where the five drop
-    notes roll (and roll out again as the winding starts). A loop: everything
-    circular.
-    """
-    style = STYLES[style_name]
-    scale = Scale(int(rng.choice(style.roots)), style.mode)
-    track = audio.silence(DURATION)
-    hz = lambda note: float(audio.midi_to_hz(note))
+class Typesetter:
+    """Computer Modern text onto an RGBA PIL layer."""
 
-    t = np.linspace(0, DURATION, 20001)
-    peak = np.abs(crank_rate(t)).max()
-    for when, i, whole in drop_crossings(drop_list):
-        r0, a0 = drop_list[i][:2]
-        speed = abs(float(crank_rate(when))) / peak
-        velocity = 0.2 + 0.3 * speed + 0.03 * (len(drop_list) - i)
-        velocity *= 1.0 if whole else 0.6
-        side = np.cos(a0 + (0 if whole else np.pi))
-        note = style.voice(scale.hz(DROP_DEGREES[i]), velocity)
-        audio.add(track, audio.pan(note, 0.6 * side), when)
+    def __init__(self):
+        self.fonts = {}
 
-    # Pads crossfading with the coherence of the ink.
-    t = np.arange(len(track)) / audio.SAMPLE_RATE
-    c = coherence(drop_list, t)[:, None]
-    home, cloud = audio.silence(DURATION), audio.silence(DURATION)
-    for note in scale.chord(0, 3, -1):
-        audio.add(home, audio.pad(hz(note), DURATION, 0.2, 0.01, 0.01, 0.45), 0)
-    for note in scale.chord(1, 4, -1):
-        audio.add(cloud, audio.pad(hz(note), DURATION, 0.18, 0.01, 0.01, 0.25), 0)
-    track += home * c + audio.lowpass(cloud, 900.0) * (1 - c)
-
-    for when, degree in ((WIND[0], 0), (UNWIND[0], 3), (UNWIND[1], 0)):
-        audio.add(track, style.bass(scale.hz(degree, -2), 0.5), when)
-    # All five drops' notes, rolled outward as the winding starts and rolled
-    # back inward as they come home: a palindrome, like the ink.
-    for k, (degree, (r0, a0, *_)) in enumerate(zip(DROP_DEGREES, drop_list)):
-        note = audio.pan(style.voice(scale.hz(degree), 0.32), 0.6 * np.cos(a0))
-        audio.add(track, note, WIND[0] + 0.09 * k)
-        audio.add(track, note, UNWIND[1] - 0.09 * k)
-    return audio.master(style.room(track, rng))
+    def font(self, face, size):
+        key = face, int(size)
+        if key not in self.fonts:
+            self.fonts[key] = ImageFont.truetype(str(CM / f"{face}.ttf"), int(size))
+        return self.fonts[key]
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Taylor-Couette reversibility, in closed form.
+    Ford circles (L. R. Ford, 1938): over each reduced fraction p/q, the circle
+    of radius 1/(2q²) tangent to the real line at p/q. Two are tangent exactly
+    when |p q' - p' q| = 1 (Farey neighbours) and never overlap otherwise; they
+    are the horoballs of the modular group, so the packing is invariant under
+    SL(2, Z).
 
-    Stokes (zero Reynolds number) flow between a rotating inner cylinder of
-    radius R_INNER and a fixed outer one of radius 1 is pure circular Couette
-    flow, u_theta = A r + B / r, i.e. each ring turns at angular velocity
-    omega(r) = Omega * SHEAR * (1/r^2 - 1). Being linear and inertia-free, the
-    displacement depends only on the inner wall's total angle phi(t), not on
-    its speed: fluid starting at (r, theta0) sits at theta0 + omega(r) phi.
-    `crank` winds phi up by TURNS turns over WIND (a beta-function speed
-    profile, slow at first), holds
-    it, and winds it back over UNWIND as the exact time mirror, so
-    phi(0) = phi(DURATION) = 0 and the video is an exact loop.
+    The camera is centred on φ and its width W(τ) shrinks from VIEW_START to
+    VIEW_END, exponentially with an eased speed (smoothstep ramps of EASE_IN
+    and EASE_OUT s), then rests. Per frame, every circle with radius >= MIN_RADIUS
+    px that meets the screen is enumerated directly: q <= sqrt(S / 2 r_min),
+    p in the window widened by the radius, gcd(p, q) = 1, then an exact
+    box-circle test written without cancellation (the huge circles of small q
+    only graze the top of the screen deep in the dive). Since φ is badly
+    approximable (|φ - p/q| > ~1/(√5 q²)), the visible circles never exceed a
+    few thousand px, and their count stays near a thousand at every depth.
 
-    The ink at the start (five slightly irregular round drops and a straight
-    spoke across the gap) is rasterised once as Beer-Lambert optical density
-    on a polar grid (r, theta0), and blurred along theta0 into LEVELS
-    mip levels by FFT (Gaussian, exact on the circle). Per frame, each pixel
-    is mapped back to theta0 = theta - omega(r) phi and the texture is
-    sampled trilinearly in (theta0, r, level), the level chosen by the
-    pixel's footprint in theta0: its own angular size, the shear
-    omega'(r) phi times its radial size, and the motion-blur sweep
-    omega(r) phi' SHUTTER / FPS, in quadrature. Threads thinner than a pixel
-    therefore fade into the right average tint instead of aliasing. Colour
-    is backlight * exp(-density). Steel notches on the inner cylinder show
-    phi; a counter shows the turns. One torch pass per frame, native
-    resolution. The seed sets the drops' angles, jitter, shapes and ink
-    order, and (via audio_rng) the music's key.
+    Drawing: cv2 at SS x supersampling, fills coloured by on-screen size
+    (FILLS, tiny -> huge) mixed into the paper, ink outlines; circles larger
+    than ~200 px are drawn as clipped polygons of their visible arc (cv2's own
+    circles are 72-gons at that size). The Fibonacci ratios F(k+1)/F(k), the
+    continued-fraction convergents of φ = [1; 1, 1, ...], are filled and
+    outlined in ACCENT. Fractions are typeset in each circle above LABEL_IN px
+    radius. The layer is mirrored under the line, faded (MIRROR). On top: φ's
+    decimals as far as the view resolves them and the zoom factor.
+
+    Each frame is a pure function of τ; frames render in parallel on the
+    thread pool. Nothing is random in the picture: the seed only picks the
+    soundtrack's key (through the audio generator).
     """
     settings = settings or ImageProcessingSettings(1)
-    device = select_device()
-    renderer = Renderer(device, settings.rng)
+    curve_tau, curve_log = dive_curve()
+    convergents = {pair for pair in fibonacci(40)}
+    phi_text = f"{PHI:.15f}"
 
-    def render(frame: int):
-        with torch.no_grad():
-            return renderer.frame(frame / FPS)
+    bg = np.array(hex_to_bgr(PAPER), np.float32)
+    ink = hex_to_bgr(INK)
+    accent = np.array(hex_to_bgr(ACCENT), np.float32)
+    fill_lut = palette_lut(FILLS, 256)[:, ::-1] * 255.0  # BGR
+    type_ = Typesetter()
+    ink_rgb = tuple(int(INK[i : i + 2], 16) for i in (1, 3, 5))
+    accent_rgb = tuple(int(ACCENT[i : i + 2], 16) for i in (1, 3, 5))
 
-    render_frames(settings, render, FRAME_COUNT, parallel=False)
-    drop_list = renderer.drops
-    del renderer
-    gc.collect()
-    tag = settings.audio_tag
-    style_name = tag if tag in STYLES else STYLE
-    track = soundtrack(drop_list, style_name, settings.audio_rng)
+    def fill_colour(r):
+        """Fill for a circle of r px: tiny circles dark, huge ones pale; strength by size."""
+        u = np.clip((np.log2(max(r, 0.25)) + 1) / 12.0, 0, 1)
+        colour = fill_lut[int(u * 255)]
+        alpha = 0.95 - 0.55 * u
+        return tuple(float(c) for c in alpha * colour + (1 - alpha) * bg)
+
+    def render(frame):
+        tau = frame / FPS
+        view = float(np.exp(np.interp(tau, curve_tau, curve_log)))
+        p, q, cx, r = ford_circles(view)
+        h, w = LINE_Y * SS, WIDTH * SS
+        layer = np.empty((h, w, 3), np.uint8)
+        layer[:] = bg.astype(np.uint8)
+        order = np.argsort(-r)  # big first (they never overlap, but outlines do)
+        labels = []
+        for i in order:
+            pi_, qi = int(p[i]), int(q[i])
+            rad = float(r[i])
+            x = WIDTH / 2 + float(cx[i])
+            y = LINE_Y - rad
+            fib = (pi_, qi) in convergents
+            if fib:
+                base = np.array(fill_colour(rad), np.float32)
+                fill = tuple(float(c) for c in 0.3 * accent + 0.7 * base)
+                line = tuple(float(c) for c in accent)
+            else:
+                fill = fill_colour(rad)
+                line = ink
+            X, Y, R = x * SS, y * SS, rad * SS
+            thick = int(np.clip(0.035 * R, 1.0, 5.0 if fib else 3.0))
+            if R < 180:
+                c = (int(round(X * 16)), int(round(Y * 16)))
+                cv2.circle(layer, c, max(int(R * 16), 1), fill, -1, cv2.LINE_AA, 4)
+                if R > 3:
+                    cv2.circle(layer, c, int(R * 16), line, thick, cv2.LINE_AA, 4)
+            else:
+                poly = circle_polygon(X, Y, R, w, h)
+                pts = np.round(poly * 16).astype(np.int64)
+                pts = np.clip(pts, -(2**28), 2**28).astype(np.int32)
+                cv2.fillPoly(layer, [pts], fill, cv2.LINE_AA, 4)
+                closed = R < 1.2 * max(w, h) and abs(X - w / 2) < w and Y > -R
+                cv2.polylines(layer, [pts], closed, line, thick, cv2.LINE_AA, 4)
+            if rad > LABEL_IN[0] and -rad < y < LINE_Y and 0 < x < WIDTH:
+                labels.append((pi_, qi, x, y, rad, fib))
+        layer = cv2.resize(layer, (WIDTH, LINE_Y), interpolation=cv2.INTER_AREA)
+
+        image = np.empty((HEIGHT, WIDTH, 3), np.float32)
+        image[:] = bg
+        image[:LINE_Y] = layer
+        below = HEIGHT - LINE_Y
+        mirror = layer[::-1][:below].astype(np.float32)
+        fade = MIRROR * (1 - np.linspace(0, 1, below)) ** 1.6
+        image[LINE_Y:] = bg + (mirror - bg) * fade[:, None, None]
+        cv2.line(image, (0, LINE_Y), (WIDTH, LINE_Y), ink, 2, cv2.LINE_AA)
+        # φ marker: a small vermilion triangle under the line
+        tri = np.array([[540, LINE_Y + 6], [528, LINE_Y + 28], [552, LINE_Y + 28]])
+        cv2.fillPoly(image, [tri.astype(np.int32)], tuple(float(c) for c in accent))
+
+        # Paper band behind the heading
+        band = np.clip((330 - np.arange(330)) / 160.0, 0, 1) ** 1.5
+        image[:330] = image[:330] + (bg - image[:330]) * band[:, None, None]
+
+        text = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+        pen = ImageDraw.Draw(text)
+        for pi_, qi, x, y, rad, fib in labels:
+            fade_in = smoothstep((rad - LABEL_IN[0]) / (LABEL_IN[1] - LABEL_IN[0]))
+            digits = max(len(str(pi_)), len(str(qi)))
+            size = min(0.62 * rad, 1.25 * rad / (0.5 * digits + 0.3), 120.0)
+            font = type_.font("cmr10", size)
+            colour = accent_rgb if fib else ink_rgb
+            fill = colour + (int(235 * fade_in),)
+            gap = 0.16 * size
+            pen.text((x, y - gap), str(pi_), font=font, fill=fill, anchor="ms")
+            pen.text((x, y + gap), str(qi), font=font, fill=fill, anchor="mt")
+            bar = 0.55 * size * digits * 0.95 / 2 + 0.1 * size
+            pen.line(
+                [(x - bar, y), (x + bar, y)], fill=fill, width=max(1, int(0.05 * size))
+            )
+
+        # Heading: φ's decimals as far as the view resolves them, and the zoom.
+        decimals = int(np.clip(np.floor(np.log10(2.0 / view)) + 1, 1, 12))
+        size = 92
+        f_math, f_rm = type_.font("cmmi10", size), type_.font("cmr10", size)
+        shown = phi_text[: 2 + decimals]
+        head = [(PHI_GLYPH, f_math), (" = ", f_rm), (shown, f_rm), ("...", f_rm)]
+        width = sum(f.getlength(s) for s, f in head)
+        left = (WIDTH - width) / 2
+        for s, f in head:
+            pen.text((left, 180), s, font=f, fill=ink_rgb + (255,), anchor="ls")
+            left += f.getlength(s)
+        small = type_.font("cmr10", 40)
+        zoom = f"{VIEW_START / view:,.0f}"
+        times = type_.font("cmsy10", 40)
+        parts = [("zoom ", small), (TIMES, times), (" " + zoom, small)]
+        width = sum(f.getlength(s) for s, f in parts)
+        left = (WIDTH - width) / 2
+        for s, f in parts:
+            pen.text((left, 250), s, font=f, fill=ink_rgb + (150,), anchor="ls")
+            left += f.getlength(s)
+
+        overlay = np.asarray(text, np.float32)
+        alpha = overlay[..., 3:] / 255.0
+        image += (overlay[..., 2::-1] - image) * alpha
+        end = smoothstep((DURATION - tau) / FADE)
+        image = bg + (image - bg) * end
+        return image
+
+    render_frames(settings, render, FRAME_COUNT)
+    style_name = settings.audio_tag if settings.audio_tag in STYLES else STYLE
+    track = soundtrack(curve_tau, curve_log, style_name, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
+    gc.collect()
+
+
+def soundtrack(curve_tau, curve_log, style_name, rng):
+    """
+    Felt piano over a soft pad, one-shot (circular=False, master(loop=False)).
+
+    Melody: one note per Fibonacci ratio F(k+1)/F(k), at the moment its circle
+    grows past EVENT_RADIUS px (its label fully in), solved from the same dive
+    curve: radius = S / (2 F(k)²) with S = WIDTH / W(τ). The pitch is F(k+1)
+    mod 7, a degree of the style's scale (Fibonacci numbers mod 7 repeat every
+    16: the Pisano period), panned to the side of φ the fraction lies on
+    (they alternate). Fractions already that big at τ = 0 are struck together
+    as the opening chord. Velocity follows the dive speed.
+    Under it: a pad chord from PROGRESSION, one per four Fibonacci notes, and
+    a bass note on every second one. When the dive stops, the home chord and
+    a low root ring out over the rest.
+    """
+    style = STYLES[style_name]
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    progression = PROGRESSIONS[PROGRESSION]
+    track = audio.silence(DURATION)
+    kw = dict(circular=False)
+    size = len(scale.steps)
+
+    def strike(degree, velocity, when, x=0.0, octave=0, voice=None):
+        velocity = round(float(np.clip(velocity, 0.05, 1.0)) * 20) / 20  # cache hits
+        note = (voice or style.voice)(scale.hz(degree, octave), velocity)
+        audio.add(track, audio.pan(note, float(np.clip(x, -1, 1))), when, **kw)
+
+    # τ when each Fibonacci circle reaches EVENT_RADIUS px: log W = log(WIDTH / (2 q² r))
+    log_speed = -np.gradient(curve_log, curve_tau)
+    peak_speed = log_speed.max()
+    events = []
+    for p, q in fibonacci(40):
+        target = np.log(WIDTH / (2.0 * q * q * EVENT_RADIUS))
+        if target >= curve_log[0]:
+            events.append((0.02, p, q))
+        elif target >= curve_log[-1]:
+            when = float(np.interp(-target, -curve_log, curve_tau))
+            events.append((when, p, q))
+    opening = [e for e in events if e[0] == 0.02]
+    rest = [e for e in events if e[0] > 0.02]
+    logger.info(
+        f"{len(opening)} opening, {len(rest)} Fibonacci notes "
+        f"{rest[0][0]:.2f}-{rest[-1][0]:.2f} s"
+    )
+
+    for i, (when, p, q) in enumerate(opening):
+        strike(p % 7, 0.45, when + 0.05 * i, 0.4 * np.sign(p / q - PHI))
+    for k, (when, p, q) in enumerate(rest):
+        speed = float(np.interp(when, curve_tau, log_speed)) / peak_speed
+        strike(p % 7, 0.32 + 0.3 * speed, when, 0.55 * np.sign(p / q - PHI))
+        if k % 2 == 0:
+            chord = progression[(k // 4) % len(progression)]
+            strike(chord, 0.42, when, 0.0, octave=-2, voice=style.bass)
+
+    # Pad: one chord per four Fibonacci notes, from the first note to the end.
+    starts = [0.0] + [rest[k][0] for k in range(4, len(rest), 4)]
+    ends = starts[1:] + [DURATION]
+    for j, (a, b) in enumerate(zip(starts, ends)):
+        chord = scale.chord(progression[j % len(progression)], 3, octave=-1)
+        for midi in chord:
+            voice = audio.pad(
+                float(audio.midi_to_hz(midi)), b - a + 0.3, 0.16, 0.8, 1.6, 0.35
+            )
+            audio.add(track, voice, a, **kw)
+
+    # The dive stops: home.
+    strike(0, 0.6, ZOOM_END - 0.6, 0.0, octave=-2, voice=style.bass)
+    for i, degree in enumerate((0, 2, 4, 7)):
+        strike(degree, 0.42, ZOOM_END - 0.6 + 0.08 * i, 0.4 * (i % 2) - 0.2)
+    return audio.master(style.room(track, rng, circular=False), loop=False)
 
 
 if __name__ == "__main__":

@@ -1,22 +1,25 @@
 """
-Every Circle Is a Whole Number
+Why Hydrogen Glows Red
 
-An Apollonian gasket, the fractal you get by packing circles into a circle, then into the
-gaps between them, forever. Each circle is labelled with its curvature, one over its
-radius, and every label is a whole number: 2, 3, 6, 11, 14, 15, 23, ...
+A hydrogen atom giving off one particle of light. The violet cloud is its
+electron, caught halfway between two energy levels, 3d and 2p. A quantum state
+with a single energy never moves: the cloud of a pure 3d or 2p state stays
+perfectly still. Mix the two and the cloud starts to slosh back and forth,
+and a sloshing charge sends out light, the red ripples.
 
-The reason is a theorem by Descartes: four circles that all touch satisfy
-(k₁ + k₂ + k₃ + k₄)² = 2(k₁² + k₂² + k₃² + k₄²). So the circle filling a gap is
-k = 2(k₁ + k₂ + k₃) − k₄, built from its neighbours by adding and subtracting. Start
-with whole numbers (−1 for the outside circle, 2, 2 and 3) and you can never leave them.
-The zoom dives almost 200 times deeper into the fractal: the numbers reach the
-thousands, still whole.
+The cloud swings at a rate set by the energy gap between the two levels,
+E₃ − E₂ = hν, so the colour of the light is fixed by the gap. For this jump it
+is 656 nm, the deep red of hydrogen and the glow of every pink nebula in
+space photos. As the light carries the energy away, the electron drains into
+the lower level, the cloud shrinks and goes still, and the hydrogen atom stops
+glowing. (Slowed down about 10¹⁵ times.)
 
-Listen: each circle strikes a vibraphone bar as it appears, big circles low, tiny ones high,
-so the pitch climbs as the zoom goes deeper, then lands on one chord.
+Listen: each swing of the cloud strikes a handpan, and the notes step down
+as the electron falls, over a soft choir that moves from the upper chord to
+the home chord as the atom comes to rest.
 
 Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#apolloniangasket #fractal #mathart #generativeart #randomplots
+#hydrogenatom #quantummechanics #mathart #generativeart #randomplots
 """
 
 import gc
@@ -27,7 +30,7 @@ from loguru import logger
 
 from common import audio
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale, quantize
+from common.music import STYLES, Scale
 from common.video import (
     FPS,
     HEIGHT,
@@ -36,6 +39,7 @@ from common.video import (
     frame_count,
     hex_to_bgr,
     latex_mask,
+    palette_lut,
     render_frames,
     smoothstep,
 )
@@ -43,415 +47,283 @@ from common.video import (
 DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- Timeline (s) ------------------------------------------------------------------
-POP = 0.3  # a circle grows to full size over this long
-BUILD = (0.1, 4.6)  # circles appear, by curvature, between these times
-BUILD_POWER = 1.25  # > 1: the big circles arrive quickly, the dust later
-TEXT_OUT = (4.9, 5.5)  # the opening text fades out
-ZOOM = (5.0, 13.2)  # the dive; then the picture rests
-END_TEXT_IN = (12.6, 13.2)
-
-# --- The gasket --------------------------------------------------------------------
-# The integral gasket (-1, 2, 2, 3): the unit circle, two of radius 1/2 above and
-# below, two of radius 1/3 left and right. Every other circle follows from Descartes.
-START_K = np.array([-1.0, 2.0, 2.0, 3.0, 3.0])
-START_Z = np.array([0, 0.5j, -0.5j, 2 / 3, -2 / 3])
-START_GAPS = ((0, 1, 3, 2), (0, 2, 3, 1), (1, 2, 3, 0), (0, 1, 4, 2), (0, 2, 4, 1))
-START_GAPS += ((1, 2, 4, 0),)  # each gap: three touching circles + the one opposite
-TARGET_K = (120, 360)  # the zoom ends centred on a circle with k in this range
-TARGET_RADIUS = 300.0  # px: its radius at the end of the zoom
-MIN_RADIUS = 0.3  # px: circles smaller than this on screen are never generated
+# --- The transition ----------------------------------------------------------------
+P0 = 0.97  # |c_3|^2 at s = 0: the atom has just started to leave 3d
+TAU = 2.2  # s: lifetime of the upper level (|c_3|^2 decays as e^{-s/τ})
+SETTLE = (8.5, 12.0)  # s: the tail of the decay is eased to exactly zero here
+SWING = 1.25  # Hz: the beat (E_3 - E_2)/h, slowed down for the eye
+FADE = 0.4  # s: fade to the background at the end
 
 # --- Layout (px) -------------------------------------------------------------------
-R0 = 520.0  # px radius of the outer circle before the zoom
-CX, CY = WIDTH / 2, HEIGHT / 2
-LABEL_R = 18.0  # px: a circle gets its number once its radius passes this
-LABEL_FADE = 14.0  # px of radius over which the label fades in
-DIGIT_SIZE = 150  # px per em of the digit masks (scaled down per label)
+CX, CY = WIDTH // 2, 900  # the nucleus
+SCALE = 21.0  # px per Bohr radius
+AXIS = np.radians(28.0)  # the dipole axis, in the image plane, above horizontal
+TILT = np.radians(22.0)  # and tilted towards the viewer
+DEPTH = 34.0  # Bohr radii integrated either side along the line of sight
+DEPTH_SAMPLES = 112
+CLOUD_HALF = 700  # px: rows CY ± CLOUD_HALF hold the cloud
+C_LIGHT = 360.0  # px/s: speed of the ripples
+CREST_POW = 9.0  # sharpness of the crests
+NEAR = (110.0, 260.0)  # px: the ripples fade in over this range of radius
+TITLE_Y, FORMULA_Y = 96, 196
+BARS_Y = (1640, 1712)  # the |c_3|^2 and |c_2|^2 bars
+BAR_X = (250, 930)
+BAR_H = 14
+LINE_Y = 1792
 
 # --- Look --------------------------------------------------------------------------
-BACKGROUND = "#f4f0e7"
-INK = "#1b2238"
-# Flat swatches, cyclic in log k (k and CYCLE * k share a colour), so every zoom
-# level is as rich: navy, teal, sage, ochre, terracotta, plum.
-PALETTE = ["#1b2a4a", "#22707a", "#6f8f72", "#e3a53a", "#c8553d", "#6e2c5a"]
-CYCLE = 4.0
-COLOUR_PHASE = 0.1
+BACKGROUND = "#05040a"
+CLOUD = ["#05040a", "#17123a", "#3b2f86", "#7d6fd6", "#c9c0ff", "#f4f1ff"]
+CLOUD_GAIN, CLOUD_GAMMA = 2.0, 0.6  # tone map 1 - exp(-gain (ρ / max ρ_2p)^gamma)
+LIGHT = "#ff2a3a"  # H-alpha
+LIGHT_CORE = "#ffb0a8"
+GLOW_SIGMA, GLOW_GAIN = 8.0, 0.65
+TEXT, TEXT_DIM = "#efeaff", "#9a90bf"
 
 # --- Sound -------------------------------------------------------------------------
-STYLE = "vibes"  # common.music.STYLES; an --audio-only tag naming one overrides it
-BPM = 96.0  # tempo_choices(15): six bars
-TOP_DEGREE = 10  # the smallest circles reach this scale degree
-TOP_K = 3.0e4
+STYLE = "handpan"  # common.music.STYLES; an --audio-only tag naming one overrides it
+UPPER, HOME = 4, 0  # choir chords (scale degrees) for the 3d and 2p states
+STEPS = 7  # the struck melody falls this many scale degrees as the atom decays
 
 
-def view(s, target, zoom_end):
-    """Zoom Z(s) and view centre c(s): Z = 1 until ZOOM[0], then a log-smooth dive to
-    zoom_end while the target slides from where it sits to the middle of the screen."""
-    u = smoothstep((np.asarray(s, float) - ZOOM[0]) / (ZOOM[1] - ZOOM[0]))
-    z = np.exp(np.log(zoom_end) * u)
-    return z, target - target * (1 - u) / z
+def upper_weight(s):
+    """|c_3(s)|^2: exponential decay from P0, eased to exactly 0 by SETTLE[1]."""
+    s = np.asarray(s, float)
+    p = (
+        P0
+        * np.exp(-s / TAU)
+        * (1 - smoothstep((s - SETTLE[0]) / (SETTLE[1] - SETTLE[0])))
+    )
+    return np.clip(p, 0.0, 1.0)
 
 
-def appear_time(k):
-    """When a circle of curvature k pops in: increasing with k, BUILD[0] .. BUILD[1]."""
-    k_top = R0 / MIN_RADIUS
-    k = np.asarray(k, float)
-    x = np.clip(np.log(np.abs(k) / 2) / np.log(k_top / 2), 0, 1)
-    when = BUILD[0] + (BUILD[1] - BUILD[0]) * x**BUILD_POWER
-    return np.where(k < 0, -POP, when)  # the outer circle is there from the start
+def dipole(s):
+    """2|c_3 c_2|, the swing amplitude of the cloud and of the light it gives off."""
+    p = upper_weight(s)
+    return 2 * np.sqrt(p * (1 - p))
 
 
-def gasket(levels):
+def orbitals(r, cos_theta):
+    """ψ_320 and ψ_210 of hydrogen in atomic units (real)."""
+    r32 = 4 / (81 * np.sqrt(30)) * r**2 * np.exp(-r / 3)
+    r21 = 1 / (2 * np.sqrt(6)) * r * np.exp(-r / 2)
+    y20 = np.sqrt(5 / (16 * np.pi)) * (3 * cos_theta**2 - 1)
+    y10 = np.sqrt(3 / (4 * np.pi)) * cos_theta
+    return r32 * y20, r21 * y10
+
+
+def projections():
     """
-    Every circle that is ever bigger than MIN_RADIUS on screen, by Descartes' theorem:
-    a gap between three touching circles (k1, k2, k3) whose fourth neighbour is k4 is
-    filled by k = 2(k1 + k2 + k3) - k4, centre kz = 2(k1z1 + k2z2 + k3z3) - k4z4 (the
-    complex Descartes theorem). Breadth first over gaps; a gap is dropped once its new
-    circle is too small for every view (`levels`: zoom, centre, curvature limit) whose
-    window overlaps the gap's bounding box (from its three tangency points, padded).
+    Column densities ∫|ψ_3|², ∫|ψ_2|² and ∫ψ_3ψ_2 along the line of sight, at half
+    resolution over the cloud rows, then resized to full: (3, rows, WIDTH) float32.
     """
-    zoom, centre, k_limit = levels
-    half_x = (CX + 4) / (R0 * zoom)
-    half_y = (CY + 4) / (R0 * zoom)
-    w_start = START_K * START_Z
-    gaps = np.array(START_GAPS)
-    gk, gw = START_K[gaps], w_start[gaps]
-    ks, ws = [START_K], [w_start]
-    while len(gk):
-        kn = 2 * gk[:, :3].sum(1) - gk[:, 3]
-        wn = 2 * gw[:, :3].sum(1) - gw[:, 3]
-        pairs = ((0, 1), (0, 2), (1, 2))
-        touch = np.stack(
-            [(gw[:, i] + gw[:, j]) / (gk[:, i] + gk[:, j]) for i, j in pairs], 1
-        )
-        lo_x, hi_x = touch.real.min(1), touch.real.max(1)
-        lo_y, hi_y = touch.imag.min(1), touch.imag.max(1)
-        pad = 0.3 * np.maximum(hi_x - lo_x, hi_y - lo_y)
-        lo_x, hi_x, lo_y, hi_y = lo_x - pad, hi_x + pad, lo_y - pad, hi_y + pad
-        overlap = (
-            (lo_x[:, None] < centre.real + half_x)
-            & (hi_x[:, None] > centre.real - half_x)
-            & (lo_y[:, None] < centre.imag + half_y)
-            & (hi_y[:, None] > centre.imag - half_y)
-        )
-        keep = kn <= np.where(overlap, k_limit, 0).max(1)
-        gk, gw, kn, wn = gk[keep], gw[keep], kn[keep], wn[keep]
-        ks.append(kn)
-        ws.append(wn)
-        a, b, c = gk[:, 0], gk[:, 1], gk[:, 2]
-        wa, wb, wc = gw[:, 0], gw[:, 1], gw[:, 2]
-        gk = np.concatenate(
-            [np.stack(q, 1) for q in ((a, b, kn, c), (a, c, kn, b), (b, c, kn, a))]
-        )
-        gw = np.concatenate(
-            [
-                np.stack(q, 1)
-                for q in ((wa, wb, wn, wc), (wa, wc, wn, wb), (wb, wc, wn, wa))
-            ]
-        )
-    k = np.concatenate(ks)
-    z = np.concatenate(ws) / k
-    order = np.argsort(k, kind="stable")
-    return k[order], z[order]
+    axis = np.array(
+        [np.cos(TILT) * np.cos(AXIS), np.cos(TILT) * np.sin(AXIS), np.sin(TILT)]
+    )
+    rows = 2 * CLOUD_HALF
+    u = ((np.arange(WIDTH // 2) + 0.5) * 2 - CX) / SCALE
+    v = -((np.arange(rows // 2) + 0.5) * 2 - CLOUD_HALF) / SCALE
+    w = np.linspace(-DEPTH, DEPTH, DEPTH_SAMPLES)
+    dw = w[1] - w[0]
+    out = np.zeros((3, rows // 2, WIDTH // 2), np.float64)
+    for i, vi in enumerate(v):
+        uu, ww = np.meshgrid(u, w, indexing="ij")
+        r = np.sqrt(uu**2 + vi**2 + ww**2) + 1e-9
+        cos_theta = (uu * axis[0] + vi * axis[1] + ww * axis[2]) / r
+        p3, p2 = orbitals(r, cos_theta)
+        out[0, i] = (p3 * p3).sum(1) * dw
+        out[1, i] = (p2 * p2).sum(1) * dw
+        out[2, i] = (p3 * p2).sum(1) * dw
+    return np.stack(
+        [
+            cv2.resize(
+                o.astype(np.float32), (WIDTH, rows), interpolation=cv2.INTER_CUBIC
+            )
+            for o in out
+        ]
+    )
 
 
-def screen(s, k, z, target, zoom_end):
-    """Screen x, y and full-grown radius (px) of circles (k, z) at time s."""
-    zoom, centre = view(s, target, zoom_end)
-    scale = R0 * zoom
-    x = CX + (z.real - centre.real) * scale
-    y = CY - (z.imag - centre.imag) * scale
-    return x, y, scale / np.abs(k)
-
-
-def on_screen(x, y, r):
-    return (x + r > -2) & (x - r < WIDTH + 2) & (y + r > -2) & (y - r < HEIGHT + 2)
-
-
-def label_events(k, z, target, zoom_end, step=0.01):
+def soundtrack(style_name, rng):
     """
-    (time, index) of every circle's label appearing: when its grown radius first passes
-    LABEL_R while on screen, sampled on a fixed 10 ms grid (independent of FPS), and
-    never before the circle has popped in. The outer circle (k = -1) has no label.
+    The decay made audible, from the same |c_3(s)|² as the picture.
+
+    - Strikes: every swing of the cloud (cos(2π SWING s) = ±1) strikes the style's voice
+      while the dipole 2|c_3 c_2| is above 0.08; louder for a bigger swing, the far swing an
+      octave lower and softer. The pitch falls STEPS scale degrees as |c_3|² drains to 0.
+    - Choir: an "u" chord on degree UPPER whose level follows |c_3|², and the home chord
+      whose level follows |c_2|² = 1 - |c_3|², so the harmony moves with the electron.
+    - Landing: the home root and fifth struck as the atom settles (SETTLE[1]), ringing out.
+    One-shot: nothing wraps (circular=False) and `master(loop=False)`.
     """
-    first = np.full(len(k), np.inf)
-    born = appear_time(k) + 0.5 * POP
-    for s in np.arange(0.0, DURATION, step):
-        x, y, r = screen(s, k, z, target, zoom_end)
-        hit = (r >= LABEL_R) & on_screen(x, y, r) & (k > 0) & (born <= s)
-        hit &= np.isinf(first)
-        first[hit] = s
-    index = np.flatnonzero(np.isfinite(first))
-    return first[index], index
-
-
-def digit_masks():
-    """Masks of 0..9 in Computer Modern, each in an equal-width cell on one baseline."""
-    row = latex_mask(r"$0\,1\,2\,3\,4\,5\,6\,7\,8\,9$", DIGIT_SIZE)
-    ink = row.max(0) > 0.02
-    edges = np.flatnonzero(np.diff(ink.astype(int)))
-    starts, ends = edges[0::2] + 1, edges[1::2] + 1
-    cell = int(0.5 * DIGIT_SIZE) + 4
-    digits = []
-    for a, b in zip(starts, ends):
-        glyph = row[:, a:b]
-        box = np.zeros((row.shape[0], cell), np.float32)
-        x = (cell - glyph.shape[1]) // 2
-        box[:, x : x + glyph.shape[1]] = glyph
-        digits.append(box)
-    assert len(digits) == 10, len(digits)
-    return digits
-
-
-def soundtrack(k, z, target, zoom_end, style, rng):
-    """
-    The circles made audible, from the same closed forms as the picture.
-
-    - Build: one bar per distinct curvature as its circles pop in (appear_time), for
-      every k of the build; big circles low and loud, pitch rising with log k on the style's scale
-      (degree 0 for k = 2 up to TOP_DEGREE at TOP_K).
-    - Dive: one bar each time a circle's number appears (label_events), same mapping, so
-      the pitch climbs as the zoom goes deeper; panned by its screen x.
-    - Both are pulled onto a 16th-note grid at BPM, one note per slot (the biggest).
-    - A bass note under the first circles (2 and 3), a soft pad on the home chord whose
-      low-pass opens with log Z, and the home chord struck as the zoom lands.
-    One-shot: circular=False everywhere, master(loop=False).
-    """
+    style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
-    track = audio.silence(DURATION)
-
-    def degree(kk):
-        x = np.log(kk / 2) / np.log(TOP_K / 2)
-        return int(round(TOP_DEGREE * np.clip(x, 0, 1)))
-
-    events = []  # (time, k, x position -1..1)
-    for kk in np.unique(k[(k > 0) & (k <= R0 / MIN_RADIUS)]):
-        i = np.flatnonzero(k == kk)[0]
-        events.append((float(appear_time(kk)), kk, float(z[i].real)))
-    times, index = label_events(k, z, target, zoom_end)
-    for when, i in zip(times, index):
-        if when >= ZOOM[0] and when <= ZOOM[1] + 0.2:
-            x, _, _ = screen(when, k[i : i + 1], z[i : i + 1], target, zoom_end)
-            events.append((float(when), k[i], float((x[0] - CX) / CX)))
-    slots = {}
-    snapped = quantize([e[0] for e in events], DURATION, BPM, subdivision=4)
-    for (when, kk, x), q in zip(events, snapped):
-        key = int(round(q / (60 / BPM / 4)))
-        if key not in slots or kk < slots[key][1]:
-            slots[key] = (max(q, 0.0), kk, x)
-    for when, kk, x in slots.values():
-        size = 1 - np.log(kk / 2) / np.log(TOP_K / 2)
-        note = style.voice(scale.hz(degree(kk)), 0.25 + 0.55 * np.clip(size, 0, 1))
-        audio.add(track, audio.pan(note, 0.6 * np.clip(x, -1, 1)), when, circular=False)
-    for kk in (2.0, 3.0):
-        bass = style.bass(scale.hz(0 if kk == 2 else 4, octave=-1), 0.6)
-        audio.add(track, audio.pan(bass, 0.0), float(appear_time(kk)), circular=False)
-
-    # The pad: home chord the whole way, opening up as the zoom deepens.
-    chord = [float(audio.midi_to_hz(n)) for n in scale.chord(0, 3, octave=-1)]
-    pad = sum(audio.pad(f, DURATION)[: len(track)] for f in chord) * 0.22
     sr = audio.SAMPLE_RATE
-    s = np.arange(len(pad)) / sr
-    zoom, _ = view(s, target, zoom_end)
-    opening = np.log(zoom) / np.log(zoom_end)
-    dark = audio.lowpass(pad, 500.0, circular=False)
-    bright = audio.lowpass(pad, 3500.0, circular=False)
-    swell = 0.6 + 0.4 * opening
-    pad = (dark * (1 - opening)[:, None] + bright * opening[:, None]) * swell[:, None]
-    fade_in = np.clip(s / 0.4, 0, 1)
-    track += pad * fade_in[:, None]
+    track = audio.silence(DURATION)
+    n = len(track)
+    s = np.arange(n) / sr
+    upper = upper_weight(s)
+    fade = 0.5 - 0.5 * np.cos(np.pi * np.clip((DURATION - s) / 1.2, 0, 1))
+    for degree, level in ((UPPER, upper), (HOME, 1 - upper)):
+        for note in scale.chord(degree, 3, octave=-1):
+            sung = audio.choir(
+                float(audio.midi_to_hz(note)), DURATION, 0.32, attack=0.6, vowel="u"
+            )[:n]
+            track += sung * (level * fade)[:, None]
 
-    # The landing chord, and its bass.
-    land = ZOOM[1] - 0.15
-    for n in scale.chord(0, 3, octave=1):
-        audio.add(track, style.voice(float(audio.midi_to_hz(n)), 0.55), land, False)
-    audio.add(track, style.bass(scale.hz(0, octave=-1), 0.7), land, circular=False)
-    track = style.room(track, rng, circular=False)
-    return audio.master(track, loop=False)
+    strikes = 0
+    for k in range(int(2 * SWING * DURATION)):
+        when = k / (2 * SWING)
+        amp = float(dipole(when))
+        if amp < 0.08:
+            continue
+        degree = int(round(STEPS * float(upper_weight(when))))
+        near = k % 2 == 0  # cos = +1: the swing towards the upper right
+        freq = scale.hz(degree, octave=0 if near else -1)
+        velocity = (0.3 + 0.5 * amp) * (1.0 if near else 0.6)
+        audio.add(
+            track,
+            audio.pan(style.voice(freq, velocity), 0.35 if near else -0.35),
+            when,
+            circular=False,
+        )
+        strikes += 1
+    for degree, velocity in ((HOME, 0.7), (HOME + 4, 0.45)):
+        audio.add(
+            track, style.voice(scale.hz(degree), velocity), SETTLE[1], circular=False
+        )
+    logger.info(f"Soundtrack: {style_name}, root {scale.root}, {strikes} strikes")
+    return audio.master(style.room(track, rng, circular=False), loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    The integral Apollonian gasket (-1, 2, 2, 3), built and then zoomed, as a one-shot.
+    A hydrogen atom radiating H-alpha (3d -> 2p, m = 0), as a one-shot.
 
-    Circles come from Descartes' circle theorem, (Σk)^2 = 2Σk^2: the circle filling a
-    gap between touching circles k1, k2, k3 with fourth neighbour k4 is
-    k = 2(k1 + k2 + k3) - k4, and by the complex Descartes theorem its centre satisfies
-    kz = 2(k1z1 + k2z2 + k3z3) - k4z4, so all curvatures stay integers (exact in float64).
-    `gasket` generates breadth first over gaps, keeping only circles that are ever at
-    least MIN_RADIUS px on screen along the zoom path (sampled views), ~4 x 10^4 circles.
+    The state is ψ = c_3 ψ_320 e^{-iE_3 t} + c_2 ψ_210 e^{-iE_2 t} with real hydrogen
+    eigenfunctions (atomic units). Its density is
+    |c_3|² ψ_3² + |c_2|² ψ_2² + 2|c_3 c_2| ψ_3 ψ_2 cos(ω s), ω = 2π SWING standing in for
+    (E_3 - E_2)/ħ. |c_3(s)|² = P0 e^{-s/τ} (the Weisskopf-Wigner decay), eased to 0
+    over SETTLE so the 2p cloud ends perfectly still; |c_2|² = 1 - |c_3|².
 
-    Time: circles pop in by curvature (appear_time, a power of log k, over BUILD) and
-    grow with an ease-out over POP; then from ZOOM[0] to ZOOM[1] the view zooms with
-    log Z = smoothstep(u) log Z_end onto a target circle drawn by settings.rng with k in
-    TARGET_K, which slides to the centre and ends TARGET_RADIUS px wide; then it rests.
-    Fill colour is cyclic in log k (period CYCLE), so every depth looks alike. Labels:
-    each circle wider than LABEL_R px shows k, composed from Computer Modern digit masks
-    (latex_mask), scaled to fit. Opening text (Descartes' theorem with the first four
-    curvatures) and the closing line are latex_mask too, built once.
+    Cloud: the three column densities ∫ψ_3², ∫ψ_2², ∫ψ_3ψ_2 along the line of sight (the
+    m = 0 axis at AXIS in the image plane, tilted TILT towards the viewer) are integrated
+    once at half resolution; each frame is their weighted sum, tone-mapped through the
+    CLOUD palette. Light: the far field of the oscillating dipole d(s) ∝ 2|c_3 c_2| cos(ω s)
+    along the axis, E ∝ sin θ d(s - r/c) / r, drawn as crests (½ + ½cos)^CREST_POW of the
+    retarded phase with brightness 2|c_3 c_2|(s - r/c) sin²θ / √r, in H-alpha red with
+    a glow. Wavelength and atom size are not to scale (λ is ~10⁴ atoms really).
 
-    Render: per frame, a vectorised cull, cv2 anti-aliased filled discs (shift=4) for
-    circles over 1 px, a NumPy coverage splat for the dust, cv2 thread pool.
-
-    Sound: see `soundtrack` (vibes: vibraphone). The posted
-    soundtrack is `--seed 0` with the default audio seed (= --seed 0).
+    Text (Computer Modern via common.video.latex_mask, typeset once) and two bars for
+    |c_3|² and |c_2|². Every frame is a pure function of s on the render_frames thread
+    pool. Nothing is random: --seed does not change the picture. The soundtrack
+    (`soundtrack`, STYLE handpan over a choir) uses settings.audio_rng for the root and the
+    reverb; the posted one used --seed 0. An --audio-only tag naming a common.music style
+    swaps the struck voice.
     """
     settings = settings or ImageProcessingSettings(1)
-    rng = settings.rng
+    cloud_maps = projections()
+    ref = float(cloud_maps[1].max())
+    cloud_maps /= ref
+    lut = (palette_lut(CLOUD, 1024)[:, ::-1] * 255).astype(np.float32)  # BGR
+    top = CY - CLOUD_HALF
 
-    # The zoom path: views sampled from the start of the dive to its end.
-    k0, z0 = gasket((np.ones(1), np.zeros(1, complex), np.array([R0 / MIN_RADIUS])))
-    candidates = np.flatnonzero((k0 >= TARGET_K[0]) & (k0 <= TARGET_K[1]))
-    pick = int(rng.choice(candidates))
-    target, k_target = complex(z0[pick]), float(k0[pick])
-    zoom_end = TARGET_RADIUS * k_target / R0
-    samples = np.concatenate([[0.0], np.linspace(ZOOM[0], DURATION, 240)])
-    zoom, centre = view(samples, target, zoom_end)
-    k, z = gasket((zoom, centre, R0 * zoom / MIN_RADIUS))
-    logger.info(
-        f"Gasket: {len(k)} circles, target k = {k_target:.0f}, zoom x{zoom_end:.0f}, "
-        f"largest k = {k.max():.0f}"
+    # Light: radius and angle of every pixel from the nucleus, once.
+    yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH].astype(np.float32)
+    dx, dy = xx - CX, -(yy - CY)
+    radius = np.sqrt(dx**2 + dy**2) + 1e-3
+    axis = np.array(
+        [np.cos(TILT) * np.cos(AXIS), np.cos(TILT) * np.sin(AXIS)], np.float32
     )
-
-    born = appear_time(k)
-    swatches = np.array([hex_to_bgr(c) for c in PALETTE], np.float32)
-    hue = (np.log(np.abs(k)) / np.log(CYCLE) + COLOUR_PHASE) % 1.0
-    fill = swatches[(hue * len(PALETTE)).astype(int) % len(PALETTE)]
-    light = (fill @ np.array([0.114, 0.587, 0.299], np.float32)) / 255 > 0.55
+    sin2 = 1 - ((dx * axis[0] + dy * axis[1]) / radius) ** 2  # w = 0 plane
+    # Dim the light behind the text bands so the type stays readable.
+    row = np.arange(HEIGHT, dtype=np.float32)
+    calm = 1 - 0.65 * smoothstep((FORMULA_Y + 90 - row) / 60)
+    calm *= 1 - 0.65 * smoothstep((row - (BARS_Y[0] - 70)) / 60)
+    sin2 *= calm[:, None]
+    bins = 4  # per px
+    rbin = np.round(radius * bins).astype(np.int32)
+    r1d = np.arange(rbin.max() + 1) / bins
+    reach = smoothstep((r1d - NEAR[0]) / (NEAR[1] - NEAR[0])) * np.sqrt(
+        NEAR[1] / np.maximum(r1d, NEAR[1])
+    )
+    del xx, yy, dx, dy, radius
+    light_colour = np.array(hex_to_bgr(LIGHT), np.float32)
+    core_colour = np.array(hex_to_bgr(LIGHT_CORE), np.float32)
     bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
-    ink = np.array(hex_to_bgr(INK), np.float32)
-    background = np.empty((HEIGHT, WIDTH, 3), np.uint8)
-    background[:] = bg.astype(np.uint8)
+    omega = 2 * np.pi * SWING
 
-    # Labels: digits composed per number (only numbers that ever show are built).
-    digits = digit_masks()
-    _, shown = label_events(k, z, target, zoom_end)
-    labels = {
-        int(kk): np.hstack([digits[int(d)] for d in str(int(kk))])
-        for kk in np.unique(k[shown])
-    }
-
-    # Text (LaTeX), built once.
-    top = [
-        latex_mask(r"$\mathrm{Label\ every\ circle\ with\ its\ curvature}$", 50),
-        latex_mask(
-            r"$k = 1/r\mathrm{{,}\ \ and\ every\ one\ is\ a\ whole\ number}$", 50
-        ),
-    ]
-    bottom = [
-        latex_mask(r"$(k_1+k_2+k_3+k_4)^2 = 2\,(k_1^2+k_2^2+k_3^2+k_4^2)$", 46),
-        latex_mask(r"$(-1+2+2+3)^2 = 2\,(1+4+4+9) = 36$", 46),
-    ]
-    ending = latex_mask(
-        rf"$\times\,{int(round(zoom_end))}\ \mathrm{{deeper{{,}}\ still\ whole\ numbers}}$",
-        50,
+    title = latex_mask(r"$3d\ \rightarrow\ 2p$", 66)
+    formula = latex_mask(
+        r"$\psi = c_3\,\psi_{3d}\,e^{-iE_3t/\hbar} + c_2\,\psi_{2p}\,e^{-iE_2t/\hbar}$",
+        44,
     )
-    band = (1700, 1700 + ending.shape[0] + 48)
+    line = latex_mask(r"$E_3 - E_2 = h\nu{,}\quad \lambda = 656\ \mathrm{nm}$", 42)
+    labels = [latex_mask(r"$|c_3|^2$", 40), latex_mask(r"$|c_2|^2$", 40)]
+    text, text_dim = hex_to_bgr(TEXT), hex_to_bgr(TEXT_DIM)
+    bar_colours = [np.array(hex_to_bgr(c), np.float32) for c in (CLOUD[4], CLOUD[3])]
+    cols = np.arange(WIDTH, dtype=np.float32) + 0.5
 
     def render(frame: int) -> np.ndarray:
-        s = DURATION * frame / (FRAME_COUNT - 1)
-        x, y, r_full = screen(s, k, z, target, zoom_end)
-        grow = np.clip((s - born) / POP, 0, 1)
-        r = r_full * (1 - (1 - grow) ** 3)
-        visible = on_screen(x, y, r) & (r > 0.1)
-        image = background.copy()
+        s = frame / (FRAME_COUNT - 1) * DURATION
+        upper = float(upper_weight(s))
+        swing = float(dipole(s)) * np.cos(omega * s)
+        image = np.empty((HEIGHT, WIDTH, 3), np.float32)
+        image[:] = bg
 
-        # The outer circle, k = -1, as a ring (skipped once the view is inside it).
-        zoom_s, centre_s = view(s, target, zoom_end)
-        corners = np.array([-1, 1]) * CX / (R0 * zoom_s)
-        far = max(
-            abs(complex(centre_s.real + a, centre_s.imag + b))
-            for a in corners
-            for b in corners * CY / CX
+        # The cloud.
+        rho = (
+            upper * cloud_maps[0] + (1 - upper) * cloud_maps[1] + swing * cloud_maps[2]
         )
-        if far > 1 - 1e-9:
-            # A dense polyline: cv2.circle facets visibly at this size.
-            radius = r_full[0]
-            n = int(np.clip(2 * np.pi * radius / 3, 256, 200000))
-            angle = np.linspace(0, 2 * np.pi, n, endpoint=False)
-            ring = np.stack(
-                [x[0] + radius * np.cos(angle), y[0] + radius * np.sin(angle)]
-            )
-            ring = np.round(ring.T * 16).astype(np.int32)
-            cv2.polylines(image, [ring], True, tuple(ink.tolist()), 3, cv2.LINE_AA, 4)
+        tone = 1 - np.exp(-CLOUD_GAIN * np.clip(rho, 0, None) ** CLOUD_GAMMA)
+        image[top : top + 2 * CLOUD_HALF] = lut[(tone * 1023).astype(np.int32)]
 
-        # Dust: sub-pixel circles as coverage splats.
-        dust = np.flatnonzero(visible & (r < 1.0) & (k > 0))
-        if len(dust):
-            ix = np.clip(np.round(x[dust]).astype(int), 0, WIDTH - 1)
-            iy = np.clip(np.round(y[dust]).astype(int), 0, HEIGHT - 1)
-            a = np.clip(np.pi * r[dust] ** 2 * 0.8, 0, 1)[:, None]
-            pixels = image[iy, ix].astype(np.float32)
-            image[iy, ix] = (pixels * (1 - a) + fill[dust] * a).astype(np.uint8)
+        # The light, by retarded time.
+        ret = s - r1d / C_LIGHT
+        crest = (0.5 + 0.5 * np.cos(omega * ret)) ** CREST_POW
+        profile = (dipole(ret) * (ret > -0.1) * crest * reach).astype(np.float32)
+        light = profile[rbin] * sin2
+        image += light[..., None] * light_colour
+        image += (light**2)[..., None] * core_colour * 0.5
+        glow = cv2.GaussianBlur(
+            cv2.resize(np.clip(image - bg, 0, None), (WIDTH // 2, HEIGHT // 2)),
+            (0, 0),
+            GLOW_SIGMA / 2,
+        )
+        image += GLOW_GAIN * cv2.resize(glow, (WIDTH, HEIGHT))
 
-        # Discs, each shrunk a little so a thin cream line separates neighbours.
-        discs = np.flatnonzero(visible & (r >= 1.0) & (k > 0))
-        gap = np.clip(0.035 * r[discs], 0.4, 2.5)
-        for i, g in zip(discs, gap):
-            cv2.circle(
-                image,
-                (int(round(x[i] * 16)), int(round(y[i] * 16))),
-                int(round((r[i] - g) * 16)),
-                tuple(fill[i].tolist()),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
-
-        image = image.astype(np.float32)
-
-        # Numbers.
-        for i in discs:
-            if r[i] < LABEL_R or int(k[i]) not in labels:
-                continue
-            mask = labels[int(k[i])]
-            h, w = mask.shape
-            fit = min(0.55 * r[i] / h, 1.2 * r[i] / w, 1.0)
-            size = (max(1, int(w * fit)), max(1, int(h * fit)))
-            m = cv2.resize(mask, size, interpolation=cv2.INTER_AREA)
-            alpha = float(smoothstep((r[i] - LABEL_R) / LABEL_FADE))
-            colour = ink if light[i] else bg
+        # Text and the two weights.
+        blit_mask(image, title, WIDTH // 2, TITLE_Y, text, anchor="centre")
+        blit_mask(image, formula, WIDTH // 2, FORMULA_Y, text_dim, anchor="centre")
+        for i, weight in enumerate((upper, 1 - upper)):
+            y = BARS_Y[i]
+            mask = labels[i]
             blit_mask(
-                image,
-                m,
-                int(round(x[i])),
-                int(round(y[i] - m.shape[0] / 2)),
-                colour,
-                alpha=0.95 * alpha,
-                anchor="centre",
+                image, mask, BAR_X[0] - 30 - mask.shape[1], y - mask.shape[0] // 2, text
             )
-
-        # Opening text.
-        text_in = float(smoothstep((s - 1.2) / 0.5))
-        text_out = 1 - float(
-            smoothstep((s - TEXT_OUT[0]) / (TEXT_OUT[1] - TEXT_OUT[0]))
-        )
-        if text_out > 0:
-            for mask, ty in zip(top, (190, 290)):
-                blit_mask(
-                    image, mask, int(CX), ty, ink, alpha=text_out, anchor="centre"
-                )
-            for mask, ty in zip(bottom, (1580, 1680)):
-                a = text_in * text_out
-                blit_mask(image, mask, int(CX), ty, ink, alpha=a, anchor="centre")
-
-        # Closing line on a cream band.
-        end = float(
-            smoothstep((s - END_TEXT_IN[0]) / (END_TEXT_IN[1] - END_TEXT_IN[0]))
-        )
-        if end > 0:
-            region = image[band[0] : band[1]]
-            region += 0.92 * end * (bg - region)
-            blit_mask(
-                image, ending, int(CX), band[0] + 24, ink, alpha=end, anchor="centre"
+            end = BAR_X[0] + weight * (BAR_X[1] - BAR_X[0])
+            cover = np.clip(end - cols, 0, 1) * (cols >= BAR_X[0])
+            cover *= smoothstep((end - BAR_X[0]) / 10)  # a bar under 10 px fades out
+            band = image[y - BAR_H // 2 : y + BAR_H // 2]
+            track = (cols >= BAR_X[0]) & (cols <= BAR_X[1])
+            band[:, track] = 0.75 * band[:, track] + 0.25 * np.array(
+                hex_to_bgr(CLOUD[1]), np.float32
             )
+            band += cover[None, :, None] * (bar_colours[i] - band)
+        blit_mask(image, line, WIDTH // 2, LINE_Y, text_dim, anchor="centre")
+
+        out = float(smoothstep((DURATION - s) / FADE))
+        if out < 1:
+            image = bg + out * (image - bg)
         return image
 
+    logger.info(
+        f"Cloud maps {cloud_maps.shape}, peak 3d/2p column density "
+        f"{cloud_maps[0].max():.2f}; swing {SWING} Hz, λ = {C_LIGHT / SWING:.0f} px"
+    )
     render_frames(settings, render, FRAME_COUNT)
     tag = settings.audio_tag
-    style = STYLES[tag] if tag in STYLES else STYLES[STYLE]
-    track = soundtrack(k, z, target, zoom_end, style, settings.audio_rng)
+    track = soundtrack(tag if tag in STYLES else STYLE, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
