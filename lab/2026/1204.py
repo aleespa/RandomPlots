@@ -1,408 +1,392 @@
 """
-Fermat's Christmas Theorem
+The 9% That Never Goes Away
 
-Which prime numbers are a sum of two squares? 5 = 1² + 2² and 13 = 2² + 3²
-are; 3, 7 and 11 never are. Here a circle grows across a grid of whole-number
-points. Each time its radius squared reaches a prime p, it lights the points
-(a, b) with a² + b² = p, if there are any.
+A square wave built from sine waves, one Fourier series term at a time. At the
+top are the ingredients: sin x, then sin 3x a third as tall, sin 5x a fifth as
+tall, and so on. In the middle is their sum, which straightens into a square
+wave as more and more sine waves are added, up to 256 of them.
 
-Watch the gold rings catch points and the blue ones catch nothing. The rule
-is simple: an odd prime is a sum of two squares exactly when it leaves
-remainder 1 on division by 4. Fermat announced it in a letter dated
-Christmas Day, 1640. Zoom out and the lit points are the primes of the
-Gaussian integers a + bi, with the primes 3, 7, 11… sitting alone on the
-axes, a snowflake with eight-fold symmetry that no one designed.
+But look at the corners. Every sum overshoots the jump and rings, and the
+bottom panel zooms in on the jump as the waves pile up. The ripples squeeze
+closer to the corner, yet the first one never gets lower: it always overshoots
+by about 9% of the jump. Add a million sine waves and it is still there. This
+is the Gibbs phenomenon, and it is why sharp edges in compressed images and
+audio come with a faint ring.
 
-Listen: every prime the circle catches strikes two marimba notes, one for
-each square, while strings swell as the view pulls back; the axis primes ring
-low.
+Listen: a pure tone grows into a square wave's hollow buzz as its overtones
+join, each new one struck on a bell at its own pitch. Every time the number of
+waves doubles, the loudest three ring again, and the overshoot is still there.
 
 Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#gaussianprimes #numbertheory #mathart #generativeart #randomplots
+#gibbsphenomenon #fourierseries #mathart #generativeart #randomplots
 """
 
 import gc
+import io
 
 import cv2
 import numpy as np
 from loguru import logger
-from scipy.interpolate import PchipInterpolator
+from matplotlib import mathtext
+from matplotlib.font_manager import FontProperties
 
 from common import audio
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale
+from common.music import STYLES
 from common.video import (
     FPS,
     HEIGHT,
     WIDTH,
-    blit_mask,
     frame_count,
     hex_to_bgr,
-    latex_mask,
     palette_lut,
     render_frames,
     smoothstep,
 )
 
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'Add infinitely many waves. This never goes away.'
+HOOK_Y = 530
+HOOK_COLOUR = "#f4f0e7"
+
 DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The sweep ---------------------------------------------------------------------
-# Radius of the circle (lattice units) at key times (s); PCHIP in log r, so it
-# eases out into R_END at SWEEP_END and then rests.
-KEYS = ((0.0, 1.12), (1.0, 1.9), (2.6, 3.2), (5.5, 5.4), (8.5, 14.0), (11.5, 40.0))
-SWEEP_END, R_END = 13.6, 64.0
-ZOOM_MARGIN, ZOOM_MIN = 1.1, 2.3  # half-width of the view: hypot(margin r, min)
-TICKER_LAST = (
-    17  # the ticker names each prime up to here (later ones come < 0.6 s apart)
-)
-THEOREM_AT = 5.9  # s: the theorem replaces the ticker
+# --- The series --------------------------------------------------------------------
+TERMS = 256  # odd harmonics k = 1, 3, ..., 511 by the end
+BUILD = 13.0  # s: terms arrive until here, then the picture rests
+GROWTH = 2.5  # M(s) = (1 + s/τ)^GROWTH terms at time s, reaching TERMS at BUILD
+TAU = BUILD / (TERMS ** (1 / GROWTH) - 1)
+GIBBS = 2 / np.pi * 1.851937051982466  # (2/π) Si(π) = 1.17898: the overshoot peak
 FADE = 0.4  # s: fade to the background at the end
 
 # --- Layout (px, 1x) ---------------------------------------------------------------
 SS = 2  # supersampling
-CX, CY = WIDTH / 2, 1000
-TITLE_Y, TICKER_Y = 190, 300
-LATTICE_TOP = 440  # no lattice behind the text
+X_RANGE = (-0.6 * np.pi, 2.6 * np.pi)  # x shown by the fan and the sum
+FAN_Y, FAN_SCALE = 410, 210  # centre line and px per unit
+SUM_Y, SUM_SCALE = 1010, 190
+LENS_TOP, LENS_BOTTOM = 1330, 1700  # px rows of the magnified jump
+LENS_S = (0.3, 1.25)  # values of the sum shown in the lens
+LENS_XI = (-2 * np.pi, 6 * np.pi)  # lens shows x = ξ / (2 M^ZOOM)
+ZOOM = 0.6  # < 1: the zoom lags the ripples, so they squeeze towards the jump
+LENS_X = (60, 1020)
+LABEL_Y, COUNTER_Y, LENS_LABEL_Y = 62, 708, 1288
 
 # --- Look --------------------------------------------------------------------------
-BACKGROUND = "#05060c"
-LATTICE = "#1c2033"
-HIT_PALETTE = ["#ffd86b", "#ffaa3d", "#ff6f5c", "#e2479b", "#9b4dd6"]
-AXIS = "#5fe3ff"  # the inert primes 3, 7, 11, ... on the axes
-MISS = "#4a6cff"  # rings that catch no point
-SWEEP = "#c9d2ff"
-TEXT, TEXT_DIM = "#f6f0ff", "#9aa3c8"
-GLOW_SIGMA, GLOW_GAIN = 5.0, 1.1
-FLASH = 0.18  # s: a newly lit point flares and settles
-RING_LIFE = 0.32  # s: e-folding of a prime's ring flash
+BACKGROUND = "#0a0710"
+FAN_PALETTE = ["#4b2bb0", "#a23ac0", "#ff5e7e", "#ffb347", "#fff1b8"]
+SUM_CORE, SUM_GLOW = "#fff6e6", "#ff9a5c"
+GHOST = "#4a3d5c"  # the target square wave, the lens frame
+OVERSHOOT = "#ff6f61"
+TEXT, TEXT_DIM = "#f3e9ff", "#9a8bb0"
+GLOW_SIGMA, GLOW_GAIN = 6.0, 0.9
 
 # --- Sound -------------------------------------------------------------------------
-STYLE = "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one wins
-BPM = 96  # notes snap to an eighth-note grid at this tempo (15 s = 6 bars)
-CHORDS = (0, 3, 5, 4, 0)  # strings, scale degrees of each chord root
+ROOTS = (45, 47, 48, 50)  # MIDI fundamentals f0 to choose from (A2, B2, C3, D3)
+STRUCK = 16  # the first STRUCK terms are struck on a bell as they arrive
+DRONE_TOP = 7000.0  # Hz: overtones of the drone stop here
+CHIME = (1, 3, 5)  # harmonics struck again whenever the term count doubles
 
 
-def primes_up_to(n):
-    sieve = np.ones(n + 1, bool)
-    sieve[:2] = False
-    for k in range(2, int(n**0.5) + 1):
-        if sieve[k]:
-            sieve[k * k :: k] = False
-    return sieve
+def terms_at(s):
+    """M(s): how many terms are in at time s (seconds), continuous, 1 .. TERMS."""
+    s = np.clip(np.asarray(s, float), 0.0, BUILD)
+    return np.minimum((1 + s / TAU) ** GROWTH, TERMS)
 
 
-def radius_curve():
-    """r(s), the circle's radius at time s, as a vectorised function."""
-    times = [k[0] for k in KEYS] + [SWEEP_END, SWEEP_END + 1.0]
-    logs = [np.log(k[1]) for k in KEYS] + [np.log(R_END)] * 2
-    spline = PchipInterpolator(times, logs)
-
-    def radius(s):
-        s = np.clip(np.asarray(s, float), 0.0, SWEEP_END)
-        return np.exp(spline(s))
-
-    return radius
+def time_of(m):
+    """The inverse of `terms_at`: when M reaches m."""
+    return TAU * (np.asarray(m, float) ** (1 / GROWTH) - 1)
 
 
-def lattice_events(radius):
-    """
-    Every Gaussian prime a + bi with a² + b² <= R_END², and the time the circle
-    reaches it; plus each rational prime p <= R_END² with its ring time √p.
-    """
-    m = int(R_END)
-    is_prime = primes_up_to(m * m)
-    a, b = np.meshgrid(np.arange(-m, m + 1), np.arange(-m, m + 1))
-    a, b = a.ravel(), b.ravel()
-    norm = a * a + b * b
-    inside = norm <= m * m
-    a, b, norm = a[inside], b[inside], norm[inside]
-    off_axis = (a != 0) & (b != 0) & is_prime[norm]
-    side = np.abs(a + b)  # on an axis: |a| or |b|
-    on_axis = ((a == 0) | (b == 0)) & is_prime[side] & (side % 4 == 3)
-    gauss = off_axis | on_axis
-    # When does the circle reach radius ρ? Invert r(s) on a fine grid.
-    grid = np.linspace(0.0, SWEEP_END, 20001)
-    r_grid = radius(grid)
-
-    def when(rho):
-        return np.interp(rho, r_grid, grid)
-
-    points = {
-        "a": a[gauss],
-        "b": b[gauss],
-        "norm": norm[gauss],
-        "axis": on_axis[gauss],
-        "time": when(np.sqrt(norm[gauss])),
-    }
-    primes = np.flatnonzero(is_prime)
-    rings = {"p": primes, "time": when(np.sqrt(primes)), "hit": primes % 4 != 3}
-    return points, rings, when
+def weights(m):
+    """Weight of each term j = 0 .. TERMS-1 (k = 2j + 1) when M = m: 0 -> 1 as M passes j."""
+    return smoothstep(m - np.arange(TERMS))
 
 
-def two_squares(p):
-    """(a, b) with a <= b and a² + b² = p, or None."""
-    for a in range(1, int(np.sqrt(p / 2)) + 1):
-        b = int(round(np.sqrt(p - a * a)))
-        if a * a + b * b == p:
-            return a, b
-    return None
-
-
-def soundtrack(points, rings, style_name, rng):
-    """
-    Mallet garden over a strings swell, from the same event times as the picture.
-
-    - Every prime p = a² + b² (gold ring) strikes a dyad on `style.voice`: scale
-      degree a (low) and b (high), wrapped into two octaves, panned by the angle
-      of (a, b). Events are pulled onto an eighth-note grid at BPM and at most one
-      dyad sounds per slot (the latest prime in it), louder the more primes share
-      the slot, so the dense late sweep becomes a steady arpeggio.
-    - Each axis prime q ≡ 3 (mod 4), lit at radius q, plays a low bass note.
-    - Blue rings (primes ≡ 3 mod 4) make no sound: the silence is the miss.
-    - Strings hold CHORDS, swelling with log r, and the home chord lands at
-      SWEEP_END and rings over the rest.
-    One-shot: circular=False throughout and master(loop=False).
-    """
-    style = STYLES[style_name]
-    scale = Scale(int(rng.choice(style.roots)), style.mode)
-    size = len(scale.steps)
-    track = audio.silence(DURATION)
-    kw = {"circular": False}
-    step = 60.0 / BPM / 2
-
-    hits = rings["hit"] & (rings["time"] < SWEEP_END - 0.05)
-    slots = {}
-    for p, when in zip(rings["p"][hits], rings["time"][hits]):
-        slot = int(round(when / step)) if when > 3.0 else when / step
-        slots.setdefault(slot, []).append(int(p))
-    for slot, ps in sorted(slots.items()):
-        when = slot * step
-        a, b = two_squares(ps[-1])
-        crowd = len(ps)
-        velocity = float(np.clip(0.42 + 0.08 * np.log1p(crowd), 0.3, 0.7))
-        position = float(np.cos(2 * np.arctan2(b, a)))  # 45° centre, axes wide
-        low = scale.hz(a % size)
-        high = scale.hz(size + b % (2 * size))
-        audio.add(track, audio.pan(style.voice(low, 0.8 * velocity), -0.4), when, **kw)
-        audio.add(
-            track, audio.pan(style.voice(high, velocity), 0.6 * position), when, **kw
-        )
-
-    axis = points["axis"] & (points["a"] > 0)
-    for q, when in zip(points["a"][axis], points["time"][axis]):
-        bass = scale.hz(int(q) % size, octave=-2)
-        audio.add(track, style.bass(bass, 0.55), float(when), **kw)
-
-    # Strings: a chord per stretch of the sweep, louder as the view widens.
-    edges = np.linspace(0.0, SWEEP_END, len(CHORDS))
-    for i, degree in enumerate(CHORDS[:-1]):
-        start, end = edges[i], edges[i + 1]
-        velocity = 0.12 + 0.2 * i / (len(CHORDS) - 1)
-        for note in scale.chord(degree, 3, octave=-1):
-            sound = audio.strings(
-                float(audio.midi_to_hz(note)), end - start + 0.6, velocity, 1.0, 1.2
-            )
-            audio.add(track, sound, start, **kw)
-    for note in scale.chord(CHORDS[-1], 4, octave=-1):
-        sound = audio.strings(
-            float(audio.midi_to_hz(note)), DURATION - SWEEP_END, 0.42, 0.25, 1.4, 0.6
-        )
-        audio.add(track, sound, SWEEP_END, **kw)
-    audio.add(track, style.voice(scale.hz(size), 0.75), SWEEP_END, **kw)
-    audio.add(track, style.bass(scale.hz(0, octave=-2), 0.7), SWEEP_END, **kw)
-    logger.info(
-        f"Soundtrack: {style_name}, root {scale.root}, {len(slots)} dyads, "
-        f"{int(axis.sum())} bass notes"
+def text_mask(tex, size):
+    """LaTeX (mathtext, Computer Modern) at `size` px per em, as a float32 alpha crop."""
+    buffer = io.BytesIO()
+    prop = FontProperties(size=size, math_fontfamily="cm")
+    mathtext.math_to_image(tex, buffer, prop=prop, dpi=72, format="png")
+    grey = cv2.imdecode(
+        np.frombuffer(buffer.getvalue(), np.uint8), cv2.IMREAD_GRAYSCALE
     )
-    track = style.room(track, rng, circular=False)
+    mask = 1 - grey.astype(np.float32) / 255  # black ink on white
+    rows = np.flatnonzero(mask.max(1) > 0)
+    cols = np.flatnonzero(mask.max(0) > 0)
+    return np.pad(mask[rows[0] : rows[-1] + 1, cols[0] : cols[-1] + 1], 2)
+
+
+def blit(image, mask, x, y, colour, alpha=1.0, anchor="left"):
+    """Composite a text mask onto a float BGR image at (x, y) = top-left (or top-centre)."""
+    h, w = mask.shape
+    if anchor == "centre":
+        x -= w // 2
+    region = image[y : y + h, x : x + w]
+    a = alpha * mask[..., None]
+    region *= 1 - a
+    region += a * np.array(colour, np.float32)
+
+
+def soundtrack(voice, rng):
+    """
+    The Fourier series made audible, from the same M(s) as the picture.
+
+    - Drone: additive synthesis of the very same partial sum, Σ w_j(s) sin(2π f0 k τ)/k
+      for k = 2j + 1, with w_j(s) the weights the frames use, so the tone starts as a pure
+      sine at f0 and becomes a square wave's buzz. Overtones above DRONE_TOP are left out.
+    - Strikes: the first STRUCK terms are struck on `voice` (a bell) at f0·k as they reach
+      half weight, louder for larger amplitude 1/k, panned by k.
+    - Chimes: each time M doubles from 16 to 256, harmonics CHIME (f0, 3f0, 5f0) are
+      struck together; the last lands as the build finishes and rings over the rest.
+    One-shot: nothing wraps (circular=False) and `master(loop=False)`.
+    """
+    f0 = float(audio.midi_to_hz(int(rng.choice(ROOTS))))
+    sr = audio.SAMPLE_RATE
+    track = audio.silence(DURATION)
+    n = len(track)
+    tau = np.arange(n) / sr
+    m = terms_at(tau)
+    drone = np.zeros(n)
+    for j in range(TERMS):
+        k = 2 * j + 1
+        if k * f0 > DRONE_TOP:
+            break
+        w = smoothstep(m - j)
+        drone += w * np.sin(2 * np.pi * f0 * k * tau) / k
+    fade = np.clip((DURATION - tau) / 1.5, 0, 1)
+    drone *= 0.4 * (0.5 - 0.5 * np.cos(np.pi * fade))
+    drone = audio.lowpass(drone[:, None] * np.ones(2), 4500.0, circular=False)
+    track += drone
+
+    for j in range(STRUCK):
+        k = 2 * j + 1
+        when = 0.0 if j == 0 else float(time_of(j + 0.5))
+        note = voice(f0 * k, float(np.clip(0.75 / np.sqrt(k), 0.12, 0.75)))
+        audio.add(
+            track, audio.pan(note, 0.7 * np.tanh((k - 8) / 10)), when, circular=False
+        )
+    doublings = [2**p for p in range(4, 9)]
+    for i, count in enumerate(doublings):
+        when = float(time_of(count))
+        last = count == TERMS
+        for k in CHIME:
+            velocity = (0.8 if last else 0.5) / np.sqrt(k)
+            audio.add(track, voice(f0 * k, velocity), when, circular=False)
+    logger.info(
+        f"Soundtrack: f0 {f0:.1f} Hz, drone up to k = {int(DRONE_TOP // f0)}, "
+        f"{STRUCK} strikes, chimes at {[round(float(time_of(c)), 2) for c in doublings]} s"
+    )
+    track = audio.reverb(track, rng, rt60=2.6, wet=0.3, tone=5000.0, circular=False)
     return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Fermat's two-squares theorem and the Gaussian primes, as a one-shot.
+    The Gibbs phenomenon, as a one-shot. The Fourier series of the square wave
+    sign(sin x) is (4/π) Σ sin(kx)/k over odd k. At time s the series holds
+    M(s) = (1 + s/τ)^GROWTH terms (continuous; term j = 0, 1, ... has weight
+    smoothstep(M − j), so each new sine grows in from flat), from 1 at s = 0 to
+    TERMS = 256 at s = BUILD, then the picture rests and fades out.
 
-    A circle centred on the origin of the integer lattice Z² grows with radius
-    r(s) (PCHIP through KEYS in log r, easing out into R_END = 64 at
-    s = SWEEP_END, then resting). When r² passes a rational prime p its ring
-    flashes: gold if p = 2 or p ≡ 1 (mod 4), when the circle passes through the
-    8 lattice points (±a, ±b), (±b, ±a) with a² + b² = p (4 for p = 2), which
-    light up; blue if p ≡ 3 (mod 4), when it passes through none. Points
-    (±q, 0), (0, ±q) light when r = q for primes q ≡ 3 (mod 4). The lit set is
-    exactly the Gaussian primes of norm <= R_END², in cyan on the axes and
-    coloured by norm elsewhere. The camera's half-width is
-    hypot(ZOOM_MARGIN r, ZOOM_MIN), so the view pulls back from a close-up of
-    the first lattice points to the whole disc; grey lattice points fade out
-    as their spacing drops below ~12 px.
+    Three panels share that one closed form. Top: every weighted term
+    w_j (4/π) sin(kx)/k drawn over the same x, coloured by log k, the newest
+    brighter. Middle: the partial sum, a glowing curve over the dim target
+    square wave; a box at the jump x = 0 marks the lens. Bottom (the lens): the
+    sum near the jump, x = ξ / (2 M^ZOOM), values LENS_S. Near the jump
+    S_M(x) → (2/π) Si(2Mx), so the ripples are 1/M wide; the lens zooms only as
+    M^ZOOM (ZOOM = 0.6), so they visibly squeeze into the wall while the first
+    peak stays at (2/π) Si(π) ≈ 1.179, an overshoot of 9% of the jump of 2 (the
+    red line, which pulses each time M doubles).
 
-    Text (Computer Modern via matplotlib mathtext, typeset once): a title, a
-    ticker naming each prime up to TICKER_LAST as a² + b² or ≠ a² + b², then
-    the theorem from THEOREM_AT.
-
-    Rendering: every event time comes from inverting r(s) once, so each frame
-    is a pure function of s: cv2 circles at 2x (lattice, ring flashes, points
-    with a short flare), INTER_AREA downsample, Gaussian glow, text, a fade in
-    the last FADE s, on the render_frames thread pool. Nothing is random:
-    --seed does not change the picture. The soundtrack (`soundtrack`, Mallet
-    garden over strings) uses settings.audio_rng for its root and reverb; the
-    posted one is STYLE = "mallet_garden" with --seed 0 (root MIDI 61). An
-    --audio-only tag naming a common.music style swaps the style.
+    Rendering: sin(kx) for every k is precomputed once on the 2x-supersampled
+    column grid; each frame is a weighted sum, 256 cv2 polylines, a downsample,
+    a Gaussian glow and text masks typeset once in
+    Computer Modern with matplotlib mathtext, all a pure function of the frame
+    index on the render_frames thread pool. Nothing is random: --seed does not
+    change the picture. The soundtrack (`soundtrack`, Harmonic series) uses
+    settings.audio_rng only to pick f0 and the reverb; the posted one used --seed 0.
+    An --audio-only tag naming a common.music style swaps the bell for its voice.
     """
     settings = settings or ImageProcessingSettings(1)
-    radius = radius_curve()
-    points, rings, when = lattice_events(radius)
-    logger.info(
-        f"{len(points['a'])} Gaussian primes, {len(rings['p'])} rings; "
-        f"p = 5 at {when(np.sqrt(5)):.2f} s, p = 41 at {when(np.sqrt(41)):.2f} s"
-    )
-
     W2, H2 = WIDTH * SS, HEIGHT * SS
-    shift = 3
+    shift = 2  # cv2 fractional bits
     one = 1 << shift
+
+    def px(v):
+        return np.round(v * SS * one).astype(np.int32)
+
+    ks = 2 * np.arange(TERMS) + 1
+    amps = 4 / (np.pi * ks)
+    cols = (np.arange(W2) + 0.5) / SS
+    xs = X_RANGE[0] + (X_RANGE[1] - X_RANGE[0]) * cols / WIDTH
+    basis = np.sin(np.outer(ks, xs)).astype(np.float32)  # (TERMS, W2)
+    lens_cols = np.linspace(LENS_X[0], LENS_X[1], (LENS_X[1] - LENS_X[0]) * SS)
+    xi = LENS_XI[0] + (LENS_XI[1] - LENS_XI[0]) * (lens_cols - LENS_X[0]) / (
+        LENS_X[1] - LENS_X[0]
+    )
+    lens_scale = (LENS_BOTTOM - LENS_TOP) / (LENS_S[1] - LENS_S[0])
+
+    def lens_y(s):
+        return LENS_BOTTOM - (s - LENS_S[0]) * lens_scale
+
+    def screen_x(x):
+        return (x - X_RANGE[0]) / (X_RANGE[1] - X_RANGE[0]) * WIDTH
+
+    lut = palette_lut(FAN_PALETTE, 1024)[:, ::-1] * 255  # BGR
+    fan_colour = lut[(np.clip(np.log(ks) / np.log(127), 0, 1) * 1023).astype(int)]
     bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
-    lattice_colour = np.array(hex_to_bgr(LATTICE), np.float32)
-    lut = palette_lut(HIT_PALETTE, 256)[:, ::-1] * 255  # BGR
-    level = np.sqrt(points["norm"]) / R_END
-    point_colour = lut[np.clip(level * 255, 0, 255).astype(int)]
-    point_colour[points["axis"]] = hex_to_bgr(AXIS)
-    hit_colour = np.array(hex_to_bgr(HIT_PALETTE[1]), np.float32)
-    miss_colour = np.array(hex_to_bgr(MISS), np.float32)
-    sweep_colour = np.array(hex_to_bgr(SWEEP), np.float32)
-    order = np.argsort(points["time"])
-    for key in points:
-        points[key] = points[key][order]
-    point_colour = point_colour[order]
+
+    # The static layer at 2x: the target square wave and the lens frame.
+    static = np.full((H2, W2, 3), hex_to_bgr(BACKGROUND), np.uint8)
+    ghost = hex_to_bgr(GHOST)
+    square = np.sign(np.sin(xs + 1e-9))
+    pts = np.stack([px(cols), px(SUM_Y - SUM_SCALE * square)], 1)
+    cv2.polylines(static, [pts], False, ghost, 2 * SS, cv2.LINE_AA, shift)
+    cv2.line(
+        static, (0, px(FAN_Y)), (W2 * one, px(FAN_Y)), ghost, SS, cv2.LINE_AA, shift
+    )
+    for s_value in (1.0,):
+        y = px(lens_y(s_value))
+        cv2.line(
+            static,
+            (px(LENS_X[0]), y),
+            (px(LENS_X[1]), y),
+            ghost,
+            SS,
+            cv2.LINE_AA,
+            shift,
+        )
+    lens_square = np.where(xi < 0, -1.0, 1.0)
+    lens_rows = slice(int(LENS_TOP - 30) * SS, int(LENS_BOTTOM + 30) * SS)
+    lens_offset = (LENS_TOP - 30) * SS * one
+    pts = np.stack([px(lens_cols), px(lens_y(lens_square)) - lens_offset], 1)
+    cv2.polylines(static[lens_rows], [pts], False, ghost, 2 * SS, cv2.LINE_AA, shift)
 
     # Text, once.
-    title = latex_mask(r"$\mathrm{Which\ primes\ are\ a\ sum\ of\ two\ squares?}$", 50)
-    ticker = []  # (time, mask, colour)
-    for p, t_p, hit in zip(rings["p"], rings["time"], rings["hit"]):
-        if p > TICKER_LAST:
-            break
-        if hit:
-            a, b = two_squares(int(p))
-            tex = rf"${p} = {a}^2 + {b}^2$"
-        else:
-            tex = rf"${p} \neq a^2 + b^2$"
-        colour = HIT_PALETTE[1] if hit else MISS
-        ticker.append((float(t_p), latex_mask(tex, 100), hex_to_bgr(colour)))
-    ticker_times = np.array([t for t, _, _ in ticker])
-    theorem = latex_mask(
-        r"$p = a^2 + b^2 \ \Leftrightarrow\ p \equiv 1\ (\mathrm{mod}\ 4)$", 74
+    label = text_mask(
+        r"$\sin x\, +\, \frac{\sin 3x}{3}\, +\, \frac{\sin 5x}{5}\, +\, "
+        r"\frac{\sin 7x}{7}\, +\, \cdots$",
+        40,
     )
-    credit = latex_mask(
-        r"$\mathrm{for\ odd\ primes\ }p\mathrm{{,}\ Fermat{,}\ 25\ December\ 1640}$", 40
-    )
+    lens_label = text_mask(r"$\mathrm{the\ jump{,}\ magnified}$", 36)
+    nine = text_mask(r"$+9\%$", 48)
+    counters = [None] + [
+        text_mask(
+            rf"${c}\ \mathrm{{sine\ wave{'s' if c > 1 else ''}{{,}}\ added\ up}}$", 54
+        )
+        for c in range(1, TERMS + 1)
+    ]
     text, text_dim = hex_to_bgr(TEXT), hex_to_bgr(TEXT_DIM)
+    doubling_times = time_of(np.array([2**p for p in range(1, 9)]))
+    core, halo = hex_to_bgr(SUM_CORE), hex_to_bgr(SUM_GLOW)
+    overshoot = np.array(hex_to_bgr(OVERSHOOT), np.float32)
+    logger.info(
+        f"τ = {TAU:.3f} s; M doubles at {np.round(doubling_times, 2).tolist()} s"
+    )
 
-    def render(frame):
+    def render(frame: int) -> np.ndarray:
         s = frame / (FRAME_COUNT - 1) * DURATION
-        r = float(radius(s))
-        half = np.hypot(ZOOM_MARGIN * r, ZOOM_MIN)
-        scale = (WIDTH / 2) / half  # px per lattice unit
-        canvas = np.zeros((H2, W2, 3), np.float32)
+        m = float(terms_at(s))
+        zoom = m**ZOOM
+        w = weights(m)
+        live = int(np.count_nonzero(w))
+        coeff = (w * amps).astype(np.float32)
+        canvas = static.copy()
 
-        def sx(x):
-            return np.round((CX + scale * x) * SS * one).astype(np.int64)
-
-        def sy(y):
-            return np.round((CY - scale * y) * SS * one).astype(np.int64)
-
-        dot = float(np.clip(0.15 * scale, 2.6, 32.0))
-
-        # Grey lattice points, while they are far enough apart to read.
-        fade = float(smoothstep((scale - 11.0) / 20.0))
-        if fade > 0:
-            nx = int(np.ceil(WIDTH / 2 / scale)) + 1
-            ny = int(np.ceil(HEIGHT / scale)) + 1
-            colour = (lattice_colour * fade).tolist()
-            lr = int(round(0.45 * dot * SS * one))
-            for j in range(-ny, ny + 1):
-                y = int(sy(j))
-                if not LATTICE_TOP * SS * one <= y <= H2 * one + lr:
-                    continue
-                for i in range(-nx, nx + 1):
-                    cv2.circle(
-                        canvas, (int(sx(i)), y), lr, colour, -1, cv2.LINE_AA, shift
-                    )
-
-        # Ring flashes of recent primes.
-        recent = (rings["time"] <= s) & (rings["time"] > s - 5 * RING_LIFE)
-        width = max(1, int(round(1.6 * SS)))
-        crowd = 0.75 * float(np.clip(scale / 60.0, 0.12, 1.0))  # dim when packed
-        for p, t_p, hit in zip(
-            rings["p"][recent], rings["time"][recent], rings["hit"][recent]
-        ):
-            strength = np.exp(-(s - t_p) / RING_LIFE)
-            colour = (hit_colour if hit else miss_colour) * (crowd * strength)
-            rr = int(round(np.sqrt(p) * scale * SS * one))
-            cv2.circle(
-                canvas,
-                (int(sx(0)), int(sy(0))),
-                rr,
-                colour.tolist(),
-                width,
-                cv2.LINE_AA,
-                shift,
+        # Top: the ingredients, high k first so the big ones sit on top.
+        fan = coeff[:live, None] * basis[:live]
+        ys = px(FAN_Y - FAN_SCALE * fan)
+        xcol = px(cols)
+        for j in range(live - 1, -1, -1):
+            fresh = np.exp(-max(m - j, 0.0) / 1.5)
+            colour = np.clip(fan_colour[j] * (0.55 + 0.45 * w[j] + 0.6 * fresh), 0, 255)
+            thick = SS * (2 if j < 8 else 1)
+            pts = np.stack([xcol, ys[j]], 1)
+            cv2.polylines(
+                canvas, [pts], False, colour.tolist(), thick, cv2.LINE_AA, shift
             )
-        # The sweeping circle itself.
-        if s < SWEEP_END:
-            sweep = 0.35 * float(smoothstep((SWEEP_END - s) / 0.8))
-            cv2.circle(
+
+        # Middle: the sum, and the lens box at the jump.
+        total = coeff[:live] @ basis[:live]
+        pts = np.stack([xcol, px(SUM_Y - SUM_SCALE * total)], 1)
+        cv2.polylines(canvas, [pts], False, halo, 5 * SS, cv2.LINE_AA, shift)
+        cv2.polylines(canvas, [pts], False, core, 2 * SS, cv2.LINE_AA, shift)
+        x0, x1 = (screen_x(v / (2 * zoom)) for v in LENS_XI)
+        x0, x1 = max(x0, 2), min(x1, WIDTH - 2)
+        y0 = SUM_Y - SUM_SCALE * 1.24
+        y1 = SUM_Y - SUM_SCALE * LENS_S[0]
+        box_colour = hex_to_bgr(TEXT_DIM)
+        cv2.rectangle(
+            canvas,
+            (px(x0), px(y0)),
+            (px(x1), px(y1)),
+            box_colour,
+            SS,
+            cv2.LINE_AA,
+            shift,
+        )
+        for a, b in ((x0, LENS_X[0]), (x1, LENS_X[1])):
+            cv2.line(
                 canvas,
-                (int(sx(0)), int(sy(0))),
-                int(round(r * scale * SS * one)),
-                (sweep_colour * sweep).tolist(),
-                width,
+                (px(a), px(y1)),
+                (px(b), px(LENS_TOP - 30)),
+                ghost,
+                SS,
                 cv2.LINE_AA,
                 shift,
             )
 
-        # The lit Gaussian primes, flaring as they appear.
-        lit = int(np.searchsorted(points["time"], s, side="right"))
-        if lit:
-            age = s - points["time"][:lit]
-            flare = np.exp(-age / FLASH)
-            radii = np.round(dot * (1 + 0.9 * flare) * SS * one).astype(int)
-            colours = point_colour[:lit] * (1 + 0.45 * flare[:, None])
-            xs, ys = sx(points["a"][:lit]), sy(points["b"][:lit])
-            for x, y, rad, c in zip(
-                xs.tolist(), ys.tolist(), radii.tolist(), colours.tolist()
-            ):
-                cv2.circle(canvas, (x, y), rad, c, -1, cv2.LINE_AA, shift)
+        # Bottom: the lens, S_M(ξ / 2M) against ξ.
+        lens = coeff[:live] @ np.sin(np.outer(ks[:live], xi / (2 * zoom))).astype(
+            np.float32
+        )
+        pulse = float(np.sum(np.exp(-(s - doubling_times[doubling_times <= s]) / 0.45)))
+        pulse = min(pulse, 1.0)
+        y = px(lens_y(GIBBS)) - lens_offset
+        line_colour = (overshoot * (0.55 + 0.45 * pulse)).tolist()
+        sub = canvas[lens_rows]
+        cv2.line(
+            sub,
+            (px(LENS_X[0]), y),
+            (px(LENS_X[1]), y),
+            line_colour,
+            SS * (2 if pulse > 0.5 else 1),
+            cv2.LINE_AA,
+            shift,
+        )
+        pts = np.stack([px(lens_cols), px(lens_y(lens)) - lens_offset], 1)
+        cv2.polylines(sub, [pts], False, halo, 5 * SS, cv2.LINE_AA, shift)
+        cv2.polylines(sub, [pts], False, core, 2 * SS, cv2.LINE_AA, shift)
 
         image = cv2.resize(canvas, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-        glow = cv2.GaussianBlur(image, (0, 0), GLOW_SIGMA)
-        image = image + GLOW_GAIN * glow + bg
+        image = image.astype(np.float32)
+        light = np.clip(image - bg, 0, None)
+        glow = cv2.GaussianBlur(light, (0, 0), GLOW_SIGMA)
+        image += GLOW_GAIN * glow
 
-        # Text.
-        intro = float(smoothstep(s / 0.3))
-        blit_mask(image, title, WIDTH // 2, TITLE_Y, text, intro, "centre")
-        k = int(np.searchsorted(ticker_times, s, side="right")) - 1
-        ticker_out = float(smoothstep((THEOREM_AT - s) / 0.4))
-        if k >= 0 and ticker_out > 0:
-            t_k, mask, colour = ticker[k]
-            pop = float(smoothstep((s - t_k) / 0.12))
-            blit_mask(
-                image, mask, WIDTH // 2, TICKER_Y, colour, pop * ticker_out, "centre"
-            )
-        show = float(smoothstep((s - THEOREM_AT) / 0.6))
-        if show > 0:
-            blit_mask(image, theorem, WIDTH // 2, TICKER_Y + 10, text, show, "centre")
-            late = float(smoothstep((s - THEOREM_AT - 0.5) / 0.6))
-            blit_mask(
-                image, credit, WIDTH // 2, TICKER_Y + 120, text_dim, late, "centre"
-            )
-
+        blit(image, label, WIDTH // 2, LABEL_Y, text_dim, anchor="centre")
+        count = int(np.clip(round(m), 1, TERMS))
+        blit(image, counters[count], WIDTH // 2, COUNTER_Y, text, anchor="centre")
+        blit(image, lens_label, LENS_X[0], LENS_LABEL_Y, text_dim)
+        blit(
+            image,
+            nine,
+            LENS_X[1] - nine.shape[1],
+            int(lens_y(GIBBS)) - nine.shape[0] - 10,
+            overshoot.tolist(),
+            alpha=0.7 + 0.3 * pulse,
+        )
         out = float(smoothstep((DURATION - s) / FADE))
         if out < 1:
             image = bg + out * (image - bg)
         return image
 
-    render_frames(settings, render, FRAME_COUNT)
-    style = settings.audio_tag if settings.audio_tag in STYLES else STYLE
-    track = soundtrack(points, rings, style, settings.audio_rng)
+    render_frames(settings, render, FRAME_COUNT, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
+    tag = settings.audio_tag
+    voice = STYLES[tag].voice if tag in STYLES else audio.bell
+    track = soundtrack(voice, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

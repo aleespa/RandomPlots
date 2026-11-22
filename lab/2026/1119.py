@@ -42,6 +42,11 @@ from common.video import (
     smoothstep,
 )
 
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = "The number fractions can't catch"
+HOOK_Y = 400
+HOOK_COLOUR = "#1c1b22"
+
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
 
@@ -308,7 +313,7 @@ def generate(settings: ImageProcessingSettings = None):
         image = bg + (image - bg) * end
         return image
 
-    render_frames(settings, render, FRAME_COUNT)
+    render_frames(settings, render, FRAME_COUNT, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
     style_name = settings.audio_tag if settings.audio_tag in STYLES else STYLE
     track = soundtrack(curve_tau, curve_log, style_name, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)

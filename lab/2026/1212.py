@@ -1,30 +1,33 @@
 """
-Three Answers to One Probability Question
+The Hole in Escher's Print Gallery
 
-Pick a random chord of a circle. What is the probability it is longer than a
-side of the triangle inside? Three circles answer with 20,000 random chords
-each, and disagree: 1/3, 1/2 and 1/4.
+The Droste effect, Escher's way: a picture that contains itself, spiralling in
+forever. Escher's 1956 Print Gallery twists a town into the gallery that shows
+it, but he could not draw the centre and left a blank hole there.
 
-This is Bertrand's paradox (1889), and no answer is wrong. Two random points
-on the circle, a random point on a random radius, a random midpoint inside:
-each is a fair way to pick a chord "at random", but they are different ways,
-and probability must know which. Red chords are the long ones: their midpoints
-lie in the triangle's inner circle.
+In 2003 Hendrik Lenstra and Bart de Smit found the rule behind it. Take a
+picture holding a copy of itself four times smaller, and bend it with a
+conformal map from complex analysis, z ↦ z^α, α = 1 − i·ln 4 / 2π. Angles
+survive, but once around the centre now takes you one picture deeper. The
+frames never close: they form one endless spiral, and the hole fills itself in.
 
-Listen: a note for each early chord and as each circle passes 10, 100 and 1,000
-chords; at the end, three notes at 3, 2 and 4 times one pitch.
+Listen: strings and a soft choir hold slow chords, and a music-box bell rings
+each time a frame's corner crosses the same circle.
 
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#bertrandparadox #probability #mathart #generativeart #randomplots
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#drosteeffect #complexanalysis #mathart #generativeart #randomplots
 """
 
 import gc
+import math
 
-import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
 from loguru import logger
 
 from common import audio
+from common.gpu import select_device
 from common.image_processing import ImageProcessingSettings
 from common.music import Scale
 from common.video import (
@@ -33,439 +36,309 @@ from common.video import (
     WIDTH,
     blit_mask,
     frame_count,
-    hex_to_bgr,
     latex_mask,
+    palette_lut,
     render_frames,
-    smoothstep,
 )
 
-DURATION = 15.0  # seconds, one-shot
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = "The hole Escher couldn't fill"
+HOOK_Y = 470
+HOOK_COLOUR = "#f4f0e7"
+
+DURATION = 15.0  # seconds, one exact loop
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The chords ----------------------------------------------------------------------
-CHORDS = 20000  # per circle
-SLOW = 5  # the first chords of each circle land one at a time, shown being built
-SLOW_START, SLOW_STEP = 0.15, 0.8  # s
-METHOD_LAG = 0.27  # s between the three circles' slow chords
-FAST_END = 11.0  # s, the last chord lands
-REVEAL = 11.4  # s, the exact answers appear
-ANSWERS = (3, 2, 4)  # 1 / k for the three methods
-MILESTONES = (10, 100, 1000)
+# --- The picture and the map ----------------------------------------------------
+SCALE = 4.0  # each picture holds a copy SCALE times smaller
+L = math.log(SCALE)
+TWIST = L / (2.0 * math.pi)  # alpha = 1 - i * TWIST: one turn = one picture deeper
+LEVELS = 2  # pictures zoomed through per loop (whole, so the loop closes)
+SHIFT0 = 0.35  # where in the zoom the loop starts, in pictures
+UNIT = WIDTH / 2  # output pixels per unit of z
+FRAME_OUT = 1.3  # the frame runs from |z'|_inf = 1 (the hole) to FRAME_OUT
+SS = 2  # supersampling
 
-# --- Layout (px) -----------------------------------------------------------------------
-R = 212  # circle radius
-CX = 292
-CYS = (612, 1102, 1592)
-MARGIN = 10
-SIDE = 2 * (R + MARGIN)  # crop around a circle, 1x
-SS = 2  # supersampling of the ink
-STEP = 0.7  # sample spacing along a chord, supersampled px
-TX = 572  # left edge of the panel text
-TITLE_YS = (112, 186)
-LEGEND_Y = 282
+# --- Palette ----------------------------------------------------------------------
+WALL = "#0f2c2e"  # bottle-green gallery wall
+TRELLIS = "#2c5a52"
+DOTS = "#8a6a32"
+LAMP = "#f3c77a"  # warm light above each frame
+GOLD = ("#2a1a08", "#6b4718", "#b9822f", "#e6b65a", "#fff0c4")
+WIRE = "#3b2a14"
+TEXT = "#f4ead2"
+MEAN = "#2a3a2c"  # what the infinitely small centre averages to
 
-# --- Look ------------------------------------------------------------------------------
-PAPER = "#f4f0e7"
-LONG = "#b8432f"  # brick red: longer than the triangle's side
-SHORT = "#27466b"  # ink blue: shorter
-LINE = "#4a4440"  # circle and triangle
-TEXT, TEXT_DIM = "#2a2622", "#7a7068"
-INK = 0.04  # absorbance per unit of chord coverage, with every chord laid
-INK_FIRST = 0.7  # ... and the most it reaches while only a few chords are down
-INK_POWER = 0.5  # ink per chord ~ n^-0.5, so the density grows like sqrt(n)
-FLASH = 0.6  # s for a new chord's highlight to fade by e
+# --- Text -------------------------------------------------------------------------
+TITLE = r"$\mathrm{A\ picture\ inside\ itself}$"
+FORMULA = rf"$z\ \mapsto\ z^{{\,1\,-\,\frac{{i\,\ln {SCALE:.0f}}}{{2\pi}}}}$"
+TITLE_Y, FORMULA_Y = 150, 1660
 
-# --- Sound -----------------------------------------------------------------------------
-# "box" (bells over pad and choir, posted) or "keys" (Rhodes over pad and strings)
-STYLE = "box"
-VARIANTS = {
-    # lead voice, mode, MIDI roots, second bed voice
-    "keys": (audio.rhodes, "dorian", range(55, 61), "strings"),
-    "box": (audio.bell, "lydian", range(67, 73), "choir"),
-}
-PROGRESSION = (0, 5, 3, 4)  # one chord per ~2.9 s, then home at the reveal
+# --- Soundtrack -------------------------------------------------------------------
+SOUND = "swell"  # "swell" (strings, choir, music-box bells) or "lofi" (pad, Rhodes)
+BED_ROOTS = range(52, 58)  # E3 .. A3: the chords' root
+PROGRESSION = (0, 1, 5, 4)  # in lydian: I, II, vi, V, one chord per quarter loop
+CORNER_RADIUS = 420  # px: a bell rings as a frame corner crosses this circle
 
 
-def chord_times():
-    """Landing time (s) of chord i of a circle, before the circle's lag."""
-    i = np.arange(CHORDS, dtype=float)
-    slow = SLOW_START + SLOW_STEP * i
-    last_slow = SLOW_START + SLOW_STEP * (SLOW - 1)
-    # then exponentially faster: chord i lands at a time linear in log i
-    u = np.log(np.maximum(i, SLOW - 1) / (SLOW - 1)) / np.log((CHORDS - 1) / (SLOW - 1))
-    fast = last_slow + (FAST_END - 2 * METHOD_LAG - last_slow) * u
-    return np.where(i < SLOW, slow, fast)
+def _rgb(colour):
+    return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
 
 
-def ink_strength(n):
-    """
-    Absorbance per unit coverage with n chords down: strong for the first chords
-    so each one shows, thinning as they pile up so the finished weave stays
-    readable instead of turning black.
-    """
-    return min(INK_FIRST, INK * (CHORDS / n) ** INK_POWER)
+def _cover(d, aa):
+    """Coverage of a shape with signed distance d (negative inside), edge width aa."""
+    return (0.5 - d / aa).clamp(0.0, 1.0)
 
 
-def sample_chords(rng):
-    """
-    CHORDS chords of the unit circle for each of Bertrand's three methods, as
-    (endpoints (n, 2, 2), midpoint distance d (n,), construction (n, 2)).
-    Construction: method 0, the angle of the second endpoint; 1 and 2, the
-    midpoint's angle phi.
-    """
-    out = []
-    # 0: two independent uniform points on the circle
-    a, b = rng.uniform(0, 2 * np.pi, (2, CHORDS))
-    ends = np.stack(
-        [np.stack([np.cos(a), np.sin(a)], 1), np.stack([np.cos(b), np.sin(b)], 1)], 1
+def _segment(px, py, ax, ay, bx, by):
+    """Distance from points to the segment a-b."""
+    dx, dy = bx - ax, by - ay
+    h = (((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0)
+    return torch.hypot(px - ax - h * dx, py - ay - h * dy)
+
+
+def _text_layer():
+    """Full-frame alpha of the on-screen LaTeX (title and formula), built once."""
+    layer = np.zeros((HEIGHT, WIDTH, 3), np.float32)
+    blit_mask(layer, latex_mask(TITLE, 62), WIDTH // 2, TITLE_Y, (1, 1, 1), 1, "centre")
+    blit_mask(
+        layer, latex_mask(FORMULA, 96), WIDTH // 2, FORMULA_Y, (1, 1, 1), 1, "centre"
     )
-    out.append((ends, np.abs(np.cos((a - b) / 2)), np.stack([a, b], 1)))
-    # 1: a uniform radius, a uniform point on it; 2: a uniform point in the disc
-    for method in (1, 2):
-        phi = rng.uniform(0, 2 * np.pi, CHORDS)
-        u = rng.uniform(0, 1, CHORDS)
-        d = u if method == 1 else np.sqrt(u)
-        mid = d[:, None] * np.stack([np.cos(phi), np.sin(phi)], 1)
-        along = np.stack([-np.sin(phi), np.cos(phi)], 1) * np.sqrt(1 - d * d)[:, None]
-        ends = np.stack([mid - along, mid + along], 1)
-        out.append((ends, d, np.stack([phi, phi], 1)))
-    return out
+    return layer[..., :1]
 
 
-def ink_samples(ends, long):
+def corner_events():
     """
-    Pixel indices (into a (2, S, S) supersampled crop, class 0 = long, 1 = short)
-    of points every STEP px along each chord, concatenated in chord order, and the
-    offset where each chord's samples start.
+    (t, corner, x) for every frame corner crossing CORNER_RADIUS during the loop,
+    t in [0, 1), from the same closed form as the picture. A corner of the frame,
+    at log z' = log(FRAME_OUT·√2) + i(π/4 + jπ/2) + nL in the picture, sits at
+    log z = (log z' + shift(t)) / α on screen, shift(t) = (LEVELS·t + SHIFT0)·L;
+    the copies n of one corner cross the circle 1 / LEVELS of a loop apart.
     """
-    s = SS * SIDE
-    p = (SIDE / 2 + R * ends * [1, -1]) * SS  # (n, 2, 2) supersampled px
-    length = np.linalg.norm(p[:, 1] - p[:, 0], axis=1)
-    counts = np.ceil(length / STEP).astype(int) + 1
-    offsets = np.concatenate([[0], np.cumsum(counts)])
-    chord = np.repeat(np.arange(len(ends)), counts)
-    u = (np.arange(offsets[-1]) - offsets[chord]) / (counts[chord] - 1)
-    xy = p[chord, 0] + u[:, None] * (p[chord, 1] - p[chord, 0])
-    xy = np.clip(np.rint(xy).astype(np.int64), 0, s - 1)
-    index = xy[:, 1] * s + xy[:, 0] + np.where(long[chord], 0, s * s)
-    return index.astype(np.int32), offsets
+    alpha = complex(1.0, -TWIST)
+    target = math.log(CORNER_RADIUS / UNIT)
+    events = []
+    for j in range(4):
+        u0 = math.log(FRAME_OUT * math.sqrt(2.0)) + 1j * (math.pi / 4 + j * math.pi / 2)
+        speed = (LEVELS * L / alpha).real  # d Re(log z) / dt
+        t0 = (target - ((u0 + SHIFT0 * L) / alpha).real) / speed
+        for n in range(-LEVELS - 2, LEVELS + 2):
+            t = t0 - n / LEVELS
+            if 0.0 <= t < 1.0:
+                w = (u0 + n * L + (LEVELS * t + SHIFT0) * L) / alpha
+                events.append((t, j, math.cos(w.imag)))
+    return sorted(events)
 
 
-def glyphs(size):
-    """Digit and point masks for a running estimate, built once."""
-    return {c: latex_mask(rf"$\mathrm{{{c}}}$", size) for c in "0123456789."}
-
-
-def blit_number(image, masks, text, x, bottom, colour, advance):
-    """Draw `text` digit by digit, bottoms on a common baseline, digits monospaced."""
-    for c in text:
-        m = masks[c]
-        if c == ".":
-            blit_mask(image, m, x + 2, bottom - m.shape[0], colour)
-            x += m.shape[1] + 6
+def soundtrack(kind, rng):
+    """
+    Ambient, loop-periodic (everything circular). A bed of four chords in lydian,
+    one per quarter loop (I, II, vi, V, so V leads back into I at the seam): "swell"
+    holds them on strings with a soft "u" choir an octave up; "lofi" on a dark pad
+    with a Rhodes stroke at each change. Over it, one struck note per frame corner
+    crossing the circle CORNER_RADIUS (4 per picture, 8 a loop): a music-box bell
+    ("swell") or a Rhodes note ("lofi"), the j-th tone of the chord sounding for
+    corner j, panned by the corner's x. A tempo-free delay and a long room.
+    """
+    root = int(rng.choice(BED_ROOTS))
+    scale = Scale(root, "lydian")
+    track = audio.silence(DURATION)
+    span = DURATION / len(PROGRESSION)
+    hz = lambda midi: float(audio.midi_to_hz(midi))
+    for i, degree in enumerate(PROGRESSION):
+        start = i * span - 0.6  # swell in a little early, overlap the release
+        chord = scale.chord(degree, 3, octave=1)
+        bass = scale.note(degree, 0)
+        if kind == "swell":
+            for midi in chord:
+                audio.add(
+                    track, audio.strings(hz(midi), span, 0.32, 1.4, 2.2, 0.35), start
+                )
+            audio.add(track, audio.strings(hz(bass), span, 0.30, 1.4, 2.2, 0.2), start)
+            for midi in chord:
+                voice = audio.choir(hz(midi + 12), span, 0.12, 1.6, 2.4, vowel="u")
+                audio.add(track, voice, start)
         else:
-            blit_mask(
-                image, m, x + (advance - m.shape[1]) // 2, bottom - m.shape[0], colour
-            )
-            x += advance
+            for midi in chord + [bass]:
+                audio.add(track, audio.pad(hz(midi), span, 0.28, 1.2, 2.2, 0.3), start)
+            for k, midi in enumerate(chord):
+                stroke = audio.rhodes(hz(midi), 0.35, length=3.5)
+                audio.add(track, audio.pan(stroke, 0.3 * (k - 1)), i * span + 0.03 * k)
+    events = corner_events()
+    for t, j, x in events:
+        when = t * DURATION
+        degree = PROGRESSION[int(when // span) % len(PROGRESSION)]
+        tones = scale.chord(degree, 4, octave=2)
+        if kind == "swell":
+            note = audio.bell(hz(tones[j]), 0.42, length=5.0)
+        else:
+            note = audio.rhodes(hz(tones[j] - 12), 0.5, length=4.0)
+        audio.add(track, audio.pan(note, 0.6 * x), when)
+    track = audio.highpass(track, 70.0)
+    if kind == "lofi":
+        track = audio.lowpass(track, 3800.0)
+    track = audio.delay(track, DURATION / 24, feedback=0.35, wet=0.2)
+    track = audio.reverb(track, rng, rt60=5.0, wet=0.45, tone=4500.0)
+    logger.info(f"Soundtrack {kind}: root {root}, {len(events)} corner bells")
+    return audio.master(track)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Bertrand's paradox (1889) as a 15 s one-shot. "A random chord is longer than
-    the side of the inscribed equilateral triangle" (length > sqrt(3) R, i.e. its
-    midpoint lies within R/2 of the centre, the triangle's incircle) has
-    probability 1/3, 1/2 or 1/4 depending on how the chord is chosen: two uniform
-    endpoints on the circle (P(d < 1/2) for d = |cos(dtheta/2)| is 1/3), a uniform
-    point on a uniform radius (d uniform: 1/2), or a uniform midpoint in the disc
-    (d = sqrt(u): 1/4).
+    The Droste effect of Escher's Print Gallery (Lenstra & de Smit, 2003), as a loop.
 
-    Data: 20000 chords per method from settings.rng, drawn up front, so the picture
-    depends on the seed (the posted video uses --seed 0). Chord i of a circle
-    lands at a fixed time: the first five 0.8 s apart (each circle 0.27 s behind
-    the one above), then at times linear in log i, so the count grows
-    exponentially to 20000 at 11 s. The exact answers fade in from 11.4 s and the
-    finished image rests to the end.
+    The picture: in coordinates z' it is a gallery wall (bottle green, a diamond
+    trellis, a warm lamp glow, the shadow of the outer frame) with a gold frame on
+    the square ring 1 <= |z'|_inf <= FRAME_OUT (mitred mouldings, Lambert-shaded
+    from the top left), a wire, a nail and a brass plate; the hole |z'|_inf < 1
+    holds the same picture SCALE = 4 times smaller. So the picture is invariant
+    under z' -> z'·4, and in u = log z' it is doubly periodic, with periods
+    L = ln 4 and 2πi.
 
-    Frame at time s (t = frame / (FRAME_COUNT - 1), s = 15 t): for each circle the
-    first n(s) chords are laid as ink. Every chord is precomputed as samples 0.7 px
-    apart on a 2x grid; a frame bincounts the first n chords' samples (long and
-    short separately), area-downsamples to coverage, and multiplies the paper by
-    exp(-k(n) coverage A), k(n) = min(0.7, 0.04 sqrt(20000 / n)), with A the absorbance of brick red (long) or ink blue
-    (short) -- subtractive, like ink. New chords flash as thick lines with their
-    construction (the two endpoints; the radius and the point on it; the
-    midpoint), fading over 0.6 s, only during the first ~5 s. Running estimates
-    (long / n, three decimals) are composed from LaTeX digit masks built once; all
-    text is LaTeX (latex_mask / blit_mask). Pure function of s on the render_frames
-    thread pool.
+    The map: a screen point z goes to u = α·log z + shift(t), α = 1 − i·L/2π, then
+    to the fundamental ring by subtracting kL, k = floor(log|e^u|_inf / L), and
+    z' = e^u. α sends the screen's period 2πi to 2πi + L, a period of the picture,
+    so the image is single-valued and conformal: once round the centre is one
+    picture deeper, the frames are a single spiral. shift(t) = (LEVELS·t + SHIFT0)·L
+    zooms through LEVELS = 2 pictures per loop, a whole number of periods, so the
+    loop closes exactly. Edges are antialiased analytically with the pixel's
+    footprint in z', |dz'/dz|·dz = |z'|·|α|/|z|·dz, and detail fades to the mean
+    colour where it falls below a pixel (the centre); plus 2x supersampling.
+    Per-pixel on the GPU (torch), render_frames(parallel=False). Static LaTeX:
+    a title and the map.
 
-    Sound (posted: --seed 0, no --audio-only tag, STYLE "box" = music_box bells
-    in lydian over pad and "u" choir, audio seed = seed, root 70):
-    see soundtrack().
+    The picture uses no randomness, so every --seed draws the same frames.
+    Soundtrack (`soundtrack`, see there): the posted one is "swell" with --seed 0
+    (the default; settings.audio_rng picks the root and the room). An --audio-only
+    tag "swell" or "lofi" picks that version; any other tag plays SOUND.
     """
     settings = settings or ImageProcessingSettings(1)
-    rng = settings.rng
+    device = select_device()
+    logger.info(f"Droste: scale {SCALE}, twist {TWIST:.4f}, {LEVELS} pictures a loop")
 
-    methods = sample_chords(rng)
-    base = chord_times()
-    times = [base + k * METHOD_LAG for k in range(3)]
-    longs = [d < 0.5 for _, d, _ in methods]
-    ink = [ink_samples(ends, long) for (ends, _, _), long in zip(methods, longs)]
-    running = [np.cumsum(long) / np.arange(1, CHORDS + 1) for long in longs]
-    for k, long in enumerate(longs):
-        logger.info(f"Method {k}: {long.mean():.4f} long (exact 1/{ANSWERS[k]})")
+    def colour(c):
+        return torch.tensor(_rgb(c), device=device, dtype=torch.float32)
 
-    paper = np.array(hex_to_bgr(PAPER), np.float32)
-    colours = {
-        name: np.array(hex_to_bgr(c), np.float32)
-        for name, c in (("long", LONG), ("short", SHORT), ("line", LINE))
-    }
-    text_c, dim_c = hex_to_bgr(TEXT), hex_to_bgr(TEXT_DIM)
-    absorb = np.stack(
-        [-np.log(colours["long"] / paper), -np.log(colours["short"] / paper)]
-    )  # (2, 3)
-
-    # --- Static picture: paper, labels, legend --------------------------------------
-    background = np.empty((HEIGHT, WIDTH, 3), np.float32)
-    background[:] = paper
-    labels = (
-        (r"$\mathrm{two\ random\ points}$", r"$\mathrm{on\ the\ circle}$"),
-        (r"$\mathrm{a\ random\ point\ on}$", r"$\mathrm{a\ random\ radius}$"),
-        (r"$\mathrm{a\ random\ midpoint}$", r"$\mathrm{inside\ the\ disc}$"),
+    wall, trellis, dots, lamp, wire, mean, text = (
+        colour(c) for c in (WALL, TRELLIS, DOTS, LAMP, WIRE, MEAN, TEXT)
     )
-    for (first, second), cy in zip(labels, CYS):
-        blit_mask(background, latex_mask(first, 40), TX, cy - 178, dim_c)
-        blit_mask(background, latex_mask(second, 40), TX, cy - 128, dim_c)
-    approx = latex_mask(r"$P\ \approx$", 70)  # drawn once a circle has a chord
-    # Legend: a red and a blue stroke with their meaning.
-    long_word = latex_mask(r"$\mathrm{longer\ than\ its\ side}$", 38)
-    short_word = latex_mask(r"$\mathrm{shorter}$", 38)
-    stroke, gap = 56, 14
-    total = 2 * (stroke + gap) + long_word.shape[1] + 60 + short_word.shape[1]
-    x = (WIDTH - total) // 2
-    for word, colour in ((long_word, LONG), (short_word, SHORT)):
-        y_mid = LEGEND_Y + word.shape[0] // 2
-        cv2.line(
-            background,
-            (x, y_mid),
-            (x + stroke, y_mid),
-            hex_to_bgr(colour),
-            5,
-            cv2.LINE_AA,
+    gold_lut = torch.tensor(palette_lut(GOLD, 512), device=device)
+
+    # Screen grid, log z, and the parts of the map that don't depend on t.
+    h, w = HEIGHT * SS, WIDTH * SS
+    ys = (h / 2 - (torch.arange(h, device=device) + 0.5)) / (SS * UNIT)
+    xs = ((torch.arange(w, device=device) + 0.5) - w / 2) / (SS * UNIT)
+    y, x = torch.meshgrid(ys, xs, indexing="ij")
+    log_r = 0.5 * torch.log(x * x + y * y + 1e-12)
+    theta = torch.atan2(y, x)
+    u_re0 = log_r + TWIST * theta  # alpha * log z, alpha = 1 - i TWIST
+    u_im = theta - TWIST * log_r
+    cos_u, sin_u = torch.cos(u_im), torch.sin(u_im)
+    square = torch.log(torch.maximum(cos_u.abs(), sin_u.abs()))  # log of |.|_inf / |.|
+    # Footprint of one supersample in z' per unit |z'|: |alpha| / (|z| SS UNIT).
+    foot0 = math.hypot(1.0, TWIST) / (torch.exp(log_r) * SS * UNIT)
+    del ys, xs, y, x, theta
+
+    # Screen-space vignette and text bands, and the text itself.
+    vy = torch.linspace(-1, 1, HEIGHT, device=device)[:, None]
+    vx = torch.linspace(-1, 1, WIDTH, device=device)[None, :]
+    shade = 1.0 - 0.35 * (vx**2 * 0.6 + vy**2 * 0.4)
+    band = 1.0 - 0.55 * (
+        torch.exp(-(((vy + 0.86) / 0.12) ** 2))
+        + torch.exp(-(((vy - 0.76) / 0.16) ** 2))
+    )
+    shade = (shade * band)[..., None]
+    text_alpha = torch.tensor(_text_layer(), device=device)
+
+    light = np.array([-0.45, 0.55, 1.0])
+    light /= np.linalg.norm(light)
+    lx, ly, lz = (float(v) for v in light)
+
+    def picture(X, Y, fw):
+        """RGB of the picture at z' = X + iY (1 <= |z'|_inf < SCALE), edge width fw."""
+        ax, ay = X.abs(), Y.abs()
+        m = torch.maximum(ax, ay)
+        detail = (1.0 - fw / 0.02).clamp(0.0, 1.0)[..., None]  # fades out sub-pixel
+        # Wall: lamp glow above the frame, the outer frame's shadow near m = SCALE.
+        glow = torch.exp(-((X / 1.1) ** 2) - ((Y - FRAME_OUT - 0.55) / 0.75) ** 2)
+        lip = (m - (SCALE - 0.3)).clamp(0.0, 0.3) / 0.3
+        img = wall * (0.8 + 0.45 * glow - 0.55 * lip**2)[..., None]
+        img = img + 0.18 * glow[..., None] * lamp
+        # Diamond trellis wallpaper with a dot in every diamond.
+        P = 0.22
+        a, c = (X + Y) / P, (X - Y) / P
+        line = torch.minimum((a - a.round()).abs(), (c - c.round()).abs()) * P / 1.414
+        cov = _cover(line - 0.0045, fw)[..., None] * detail
+        img = img + (trellis - img) * cov * 0.55
+        dot = torch.hypot(a - a.floor() - 0.5, c - c.floor() - 0.5) * P / 1.414
+        cov = _cover(dot - 0.014, fw)[..., None] * detail
+        img = img + (dots - img) * cov * 0.6
+        # Drop shadow of this picture's frame, then the wire and the nail.
+        sm = torch.maximum((X - 0.05).abs(), (Y + 0.07).abs())
+        drop = 1.0 - ((sm - FRAME_OUT + 0.04) / 0.16).clamp(0.0, 1.0)
+        img = img * (1.0 - 0.6 * drop)[..., None]
+        top = FRAME_OUT - 0.04
+        nail_y = FRAME_OUT + 0.5
+        for sx in (-1.0, 1.0):
+            d = _segment(X, Y, sx * 0.72 * FRAME_OUT, top, 0.0, nail_y)
+            img = img + (wire - img) * _cover(d - 0.006, fw)[..., None]
+        nail = torch.hypot(X, Y - nail_y)
+        img = img + (gold_lut[400] - img) * _cover(nail - 0.022, fw)[..., None]
+        # Brass plate under the frame.
+        py = -(FRAME_OUT + 0.2)
+        qx, qy = (X.abs() - 0.28).clamp(min=0), ((Y - py).abs() - 0.065).clamp(min=0)
+        plate = torch.hypot(qx, qy) + torch.minimum(
+            torch.maximum(X.abs() - 0.28, (Y - py).abs() - 0.065), torch.zeros_like(X)
         )
-        x += stroke + gap
-        blit_mask(background, word, x, LEGEND_Y, dim_c)
-        x += word.shape[1] + 60
-
-    titles = [
-        (
-            latex_mask(r"$\mathrm{Pick\ a\ chord\ of\ a\ circle\ at\ random.}$", 52),
-            latex_mask(
-                r"$\mathrm{Is\ it\ longer\ than\ the\ triangle\text{'}s\ side?}$", 52
-            ),
-        ),
-        (
-            latex_mask(r"$\mathrm{Three\ fair\ ways\ to\ pick\ it{,}}$", 52),
-            latex_mask(r"$\mathrm{three\ different\ answers.}$", 52),
-        ),
-    ]
-    for pair in titles:
-        for m in pair:
-            assert m.shape[1] < WIDTH - 60, m.shape
-    exact = [
-        latex_mask(rf"$\mathrm{{exactly}}\ \ \dfrac{{1}}{{{k}}}$", 66) for k in ANSWERS
-    ]
-    digits = glyphs(70)
-    advance = max(digits[c].shape[1] for c in "0123456789") + 3
-    number_x = TX + approx.shape[1] + 16
-
-    # Circle and triangle outlines, one alpha mask shared by the three crops.
-    outline = np.zeros((SIDE, SIDE), np.uint8)
-    centre = (SIDE * 8, SIDE * 8)  # 4-bit subpixel
-    cv2.circle(outline, centre, R * 16, 150, 2, cv2.LINE_AA, 4)
-    vertices = np.array(
-        [
-            [SIDE / 2 + R * np.cos(a), SIDE / 2 - R * np.sin(a)]
-            for a in np.pi / 2 + 2 * np.pi / 3 * np.arange(3)
-        ]
-    )
-    cv2.polylines(
-        outline, [np.rint(vertices * 16).astype(np.int32)], True, 95, 1, cv2.LINE_AA, 4
-    )
-    outline_alpha = outline.astype(np.float32)[..., None] / 255
-
-    def to_px(point):
-        """Unit-circle point -> 4-bit subpixel crop coordinates."""
-        return (
-            int(round((SIDE / 2 + R * point[0]) * 16)),
-            int(round((SIDE / 2 - R * point[1]) * 16)),
+        brass = gold_lut[(330 + 120 * (Y - py) / 0.065).clamp(0, 511).long()]
+        rim = _cover(-plate - 0.012, fw)[..., None]
+        brass = brass * (0.7 + 0.3 * rim)
+        img = img + (brass - img) * _cover(plate, fw)[..., None]
+        # The frame: mouldings across q in [0, 1], a mitre on each diagonal.
+        q = ((m - 1.0) / (FRAME_OUT - 1.0)).clamp(0.0, 1.0)
+        bead = ((q - 0.06) / 0.38).clamp(0.0, 1.0)
+        outer = ((q - 0.78) / 0.22).clamp(0.0, 1.0)
+        slope = (
+            1.7 * torch.cos(math.pi * bead) * ((q > 0.06) & (q < 0.44))
+            + 0.25
+            * torch.sin(2 * math.pi * (q - 0.44) / 0.34)
+            * ((q >= 0.44) & (q < 0.78))
+            + 1.4 * torch.cos(math.pi * outer) * (q >= 0.78)
+            - 1.2 * (q <= 0.06)
         )
-
-    def flash(k, s):
-        """Highlight masks (long, short, construction) of circle k's recent chords."""
-        gate = 1.0 - float(smoothstep((s - 3.6) / 1.4))
-        if gate <= 0:
-            return None
-        ends, d, angle = methods[k]
-        age = s - times[k]
-        recent = np.flatnonzero((age >= 0) & (age < 5 * FLASH))
-        if len(recent) == 0:
-            return None
-        masks = np.zeros((3, SIDE, SIDE), np.uint8)
-        for i in recent[np.argsort(-age[recent])]:  # oldest first
-            h = gate * np.exp(-age[i] / FLASH) * float(smoothstep(age[i] / 0.08))
-            value = int(255 * h)
-            if value < 2:
-                continue
-            target = masks[0] if longs[k][i] else masks[1]
-            a, b = to_px(ends[i, 0]), to_px(ends[i, 1])
-            cv2.line(target, a, b, value, 3, cv2.LINE_AA, 4)
-            mark = masks[2]
-            dot = int(6.5 * 16)
-            if k == 0:
-                cv2.circle(mark, a, dot, value, -1, cv2.LINE_AA, 4)
-                cv2.circle(mark, b, dot, value, -1, cv2.LINE_AA, 4)
-            else:
-                phi = angle[i, 0]
-                mid = d[i] * np.array([np.cos(phi), np.sin(phi)])
-                if k == 1:
-                    rim = to_px((np.cos(phi), np.sin(phi)))
-                    cv2.line(mark, to_px((0, 0)), rim, value // 2, 2, cv2.LINE_AA, 4)
-                cv2.circle(mark, to_px(mid), dot, value, -1, cv2.LINE_AA, 4)
-        return masks.astype(np.float32) / 255
-
-    s2 = SS * SIDE
+        horizontal = ay >= ax
+        nx = torch.where(horizontal, torch.zeros_like(X), torch.sign(X))
+        ny = torch.where(horizontal, torch.sign(Y), torch.zeros_like(Y))
+        lambert = (-slope * (nx * lx + ny * ly) + lz) / torch.sqrt(1 + slope * slope)
+        tone = (lambert.clamp(0.0, 1.0) ** 1.6) * 0.92 + 0.02
+        tone = tone + 0.25 * lambert.clamp(0.0, 1.0) ** 18  # a little glint
+        gold = gold_lut[(tone.clamp(0, 1) * 511).long()]
+        mitre = ((ax - ay).abs() / 1.414 - 0.004) / fw
+        gold = gold * (0.55 + 0.45 * mitre.clamp(0.0, 1.0))[..., None]
+        inside = _cover(m - FRAME_OUT, fw)[..., None]
+        img = img + (gold - img) * inside
+        # Below a pixel, everything is the average colour.
+        far = ((fw - 0.02) / 0.06).clamp(0.0, 1.0)[..., None]
+        return img + (mean - img) * far
 
     def render(frame):
-        s = DURATION * frame / (FRAME_COUNT - 1)
-        image = background.copy()
+        t = frame / FRAME_COUNT  # loop: [0, 1)
+        u_re = u_re0 + (LEVELS * t + SHIFT0) * L
+        k = torch.floor((u_re + square) / L)
+        radius = torch.exp(u_re - k * L)
+        X, Y = radius * cos_u, radius * sin_u
+        img = picture(X, Y, radius * foot0)
+        img = F.avg_pool2d(img.permute(2, 0, 1)[None], SS)[0].permute(1, 2, 0)
+        img = img * shade
+        img = img + (text - img) * text_alpha
+        return (img.clamp(0, 1) ** (1 / 1.0)) * 255.0
 
-        for k, cy in enumerate(CYS):
-            n = int(np.searchsorted(times[k], s, side="right"))
-            index, offsets = ink[k]
-            y0, x0 = cy - SIDE // 2, CX - SIDE // 2
-            crop = image[y0 : y0 + SIDE, x0 : x0 + SIDE]
-            if n:
-                hits = np.bincount(index[: offsets[n]], minlength=2 * s2 * s2)
-                hits = hits.astype(np.float32).reshape(2, s2, s2)
-                cover = [
-                    cv2.resize(h, (SIDE, SIDE), interpolation=cv2.INTER_AREA) * STEP
-                    for h in hits
-                ]
-                density = (
-                    cover[0][..., None] * absorb[0] + cover[1][..., None] * absorb[1]
-                )
-                crop *= np.exp(-ink_strength(n) * density)
-            crop += outline_alpha * (colours["line"] - crop)
-            masks = flash(k, s)
-            if masks is not None:
-                for mask, name in zip(masks, ("long", "short", "line")):
-                    a = mask[..., None]
-                    crop += a * (colours[name] - crop)
-
-            # Running estimate, then the exact answer.
-            if n:
-                shown = float(smoothstep((s - times[k][0]) / 0.15))
-                top = cy + 18 - approx.shape[0]
-                blit_mask(image, approx, TX, top, colours["long"], alpha=shown)
-                value = f"{running[k][n - 1]:.3f}"
-                blit_number(
-                    image, digits, value, number_x, cy + 18, colours["long"], advance
-                )
-            fade = float(smoothstep((s - REVEAL - 0.25 * k) / 0.5))
-            if fade > 0:
-                blit_mask(image, exact[k], TX, cy + 52, text_c, alpha=fade)
-
-        # The question, then the conclusion.
-        swap = float(smoothstep((s - REVEAL) / 0.5))
-        for pair, alpha in ((titles[0], 1 - swap), (titles[1], swap)):
-            if alpha <= 0:
-                continue
-            for m, y in zip(pair, TITLE_YS):
-                blit_mask(image, m, WIDTH // 2, y, text_c, alpha=alpha, anchor="centre")
-        return image
-
-    render_frames(settings, render, FRAME_COUNT)
-    track = soundtrack(
-        times, longs, methods, settings.audio_tag or STYLE, settings.audio_rng
-    )
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
+    tag = getattr(settings, "audio_tag", "")
+    kind = tag if tag in ("swell", "lofi") else SOUND
+    track = soundtrack(kind, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
-
-
-def soundtrack(times, longs, methods, variant, rng):
-    """
-    Ambient one-shot: a sustained bed with sparse struck accents from the chords.
-
-    Bed: pad chords I vi IV V in the variant's mode (dorian for "keys", lydian for
-    "box"), ~2.9 s each, an octave and a half under the lead, with strings
-    ("keys") or an "u" choir ("box") an octave above; it swells as the ink
-    builds, then lands on the home chord at the reveal and rings out.
-    Accents (Rhodes for "keys", bells for "box"): each of the first five chords of
-    every circle, as it lands -- longer chords lower, panned by the chord's
-    midpoint x; one note per circle as its count passes 10, 100 and 1000 (tones
-    of the current bed chord, rising); at the reveal, three notes at 3, 2 and 4
-    times one frequency, one per circle as its exact answer 1/3, 1/2, 1/4
-    appears (the answers as harmonics). Echo, long room, circular=False,
-    master(loop=False).
-    """
-    voice, mode, roots, second = VARIANTS[variant]
-    root = int(rng.choice(roots))
-    scale = Scale(root, mode)
-    bed_octave = -2 if variant == "box" else -1
-    track = audio.silence(DURATION)
-
-    bed = audio.silence(DURATION)
-    bar = REVEAL / len(PROGRESSION)
-    sections = [(i * bar, bar, deg) for i, deg in enumerate(PROGRESSION)]
-    sections.append((REVEAL, DURATION - REVEAL, 0))
-    for i, (start, length, degree) in enumerate(sections):
-        level = 0.2 + 0.1 * i / len(PROGRESSION)
-        notes = scale.chord(degree, 3, octave=bed_octave)
-        for midi in notes:
-            hz = float(audio.midi_to_hz(midi))
-            attack = 0.5 if i == 0 else 1.2
-            held = audio.pad(hz, length + 0.6, level, attack, 2.5, brightness=0.3)
-            audio.add(bed, held, start - (0 if i == 0 else 0.6), circular=False)
-            upper = float(audio.midi_to_hz(midi + 12))
-            if second == "strings":
-                sound = audio.strings(upper, length + 0.6, 0.55 * level, 1.4, 2.5, 0.3)
-            else:
-                sound = audio.choir(upper, length + 0.6, 0.6 * level, 1.4, 2.5, "u")
-            audio.add(bed, sound, start - (0 if i == 0 else 0.6), circular=False)
-    track += audio.lowpass(bed, 2400.0, circular=False)
-
-    accents = audio.silence(DURATION)
-    count = 0
-    for k in range(3):
-        ends, d, _ = methods[k]
-        for i in range(SLOW):
-            length = 2 * np.sqrt(1 - d[i] ** 2)  # 0 .. 2 radii
-            degree = int(round((1 - length / 2) * 7))
-            x = float(ends[i, :, 0].mean())
-            note = voice(scale.hz(degree), 0.42)
-            audio.add(accents, audio.pan(note, 0.6 * x), times[k][i], circular=False)
-            count += 1
-        for j, n in enumerate(MILESTONES):
-            when = times[k][n - 1]
-            chord = scale.chord(PROGRESSION[min(int(when // bar), 3)], 3)
-            midi = chord[k] + 12 * (j // 2)
-            note = voice(float(audio.midi_to_hz(midi)), 0.34)
-            audio.add(accents, audio.pan(note, 0.4 * (k - 1)), when, circular=False)
-            count += 1
-    base = scale.hz(0, octave=-1)
-    for k, harmonic in enumerate(ANSWERS):
-        when = REVEAL + 0.25 * k + 0.15
-        note = voice(harmonic * base, 0.5)
-        audio.add(accents, audio.pan(note, 0.4 * (k - 1)), when, circular=False)
-        count += 1
-    accents = audio.lowpass(accents, 6000.0, circular=False)
-    accents = audio.delay(accents, 0.45, feedback=0.3, wet=0.22, circular=False)
-    track += accents
-    track = audio.highpass(track, 80.0, circular=False)
-    track = audio.reverb(track, rng, rt60=4.5, wet=0.4, tone=4200.0, circular=False)
-    logger.info(f"Soundtrack ({variant}): root {root} {mode}, {count} accents")
-    return audio.master(track, loop=False)
 
 
 if __name__ == "__main__":

@@ -1,31 +1,33 @@
 """
-Langton's Ant
+The Cat That Always Comes Back
 
-Langton's ant is a cellular automaton with one rule: on an empty cell turn right,
-on a filled cell turn left, then flip the cell and step forward.
+This is Arnold's cat map, the textbook example of chaos. Take a 322 × 322 pixel
+picture of a cat, shear it up, shear it sideways, and wrap whatever spills off
+one edge back in at the other: (x, y) → (2x + y, x + y) mod 322. Neighbouring
+pixels fly apart, and within a few steps the cat is pure static.
 
-For a few hundred steps it draws neat symmetric patterns. Then chaos: a
-shapeless blob grows for about 10,000 steps. Then, out of nowhere, the ant
-builds a highway, the same 104 steps repeated forever, marching off to
-infinity. Every starting pattern ever tried ends this way, yet nobody has
-proved it always must.
+Yet nothing is lost. There are only so many pixels, so the shuffle must
+repeat: after 12 steps the cat returns upside down, after 24 it is back
+exactly. This chaos is not randomness, just order scrambled beyond recognition.
 
-Listen: a pad and a soft choir hold the bed while gamelan bells strike whenever
-the ant gets farther from home than ever before; once the highway begins, the
-bells fall into its steady beat.
+Listen: a slow chord brightens with the static, a soft piano note climbs with
+every step, and each return lands on a rolled chord, minor upside down, home
+when the cat is back.
 
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#langtonsant #cellularautomata #emergence #mathart #randomplots
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#arnoldscatmap #chaostheory #mathart #generativeart #randomplots
 """
 
 import gc
 
 import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
 from loguru import logger
-from scipy.interpolate import PchipInterpolator
 
 from common import audio
+from common.gpu import select_device
 from common.image_processing import ImageProcessingSettings
 from common.music import STYLES, Scale
 from common.video import (
@@ -34,451 +36,381 @@ from common.video import (
     WIDTH,
     blit_mask,
     frame_count,
-    hex_to_bgr,
     latex_mask,
-    palette_lut,
     render_frames,
     smoothstep,
 )
 
-DURATION = 15.0  # seconds, a one-shot
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'Scramble a cat into static. Keep going.'
+HOOK_Y = 420  # placed by hand
+HOOK_COLOUR = "#f4f0e7"
+
+DURATION = 15.0  # seconds, an exact loop
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The ant -----------------------------------------------------------------------
-G = 256  # grid side, cells; the ant starts in the middle facing down
-DY, DX = (-1, 0, 1, 0), (0, 1, 0, -1)  # headings: up, right, down, left
-START_HEADING = 2  # facing down, so the highway heads up and to the right
-PERIOD = 104  # steps in one cycle of the highway
-# Pacing: (time in s, steps taken). Symmetric patterns, chaos, the highway, rest.
-KEYS = ((0.0, 0), (1.0, 150), (2.4, 600), (9.4, 9976), (13.8, 13400), (15.0, 13400))
-STEPS = KEYS[-1][1]
-SYMMETRIC_END, CHAOS_END = 2.4, 9.4  # s
+# --- The map -----------------------------------------------------------------------
+N = 322  # grid size; the cat map M = [[2, 1], [1, 1]] has period 24 mod 322
+CAT = np.array([[2, 1], [1, 1]], dtype=np.int64)
+HOLD = 1.0  # s of rest on the cat and on the upside-down cat
+SLOW = 1.3  # steps near a return last up to 1 + SLOW times as long as the others
+SHEAR = 0.44  # fraction of a step each of the two shears takes
 
-# --- Layout (px) -------------------------------------------------------------------
-TITLE_Y, RULE1_Y, RULE2_Y = 200, 306, 366
-VIEW_Y0, VIEW_Y1 = 450, 1450  # the band the grid lives in; text stays outside it
-VIEW_H = VIEW_Y1 - VIEW_Y0
-EDGE = 36  # px of soft fade at the top and bottom of the band
-COUNT_Y, LABEL_Y = 1484, 1556
-MAX_CELL = 56.0  # px, the closest zoom
-MARGIN = 4  # cells of room around everything the ant has visited
-CAMERA_SIGMA = 0.35  # s, smoothing of the camera
-
-# --- Look --------------------------------------------------------------------------
-BG_TOP, BG_BOTTOM = "#081212", "#030707"
-EMPTY = "#0c1919"  # an unvisited (or empty) cell, a faint lattice
-FILLED = ["#e9ffd8", "#9ff0c0", "#3fbf9f", "#1f7f78", "#1b5a60"]  # fresh -> settled
-SETTLE = 1.6  # s for a filled cell to settle into its old colour
-EMBER = "#2e9c88"  # a cell flipped back to empty glows briefly
-EMBER_TIME = 0.22  # s
-ANT = "#ff7a55"
-GLOW_SCALE, GLOW_SIGMA, GLOW = 4, 5.0, 0.9
-TEXT, TEXT_DIM, ACCENT = "#f1eee6", "#a9bdb9", "#ff9a78"
-FADE_OUT = 0.3  # s to the background at the very end
+# --- Layout & look -----------------------------------------------------------------
+SS = 2  # supersampling
+SIDE = 1008  # px, the torus square
+LEFT, TOP = (WIDTH - SIDE) // 2, 380
+BG_TOP, BG_BOTTOM = "#141022", "#06050c"
+FRAME_LINE = "#3a3352"
+TEXT, TEXT_DIM, ACCENT = "#efe8dc", "#9a93b0", "#f2a03d"
 
 # --- Sound -------------------------------------------------------------------------
-STYLE = "gamelan"  # bells in pelog over a pad bed
-BEDS = ("choir", "strings")  # an --audio-only tag naming one picks the upper bed voice
-BED = "choir"
-MIN_GAP = 0.45  # s between two record bells
-PULSE = 8  # highway cycles per bell once the highway runs
-FIGURE = (0, 2, 4, 3, 1, 3)  # pelog degrees the highway bells cycle through
+LEADS = {"felt_piano": audio.piano, "harp": audio.pluck}  # --audio-only tag picks one
+LEAD = "felt_piano"
+ROOTS = (50, 52, 53)  # MIDI roots (D3, E3, F3) of the chords; the lead is an octave up
 
 
-def walk():
-    """The ant's cell before each step: positions (STEPS + 1, 2) as (row, col)."""
-    grid = np.zeros((G, G), np.uint8)
-    y = x = G // 2
-    heading = START_HEADING
-    pos = np.empty((STEPS + 1, 2), np.int64)
-    pos[0] = y, x
+def period(n: int = N) -> int:
+    """Smallest k with M^k = I mod n."""
+    power = np.eye(2, dtype=np.int64)
+    for k in range(1, 10 * n):
+        power = CAT @ power % n
+        if (power == np.eye(2, dtype=np.int64)).all():
+            return k
+    raise ValueError(n)
+
+
+STEPS = period()  # 24
+HALF = STEPS // 2  # M^12 = -I mod 322: the cat upside down
+
+
+def schedule():
+    """
+    Start time (s) of every step and its length. Time 0 is the middle of the rest on
+    the cat; the steps slow down near the two returns (k = 0, HALF, STEPS) and a rest
+    of HOLD sits at each.
+    """
+    centres = np.arange(STEPS) + 0.5
+    near = np.minimum.reduce([abs(centres - r) for r in (0, HALF, STEPS)])
+    weight = 1 + SLOW * np.exp(-((near / 2.2) ** 2))
+    lengths = weight / weight.sum() * (DURATION - 2 * HOLD)
+    starts = np.empty(STEPS)
+    clock = HOLD / 2
     for k in range(STEPS):
-        heading = (heading + (1 if grid[y, x] == 0 else -1)) % 4
-        grid[y, x] ^= 1
-        y, x = y + DY[heading], x + DX[heading]
-        pos[k + 1] = y, x
-    return pos
+        if k == HALF:
+            clock += HOLD
+        starts[k] = clock
+        clock += lengths[k]
+    return starts, lengths
 
 
-def highway_start(pos):
-    """First step from which the walk repeats every PERIOD steps with a fixed shift."""
-    shift = pos[PERIOD:] - pos[:-PERIOD]
-    irregular = np.flatnonzero(np.any(shift != shift[-1], axis=1))
-    return int(irregular[-1]) + 1
+def state(seconds, starts, lengths):
+    """(completed steps k, first shear s1, second shear s2) at a time in the loop."""
+    k = int(np.searchsorted(starts, seconds, side="right")) - 1
+    if k < 0:
+        return 0, 0.0, 0.0
+    tau = (seconds - starts[k]) / lengths[k]
+    if tau >= 1:  # resting after step k
+        return k + 1, 0.0, 0.0
+    s1 = float(smoothstep(tau / SHEAR))
+    s2 = float(smoothstep((tau - (1 - SHEAR)) / SHEAR))
+    return k, s1, s2
 
 
-def pacing():
-    """steps(t): a smooth monotone map from seconds to steps taken."""
-    times, steps = zip(*KEYS)
-    return PchipInterpolator(times, steps)
+def inverse_powers():
+    """M^-k mod N for k = 0 .. STEPS, as integer 2x2 matrices."""
+    inverse = np.array([[1, -1], [-1, 2]], dtype=np.int64) % N
+    out = [np.eye(2, dtype=np.int64)]
+    for _ in range(STEPS):
+        out.append(inverse @ out[-1] % N)
+    return np.array(out)
 
 
-def counter_glyphs(size):
-    """LaTeX masks for 'n =' and the digits and comma, top-aligned to the digits."""
-    zero = latex_mask(r"$0$", size)
-    w0 = zero.shape[1]
-    lead = latex_mask(r"$n\ =\ 0$", size)
-    prefix = lead[:, : lead.shape[1] - w0 + 2]
-    digits = [latex_mask(f"${d}$", size) for d in range(10)]
-    comma = latex_mask(r"$0{,}$", size)[:, w0 - 2 :]
-    return prefix, digits, comma
+def _rgb(colour: str):
+    return tuple(int(colour[i : i + 2], 16) for i in (1, 3, 5))
 
 
-def counter_mask(n, glyphs):
-    """'n = 12,345' as one mask, digits on a fixed advance so nothing jitters."""
-    prefix, digits, comma = glyphs
-    advance = max(d.shape[1] for d in digits) - 3
-    text = f"{n:,}"
-    height = max(prefix.shape[0], comma.shape[0], max(d.shape[0] for d in digits))
-    width = (
-        prefix.shape[1]
-        + 8
-        + sum(comma.shape[1] + 2 if c == "," else advance for c in text)
-    )
-    mask = np.zeros((height, width + 4), np.float32)
-    mask[: prefix.shape[0], : prefix.shape[1]] = prefix
-    x = prefix.shape[1] + 8
-    for c in text:
-        glyph = comma if c == "," else digits[int(c)]
-        h, w = glyph.shape
-        off = 0 if c == "," else (advance - w) // 2
-        x0 = max(x + off, 0)
-        region = mask[:h, x0 : x0 + w]
-        np.maximum(region, glyph[:, : region.shape[1]], out=region)
-        x += comma.shape[1] + 2 if c == "," else advance
-    return mask
+def draw_cat(n: int = N) -> np.ndarray:
+    """The picture: a ginger cat's face on a dusk gradient, (n, n, 3) RGB uint8."""
+    big = 4  # draw at 4x and shrink, for clean edges at grid resolution
+    s = n * big / 322.0
+
+    def p(x, y):
+        return int(round(x * s)), int(round(y * s))
+
+    def r(a):
+        return int(round(a * s))
+
+    yy, xx = np.mgrid[0 : n * big, 0 : n * big] / (n * big)
+    top, bottom = np.array(_rgb("#2a7f8f")), np.array(_rgb("#3b1f5e"))
+    g = np.clip(0.65 * yy + 0.35 * xx, 0, 1)[..., None]
+    image = ((1 - g) * top + g * bottom).astype(np.uint8)
+    image = np.ascontiguousarray(image)
+    aa = cv2.LINE_AA
+
+    # A low moon behind, and a few stars.
+    cv2.circle(image, p(258, 62), r(40), _rgb("#f6e7b8"), -1, aa)
+    for x, y, a in (
+        (40, 40, 3),
+        (90, 22, 2),
+        (30, 120, 2),
+        (296, 150, 2),
+        (220, 20, 2),
+    ):
+        cv2.circle(image, p(x, y), r(a), _rgb("#fdf6dc"), -1, aa)
+
+    fur, dark, light = _rgb("#f08a24"), _rgb("#b4520f"), _rgb("#fbf1df")
+    pink, ink = _rgb("#f4a1ae"), _rgb("#1a1020")
+    # Ears.
+    for sign in (-1, 1):
+        outer = np.array(
+            [p(161 + sign * 112, 150), p(161 + sign * 92, 32), p(161 + sign * 36, 104)]
+        )
+        inner = np.array(
+            [p(161 + sign * 98, 132), p(161 + sign * 88, 56), p(161 + sign * 54, 106)]
+        )
+        cv2.fillPoly(image, [outer], fur, aa)
+        cv2.fillPoly(image, [inner], pink, aa)
+    # Head, cheeks and chin.
+    cv2.ellipse(image, p(161, 190), (r(118), r(100)), 0, 0, 360, fur, -1, aa)
+    cv2.ellipse(image, p(161, 248), (r(96), r(62)), 0, 0, 360, fur, -1, aa)
+    # Forehead stripes.
+    for dx, h in ((-26, 44), (0, 56), (26, 44)):
+        poly = np.array([p(161 + dx - 9, 96), p(161 + dx + 9, 96), p(161 + dx, 96 + h)])
+        cv2.fillPoly(image, [poly], dark, aa)
+    for sign in (-1, 1):  # cheek stripes
+        for dy in (0, 20):
+            poly = np.array(
+                [
+                    p(161 + sign * 118, 196 + dy),
+                    p(161 + sign * 116, 208 + dy),
+                    p(161 + sign * 78, 204 + dy),
+                ]
+            )
+            cv2.fillPoly(image, [poly], dark, aa)
+    # Muzzle.
+    for sign in (-1, 1):
+        cv2.ellipse(
+            image, p(161 + sign * 24, 238), (r(32), r(24)), 0, 0, 360, light, -1, aa
+        )
+    cv2.ellipse(image, p(161, 262), (r(30), r(18)), 0, 0, 360, light, -1, aa)
+    # Eyes: green, slit pupils, a highlight.
+    for sign in (-1, 1):
+        c = (161 + sign * 46, 172)
+        cv2.ellipse(image, p(*c), (r(25), r(29)), 0, 0, 360, ink, -1, aa)
+        cv2.ellipse(image, p(*c), (r(22), r(26)), 0, 0, 360, _rgb("#a6e05a"), -1, aa)
+        cv2.ellipse(image, p(*c), (r(5), r(22)), 0, 0, 360, ink, -1, aa)
+        cv2.circle(image, p(c[0] + 8, c[1] - 10), r(5), _rgb("#ffffff"), -1, aa)
+    # Nose and mouth.
+    nose = np.array([p(147, 218), p(175, 218), p(161, 234)])
+    cv2.fillPoly(image, [nose], pink, aa)
+    cv2.line(image, p(161, 234), p(161, 246), ink, r(2.5), aa)
+    cv2.ellipse(image, p(149, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
+    cv2.ellipse(image, p(173, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
+    # Whiskers.
+    for sign in (-1, 1):
+        for dy, ey in ((-6, -18), (2, 2), (10, 22)):
+            cv2.line(
+                image,
+                p(161 + sign * 50, 240 + dy),
+                p(161 + sign * 150, 240 + ey),
+                light,
+                r(2),
+                aa,
+            )
+    return cv2.resize(image, (n, n), interpolation=cv2.INTER_AREA)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Langton's ant from a blank grid, 13,400 steps in 15 s. A one-shot.
+    Arnold's cat map on a 322 x 322 torus, as an exact loop. The picture is a grid of
+    N = 322 cells (a cat's face drawn with cv2). One step of the map is M = [[2, 1],
+    [1, 1]] = A·B with the shears B: (x, y) -> (x, y + x) and A: (x, y) -> (x + y, y),
+    mod N. M has period 24 mod 322 (Pisano-type period; 322 is the Lucas number L12)
+    and M^12 = -I, so the cat returns rotated by 180° halfway and exactly at the end.
 
-    The rule (Langton 1986): on an empty cell turn right, on a filled cell turn left,
-    flip the cell, step forward. Starting on an empty 256^2 grid facing down, the walk
-    (precomputed once, 13,400 steps, a few ms) shows symmetric patterns for ~500
-    steps, an irregular blob up to step 9,976, then the highway: a cycle of 104 steps
-    that shifts the ant two cells diagonally (up-right here), forever. The highway's
-    start is found from the walk (the last step where pos[k + 104] - pos[k] differs
-    from its final value) and only logged; the pacing is fixed.
+    Time: the loop's 15 s hold HOLD = 1 s on each return and spread the 24 steps over
+    the rest, longer near the returns (weight 1 + SLOW·exp(-(d/2.2)²), d = steps to
+    the nearest return). Within a step the two shears are animated continuously:
+    column i slides by s1·i cells, then row j by s2·j cells (smoothstep over SHEAR
+    of the step each), wrapping round the torus. A display point (u, v) in cell units
+    shows the cell x1 = ⌊u − s2⌊v⌋⌋, y1 = ⌊v − s1·x1⌋ of the image after k steps,
+    which is the cell M^-k (x1, y1) mod N of the original. Integer arithmetic, so
+    the map is exact and the loop closes bit for bit.
 
-    Time: steps(t) is a monotone PCHIP through the keys (0 s, 0), (1 s, 150),
-    (2.4 s, 600), (9.4 s, 9,976), (13.8 s, 13,400), then flat to 15 s (a ~1.2 s rest,
-    fading to the background over the last 0.3 s). Each frame is a pure function of
-    t: n = floor(steps(t)) flips, cell parity = bincount(flipped cells[:n]) mod 2,
-    last visit = max step index per cell, its age in seconds from the inverse
-    pacing. Filled cells run through a teal LUT from pale (fresh) to settled over
-    1.6 s; cells flipped back to empty glow briefly. The camera (precomputed on a
-    fine time grid, then Gaussian-smoothed over 0.35 s in log zoom) frames the
-    bounding box of every visited cell plus 4 cells, zooming out monotonically from
-    56 px per cell, inside the band y = 450..1450 so the LaTeX text above and below
-    is never crossed. The ant is a coral disc, interpolated between cells.
+    Rendering: one integer gather per 2x supersampled pixel of the square on the GPU
+    (torch), average-pooled to 1x and composited over a gradient with LaTeX text (a
+    step counter n, the map, a note at the halfway return), render_frames(parallel=
+    False). Nothing is random, so --seed does not change the picture.
 
-    Render: per frame, the grid's colours are gathered to pixels with separable
-    row/column cell indices and an analytic per-pixel coverage (a thin gap between
-    cells, anti-aliased), plus a quarter-resolution blurred glow of the fresh cells
-    and the ant, on the render_frames thread pool. Every seed gives the same picture
-    (the rule is deterministic); the seed only reaches the sound.
-
-    Sound (posted: --seed 0, no --audio-only tag, i.e. the "choir" bed, audio seed
-    = seed): gamelan bells in pelog over an ambient bed of pad chords with a quiet
-    "u" choir (the "strings" tag swaps in strings), one-shot. Open fifth during the
-    symmetric phase, i - VI - bII - i under the chaos (filter dark), the home chord
-    with an octave and minor third once the highway runs (filter opening). A bell
-    strikes whenever the ant's distance from its start beats its record (at least
-    0.45 s apart): pitch by the direction it reached, pan by x. A low gong marks the
-    highway's start; then a bell every 8 highway cycles cycling a six-note pelog
-    figure, a gong every other one. Long reverb and an echo, circular=False,
-    master(loop=False).
+    Soundtrack (`soundtrack`, ambient Drone & pad with a felt-piano lead): pad and
+    "u" choir chords I, IV, vi, V on the step schedule, lowpass opening with the
+    scramble, one piano note per completed step (pitch by distance from the nearest
+    return), rolled vi / I chords plus a bell at the two returns, delay and a 5 s
+    reverb, all circular. `--audio-only harp` swaps the lead for a harp pluck. The
+    posted soundtrack is LEAD = "felt_piano" with --seed 0 (settings.audio_rng
+    picks root MIDI 52 and the room).
     """
     settings = settings or ImageProcessingSettings(1)
+    device = select_device()
+    starts, lengths = schedule()
+    powers = torch.tensor(inverse_powers(), device=device)
+    logger.info(f"Cat map period mod {N}: {STEPS} steps, M^{HALF} = -I")
 
-    pos = walk()
-    hw = highway_start(pos)
-    logger.info(f"Langton's ant: {STEPS} steps, highway from step {hw}")
-    steps_of = pacing()
-    rest = KEYS[-2][0]
-    t_fine = np.linspace(0.0, rest, 20001)
-    s_fine = np.maximum.accumulate(steps_of(t_fine))
-    # time_of[k]: when the k-th step is taken (count passes k).
-    time_of = np.interp(np.arange(STEPS + 1), s_fine, t_fine)
-    flat = pos[:, 0] * G + pos[:, 1]
+    def tensor(a, dtype=torch.float32):
+        return torch.tensor(np.asarray(a), device=device, dtype=dtype)
 
-    # --- Camera on a fine time grid ---------------------------------------------
-    lo = np.minimum.accumulate(pos, axis=0)
-    hi = np.maximum.accumulate(pos, axis=0)
-    cam_t = np.linspace(0.0, DURATION, 1501)
-    cam_n = np.minimum(np.floor(steps_of(cam_t)).astype(int), STEPS)
-    span = hi[cam_n] - lo[cam_n] + 1 + 2 * MARGIN  # (rows, cols)
-    cell = np.minimum(MAX_CELL, np.minimum(VIEW_H / span[:, 0], WIDTH / span[:, 1]))
-    log_cell = np.minimum.accumulate(np.log(cell))
-    centre = (lo[cam_n] + hi[cam_n] + 1) / 2.0  # cell coordinates (row, col)
-    sigma = CAMERA_SIGMA / (cam_t[1] - cam_t[0])
-    kernel = np.exp(-0.5 * (np.arange(-4 * sigma, 4 * sigma + 1) / sigma) ** 2)
-    kernel /= kernel.sum()
+    cat = tensor(draw_cat().reshape(-1, 3))
+    px = SIDE * SS
+    centres = (torch.arange(px, device=device, dtype=torch.float64) + 0.5) * N / px
+    v, u = torch.meshgrid(centres, centres, indexing="ij")
+    v_cell = torch.floor(v)
 
-    def smooth(values):
-        pad = len(kernel) // 2
-        padded = np.pad(values, (pad, pad), mode="edge")
-        return np.convolve(padded, kernel, mode="valid")
-
-    cam_cell = np.exp(smooth(log_cell))
-    cam_row, cam_col = smooth(centre[:, 0]), smooth(centre[:, 1])
-
-    # --- Static background and text ----------------------------------------------
-    top, bottom = np.array(hex_to_bgr(BG_TOP)), np.array(hex_to_bgr(BG_BOTTOM))
-    ramp = np.linspace(0, 1, HEIGHT, dtype=np.float32)[:, None, None]
-    background = np.broadcast_to(
-        (1 - ramp) * top + ramp * bottom, (HEIGHT, WIDTH, 3)
-    ).astype(np.float32)
+    # Background with the static text, RGB 0..255.
+    rows = np.linspace(0, 1, HEIGHT)[:, None, None]
+    top, bottom = np.array(_rgb(BG_TOP)), np.array(_rgb(BG_BOTTOM))
+    background = ((1 - rows) * top + rows * bottom) * np.ones((1, WIDTH, 1))
+    background = background.astype(np.float32)
+    line = np.array(_rgb(FRAME_LINE), np.float32)
+    background[TOP - 3 : TOP + SIDE + 3, LEFT - 3 : LEFT + SIDE + 3] = line
+    text, dim, accent = (
+        np.array(_rgb(c), np.float32) for c in (TEXT, TEXT_DIM, ACCENT)
+    )
+    title = r"$\mathrm{Arnold}\text{'}\mathrm{s\ cat\ map}$"
     for tex, size, y, colour in (
-        (r"$\mathrm{Langton\text{'}s\ ant}$", 76, TITLE_Y, TEXT),
+        (title, 74, 92, text),
+        (r"$(x{,}\,y)\ \mapsto\ (2x+y{,}\ x+y)\ \mathrm{mod}\ 322$", 54, 192, accent),
         (
-            r"$\mathrm{empty\ cell}\ \rightarrow\ \mathrm{turn\ right}\qquad\mathrm{filled\ cell}\ \rightarrow\ \mathrm{turn\ left}$",
-            44,
-            RULE1_Y,
-            TEXT_DIM,
-        ),
-        (
-            r"$\mathrm{then\ flip\ the\ cell\ and\ step\ forward}$",
-            44,
-            RULE2_Y,
-            TEXT_DIM,
+            r"$\mathrm{on\ a}\ 322\times 322\ \mathrm{grid{,}\ the\ cat\ returns\ after}\ 24\ \mathrm{steps}$",
+            42,
+            284,
+            dim,
         ),
     ):
-        mask = latex_mask(tex, size)
-        blit_mask(background, mask, WIDTH // 2, y, hex_to_bgr(colour), anchor="centre")
-    band_bg = background[VIEW_Y0:VIEW_Y1].copy()
-    labels = [
-        (latex_mask(r"$\mathrm{simple{,}\ symmetric\ patterns}$", 44), 0.0, 2.6),
-        (latex_mask(r"$\mathrm{then\ chaos}$", 44), 2.6, 9.9),
-        (latex_mask(r"$\mathrm{then\ a\ highway{,}\ forever}$", 44), 9.9, 13.2),
-        (latex_mask(r"$\mathrm{always?\ Nobody\ has\ proved\ it}$", 44), 13.2, 99.0),
-    ]
-    glyphs = counter_glyphs(46)
-    count_x = WIDTH // 2 - counter_mask(STEPS, glyphs).shape[1] // 2
-
-    # Edge fade of the band, and colours.
-    rows = np.arange(VIEW_H, dtype=np.float32)
-    band_fade = smoothstep(np.minimum(rows, VIEW_H - 1 - rows) / EDGE)[:, None, None]
-    lut = palette_lut(FILLED, 256)[:, ::-1] * 255  # BGR
-    empty = np.array(hex_to_bgr(EMPTY), np.float32)
-    ember = np.array(hex_to_bgr(EMBER), np.float32)
-    ant_c = np.array(hex_to_bgr(ANT), np.float32)
-    text_c, accent_c = hex_to_bgr(TEXT), hex_to_bgr(ACCENT)
-    cols_px = np.arange(WIDTH, dtype=np.float32) + 0.5
-    rows_px = rows + 0.5
-    small_w, small_h = WIDTH // GLOW_SCALE, VIEW_H // GLOW_SCALE
-
-    def camera(t):
-        return (
-            float(np.interp(t, cam_t, cam_cell)),
-            float(np.interp(t, cam_t, cam_row)),
-            float(np.interp(t, cam_t, cam_col)),
+        blit_mask(
+            background, latex_mask(tex, size), WIDTH // 2, y, colour, anchor="centre"
         )
+    background = tensor(background)
 
-    def gather(values, cs, row0, col0, xs, ys):
-        """values (G, G, 3) gathered to pixel centres xs, ys of the band."""
-        u = col0 + (xs - WIDTH / 2) / cs
-        v = row0 + (ys - VIEW_H / 2) / cs
-        iu = np.clip(np.floor(u).astype(np.int64), 0, G - 1)
-        iv = np.clip(np.floor(v).astype(np.int64), 0, G - 1)
-        return values[iv[:, None], iu[None, :]], u - np.floor(u), v - np.floor(v)
+    def layer(tex, size, y, colour):
+        """A text mask as (alpha, premultiplied colour) tensors and its box."""
+        mask = latex_mask(tex, size)
+        h, w = mask.shape
+        x = WIDTH // 2 - w // 2
+        alpha = tensor(mask[..., None])
+        return alpha, alpha * tensor(colour), (y, y + h, x, x + w)
+
+    counters = [layer(rf"$n = {k}$", 76, 1432, text) for k in range(STEPS + 1)]
+    upside = layer(r"$\mathrm{halfway{,}\ upside\ down}$", 46, 1540, accent)
+    half_time = starts[HALF] - HOLD / 2  # middle of the halfway rest
+
+    def put(image, overlay, a=1.0):
+        alpha, colour, (y0, y1, x0, x1) = overlay
+        region = image[y0:y1, x0:x1]
+        region.mul_(1 - a * alpha).add_(a * colour)
 
     def render(frame):
-        t = frame / (FRAME_COUNT - 1)
-        now = t * DURATION
-        s = float(steps_of(min(now, rest)))
-        n = min(int(s), STEPS)
-        visited = flat[:n]
-        parity = np.bincount(visited, minlength=G * G) & 1
-        last = np.full(G * G, -1, np.int64)
-        np.maximum.at(last, visited, np.arange(n))
-        seen = last >= 0
-        age = np.where(seen, now - time_of[np.maximum(last, 0) + 1], 1e9)
-
-        filled = (parity == 1)[:, None]
-        heat = np.clip(age / SETTLE, 0.0, 1.0)
-        filled_c = lut[(255 * heat).astype(np.int64)]
-        flash = np.exp(-np.maximum(age, 0.0) / EMBER_TIME)[:, None]
-        cells = np.where(filled, filled_c, empty + flash * (ember - empty))
-        cells = cells.reshape(G, G, 3).astype(np.float32)
-        fresh = np.where(filled, np.exp(-age / 0.5)[:, None] * filled_c, flash * ember)
-        fresh = fresh.reshape(G, G, 3).astype(np.float32)
-
-        cs, row0, col0 = camera(now)
-        colours, fu, fv = gather(cells, cs, row0, col0, cols_px, rows_px)
-        half_gap = 0.04 * cs + 0.35
-        cov_u = np.clip((0.5 - np.abs(fu - 0.5)) * cs - half_gap + 0.5, 0.0, 1.0)
-        cov_v = np.clip((0.5 - np.abs(fv - 0.5)) * cs - half_gap + 0.5, 0.0, 1.0)
-        coverage = (cov_v[:, None] * cov_u[None, :])[..., None].astype(np.float32)
-        band = band_bg + coverage * (colours - band_bg)
-
-        # Glow of the fresh cells and the ant, at quarter resolution.
-        sx = (np.arange(small_w, dtype=np.float32) + 0.5) * GLOW_SCALE
-        sy = (np.arange(small_h, dtype=np.float32) + 0.5) * GLOW_SCALE
-        light, _, _ = gather(fresh, cs, row0, col0, sx, sy)
-        light = np.ascontiguousarray(light * 0.6)
-        frac = s - n if n < STEPS else 0.0
-        a, b = pos[n], pos[min(n + 1, STEPS)]
-        ant = a + frac * (b - a) + 0.5
-        ax = WIDTH / 2 + (ant[1] - col0) * cs
-        ay = VIEW_H / 2 + (ant[0] - row0) * cs
-        radius = max(7.0, 0.34 * cs)
-        cv2.circle(
-            light,
-            (int(16 * ax / GLOW_SCALE), int(16 * ay / GLOW_SCALE)),
-            int(16 * 2.2 * radius / GLOW_SCALE),
-            tuple(float(c) for c in ant_c),
-            -1,
-            cv2.LINE_AA,
-            4,
-        )
-        light = cv2.GaussianBlur(light, (0, 0), GLOW_SIGMA)
-        band += GLOW * cv2.resize(
-            light, (WIDTH, VIEW_H), interpolation=cv2.INTER_LINEAR
-        )
-        centre_px = (int(16 * ax), int(16 * ay))
-        cv2.circle(
-            band,
-            centre_px,
-            int(16 * radius),
-            tuple(float(c) for c in ant_c),
-            -1,
-            cv2.LINE_AA,
-            4,
-        )
-        cv2.circle(
-            band,
-            centre_px,
-            int(16 * radius * 0.45),
-            (235.0, 245.0, 255.0),
-            -1,
-            cv2.LINE_AA,
-            4,
-        )
-        band = band_bg + band_fade * (band - band_bg)
-
-        image = background.copy()
-        image[VIEW_Y0:VIEW_Y1] = band
-        blit_mask(image, counter_mask(n, glyphs), count_x, COUNT_Y, text_c)
-        for mask, start, end in labels:
-            alpha = float(
-                smoothstep((now - start) / 0.3) * smoothstep((end - now) / 0.3)
-            )
-            if start == 0.0:
-                alpha = float(smoothstep((end - now) / 0.3))
-            if alpha > 0:
-                colour = accent_c if start > 13.0 else text_c
-                blit_mask(image, mask, WIDTH // 2, LABEL_Y, colour, alpha, "centre")
-        fade = float(smoothstep((DURATION - now) / FADE_OUT))
-        if fade < 1:
-            image = background + fade * (image - background)
+        seconds = frame / FRAME_COUNT * DURATION
+        k, s1, s2 = state(seconds, starts, lengths)
+        x1 = torch.remainder(torch.floor(u - s2 * v_cell), N).long()
+        y1 = torch.remainder(torch.floor(v - s1 * x1), N).long()
+        m = powers[k % STEPS]
+        x0 = (m[0, 0] * x1 + m[0, 1] * y1) % N
+        y0 = (m[1, 0] * x1 + m[1, 1] * y1) % N
+        square = cat[(y0 * N + x0).reshape(-1)].reshape(px, px, 3)
+        square = F.avg_pool2d(square.permute(2, 0, 1)[None], SS)[0].permute(1, 2, 0)
+        image = background.clone()
+        image[TOP : TOP + SIDE, LEFT : LEFT + SIDE] = square
+        put(image, counters[k])
+        a = float(smoothstep((1.6 - abs(seconds - half_time)) / 0.3))
+        if a > 0:
+            put(image, upside, a)
         return image
 
-    render_frames(settings, render, FRAME_COUNT)
-    bed = settings.audio_tag if settings.audio_tag in BEDS else BED
-    track = soundtrack(pos, hw, time_of, bed, settings.audio_rng)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
+    lead = settings.audio_tag if settings.audio_tag in LEADS else LEAD
+    track = soundtrack(lead, starts, lengths, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
 
-def soundtrack(pos, hw, time_of, bed, rng):
+def scramble(seconds, starts, lengths):
+    """How far the picture is from a return, 0 (a cat) .. 1 (deep static), smooth in t."""
+    k, s1, s2 = state(seconds, starts, lengths)
+    steps = k + 0.5 * (s1 + s2)  # continuous count of steps done
+    near = min(steps, abs(steps - HALF), STEPS - steps)
+    return float(smoothstep(near / 5.0))
+
+
+def soundtrack(lead, starts, lengths, rng):
     """
-    Ambient bed with sparse gamelan bells, on the timeline of the walk (one-shot).
-    See generate() for the mapping.
+    Ambient, from the same schedule as the picture; an exact loop (everything wraps
+    circularly). A bed of pad and "u" choir chords: I around the cat, IV as it
+    scrambles, vi around the upside-down cat, V as it scrambles again, back to I.
+    The bed's lowpass opens with the scramble (crossfade of a dark and a bright
+    filtered copy, weighted by `scramble(t)`). One soft lead note (felt piano or
+    harp) as each step completes, its pitch climbing the scale with the distance
+    from the nearest return, so it rises into the static and falls back out; at
+    the two returns a rolled chord instead (I for the cat, vi for the upside-down
+    cat) with a quiet bell an octave up. Delay, long reverb, master(loop=True).
     """
-    style = STYLES[STYLE]
-    root = int(rng.choice(style.roots))
-    scale = Scale(root, style.mode)  # pelog bells
-    track = audio.silence(DURATION)
-    hw_time = float(time_of[hw])
+    voice = LEADS[lead]
+    root = int(rng.choice(ROOTS))
+    scale = Scale(root, "major")
+    ends = starts + lengths  # when each step completes
+    cat_back, upside_back = ends[-1], ends[HALF - 1]
 
-    # Bed: (start, end, semitones above root - 12, lowpass from, to, velocity)
-    sections = [
-        (0.0, SYMMETRIC_END, (0, 7, 12), 700.0, 1000.0, 0.26),
-        (SYMMETRIC_END, 4.75, (0, 3, 7), 800.0, 900.0, 0.28),
-        (4.75, 7.1, (-4, 0, 3), 800.0, 900.0, 0.28),
-        (7.1, hw_time, (1, 5, 8), 800.0, 1100.0, 0.28),
-        (hw_time, DURATION, (0, 7, 12, 15), 1100.0, 2400.0, 0.32),
-    ]
-    n = len(track)
-    for start, end, chord, cut0, cut1, velocity in sections:
-        layer = audio.silence(DURATION)
-        length = end - start + 0.4
-        attack = 0.5 if start == 0.0 else 1.2
-        for i, semis in enumerate(chord):
-            midi = root - 12 + semis
-            hz = float(audio.midi_to_hz(midi))
-            held = audio.pad(
-                hz, length, velocity, attack=attack, release=2.2, brightness=0.35
-            )
-            audio.add(layer, held, start - 0.2, circular=False)
-            upper = float(audio.midi_to_hz(midi + 12))
-            if bed == "strings":
-                voice = audio.strings(
-                    upper,
-                    length,
-                    0.13,
-                    attack=attack + 0.3,
-                    release=2.2,
-                    brightness=0.3,
-                )
-            else:
-                voice = audio.choir(
-                    upper, length, 0.15, attack=attack + 0.3, release=2.2, vowel="u"
-                )
-            audio.add(layer, voice, start - 0.2, circular=False)
-        tt = np.clip((np.arange(n) / audio.SAMPLE_RATE - start) / (end - start), 0, 1)
-        dark = audio.lowpass(layer, cut0, circular=False)
-        bright = audio.lowpass(layer, cut1, circular=False)
-        track += dark * (1 - tt)[:, None] + bright * tt[:, None]
-
-    # Bells: the ant's distance from its start beats its record.
-    bells = audio.silence(DURATION)
-    origin = pos[0]
-    offset = pos - origin
-    dist = np.hypot(offset[:, 0], offset[:, 1])
-    record = np.flatnonzero(dist[1:] > np.maximum.accumulate(dist)[:-1]) + 1
-    last_bell = -1.0
-    count = 0
-    for k in record[record < hw]:
-        when = float(time_of[k])
-        if when - last_bell < MIN_GAP:
-            continue
-        last_bell = when
-        angle = np.arctan2(-offset[k, 0], offset[k, 1]) % (2 * np.pi)
-        degree = int(angle / (2 * np.pi) * 5) % 5
-        octave = 1 if when < SYMMETRIC_END else 0
-        x = np.clip(offset[k, 1] / 30.0, -1, 1)
-        tone = style.voice(scale.hz(degree, octave), 0.32 + 0.1 * (octave == 0))
-        audio.add(bells, audio.pan(tone, 0.6 * x), when, circular=False)
-        count += 1
-    first = style.voice(scale.hz(0, 1), 0.3)
-    audio.add(bells, first, 0.05, circular=False)
-
-    # The highway: a low gong at its start, then its steady beat.
-    gong = audio.bell(float(audio.midi_to_hz(root - 12)), 0.5, length=6.0)
-    low = style.bass(float(audio.midi_to_hz(root - 12)), 0.4)
-    audio.add(bells, gong, hw_time, circular=False)
-    audio.add(bells, low, hw_time, circular=False)
-    beats = np.arange(hw + PULSE * PERIOD, STEPS, PULSE * PERIOD)
-    for i, k in enumerate(beats):
-        when = float(time_of[k])
-        degree = FIGURE[i % len(FIGURE)]
-        tone = style.voice(scale.hz(degree, 1), 0.3)
-        audio.add(bells, audio.pan(tone, 0.25 * (-1) ** i), when, circular=False)
-        if i % 2 == 1:
-            audio.add(bells, style.bass(scale.hz(0, -1), 0.3), when, circular=False)
-    bells = audio.lowpass(bells, 5500.0, circular=False)
-    bells = audio.delay(bells, 0.42, feedback=0.35, wet=0.25, circular=False)
-    track += bells
-    track = audio.highpass(track, 80.0, circular=False)
-    track = audio.reverb(track, rng, rt60=5.0, wet=0.42, tone=3800.0, circular=False)
-    logger.info(
-        f"Soundtrack ({bed}): root {root}, {count} record bells, "
-        f"{len(beats)} highway bells, highway at {hw_time:.2f} s"
+    # The bed.
+    bed = audio.silence(DURATION)
+    sections = (  # (degree, start, end)
+        (0, cat_back - 1.6, DURATION + 2.6),
+        (3, 2.4, 5.6),
+        (5, upside_back - 1.6, upside_back + 2.6),
+        (4, upside_back + 2.4, cat_back - 1.4),
     )
-    return audio.master(track, loop=False)
+    for degree, start, end in sections:
+        for i, midi in enumerate(scale.chord(degree, 3)):
+            hz = float(audio.midi_to_hz(midi))
+            held = audio.pad(hz, end - start, 0.26, attack=1.4, release=2.2)
+            audio.add(bed, audio.pan(held[:, 0], 0.45 * (i - 1)), start)
+            sung = audio.choir(
+                hz, end - start, 0.11, attack=1.6, release=2.2, vowel="u"
+            )
+            audio.add(bed, sung, start)
+    bed = audio.highpass(bed, 120.0)
+    weight = np.array(
+        [scramble(s, starts, lengths) for s in np.arange(0, DURATION, 0.01)]
+    )
+    weight = np.interp(
+        np.arange(len(bed)) / audio.SAMPLE_RATE, np.arange(len(weight)) * 0.01, weight
+    )[:, None]
+    track = (1 - weight) * audio.lowpass(bed, 700.0) + weight * audio.lowpass(
+        bed, 2600.0
+    )
+
+    # The lead: one note per completed step, a rolled chord at each return.
+    for k, when in enumerate(ends):
+        done = k + 1
+        if done in (HALF, STEPS):
+            degree = 0 if done == STEPS else 5
+            for j, midi in enumerate(scale.chord(degree, 4, octave=1)):
+                note = voice(float(audio.midi_to_hz(midi)), 0.42 - 0.04 * j)
+                audio.add(track, audio.pan(note, -0.3 + 0.2 * j), when + 0.07 * j)
+            shine = audio.bell(scale.hz(degree, 2), 0.16, length=5.0)
+            audio.add(track, audio.pan(shine, 0.2), when + 0.3)
+            continue
+        near = min(done, abs(done - HALF), STEPS - done)  # 1 .. 5
+        degree = 2 * near - 1 if near > 1 else 1  # 1, 3, 5, 7, 9: up the scale
+        note = voice(scale.hz(degree, 1), 0.30 + 0.03 * near)
+        audio.add(track, audio.pan(note, 0.35 if k % 2 else -0.35), when)
+
+    track = audio.delay(track, 0.42, feedback=0.35, wet=0.2)
+    track = audio.reverb(track, rng, rt60=5.0, wet=0.42, tone=4200.0)
+    logger.info(
+        f"Soundtrack ({lead}): root {root}, cat back at {cat_back:.2f} s, "
+        f"upside down at {upside_back:.2f} s"
+    )
+    return audio.master(track)
 
 
 if __name__ == "__main__":

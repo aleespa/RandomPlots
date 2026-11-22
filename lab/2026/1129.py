@@ -1,423 +1,288 @@
 """
-Why a Cheetah's Tail Ends in Rings
+The Star Hidden in an Ellipse
 
-A cheetah's coat drawn by one equation: the spots on its body and the rings on
-its tail are the same Turing pattern. Static settles into spots on the flank,
-then the pattern spreads down the tail, and where the tail grows thin the
-spots have no room left and turn into rings.
+Ripples run inwards from the rim of an ellipse, every point moving straight
+along the ellipse's normal at the same speed. Near the middle they crumple into
+folds and sharp cusps, and every cusp slides along one glowing four-pointed
+star. Green is a ripple on its way in, coral is where it has turned inside out.
 
-In 1952 Alan Turing showed that chemicals reacting and spreading through skin
-can make spots or stripes with a natural size of their own. The biologist James
-Murray saw what follows: a broad patch of skin has room for spots, but a tail
-narrower than about one spot can only fit bands across it. So a spotted animal
-can have a ringed tail, but a striped animal can never have a spotted one.
-Cheetahs, jaguars and genets all agree.
+That star is the ellipse's evolute, the curve of its centres of curvature: a
+ripple folds exactly where it has travelled one radius of curvature. Huygens
+invented evolutes in 1673 to build a better pendulum clock. By the four-vertex
+theorem, every smooth closed oval that isn't a circle has an evolute with at
+least four cusps; an ellipse has exactly four.
 
-∂u/∂t = ru − (1 + ∇²)²u + gu² − u³
+Listen: every ripple leaves the rim with a soft pluck. The bright ones play a
+bamboo flute, held for exactly as long as their folds live: from the moment
+the cusps are born at the top and bottom points of the star until they meet
+again at its sides.
 
-Listen: a Rhodes chord as the spots appear, then a note for every ring that
-forms down the tail, pitched by its height, over a soft lo-fi beat. The home
-chord lands at the tip.
-
-Made with Python & PyTorch. Sound synthesized in NumPy.
-#turingpatterns #mathematicalbiology #mathart #generativeart #randomplots
+Made with Python, NumPy & PyTorch. Sound synthesized in NumPy.
+#evolute #differentialgeometry #mathart #generativeart #randomplots
 """
 
 import gc
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from loguru import logger
-from scipy.interpolate import CubicSpline
 
 from common import audio
-from common.gpu import select_device, wide_blur
+from common.gpu import blur, gaussian_kernel, select_device, splat, wide_blur
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale, beat, quantize
-from common.video import (
-    FPS,
-    HEIGHT,
-    WIDTH,
-    frame_count,
-    palette_lut,
-    render_frames,
-    smoothstep,
-)
+from common.music import STYLES, Scale
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
+
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'Every ellipse hides a star'
+HOOK_Y = 230
+HOOK_COLOUR = "#f4f0e7"
 
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
-FADE = 0.4  # s of fade to the background at the end
 
-# --- The animal (screen pixels, y down) ------------------------------------------
-BODY = (300.0, -260.0, 760.0, 900.0)  # flank: ellipse centre x, y and semi-axes
-TAIL = [  # centreline of the tail, from inside the flank to the curled tip
-    (600.0, 260.0),
-    (800.0, 560.0),
-    (900.0, 860.0),
-    (840.0, 1120.0),
-    (660.0, 1320.0),
-    (480.0, 1500.0),
-    (400.0, 1680.0),
-    (450.0, 1830.0),
-    (570.0, 1860.0),
-    (630.0, 1770.0),
-]
-TAIL_R = (175.0, 27.0, 2.2)  # radius at the root, at the tip, taper exponent
-BLEND = 60.0  # px: smooth union of flank and tail
-BODY_MARGIN = (
-    80.0  # px: the flank's pattern runs on past its edge (cropped, no edge effects)
+# --- Geometry (pixels; x right, y up, origin at the centre of the ellipse) ----------
+SEMI_X, SEMI_Y = 430.0, 600.0  # semi-axes: the major axis is vertical
+CENTRE = (WIDTH / 2, HEIGHT / 2)
+EMISSIONS = 45  # ripples per loop: three a second
+SPEED = 165.0  # px/s along the normals
+REACH = 1400.0  # px travelled before a ripple has faded away
+STRONG = 6  # bright ripples per loop
+STRONG_GAP = 6  # at least this many emissions between two bright ones
+POINTS = 12288  # points per ripple, uniform in arclength of the rim
+
+# --- Look ---------------------------------------------------------------------------
+BACKGROUND = "#040908"
+BEFORE, AFTER = "#3fe0a8", "#ff8a7a"  # jade until a point focuses, coral after
+FOLD_WIDTH = 0.12  # |J| over which the colour turns at a fold
+RIM_LIGHT = 1.0
+FOLD_BOOST, FOLD_CAP = 0.35, 3.0  # extra light near folds: min(cap, |J|^-boost)
+STAR_LIGHT = 0.12  # the evolute, always faintly there
+SPARK_LIGHT, SPARK_TRAIL = (
+    2.5,
+    45.0,
+)  # cusp sparks and their trail along the star (px of d)
+EXPOSURE, GAMMA = 1.3, 0.75
+SOFT = 0.7
+GLOWS = ((6.0, 2, 0.18), (30.0, 6, 0.10))  # (sigma px, shrink, gain)
+FADE_IN = 60.0  # px: a ripple brightens as it leaves the rim
+FADE_OUT = 0.5  # last fraction of REACH over which it dims away
+
+# --- Sound --------------------------------------------------------------------------
+STYLE = (
+    "bamboo_flute"  # common.music.STYLES; an --audio-only tag naming one overrides it
 )
-SPACING = 3.0  # px between centreline samples
-
-# --- Swift-Hohenberg: u_t = r u - (1 + lap)^2 u + g u^2 - u^3 ---------------------
-CELL = 2  # screen px per grid cell: the field lives on a 540 x 960 grid
-WAVELENGTH = 56.0  # screen px per pattern wavelength (2 pi in SH units)
-R_IN, R_OUT = 0.18, -0.6  # control parameter inside the skin / outside it
-G = 1.6  # quadratic term: favours hexagonal spots
-DT = 0.3
-NOISE0 = 0.05  # initial static
-FORCING = 3e-3  # a fixed whisper of noise everywhere, the seed of the tail's rings
-T_END = 330.0  # sim time at the end of the run
-SIM_END = 0.88  # fraction of the video by which sim time reaches T_END
-EASE = 0.3  # fraction of that run spent slowing down
-FRONT_T = (
-    10.0,
-    290.0,
-)  # sim times at which the switch-on front leaves the root / reaches the tip
-FRONT_SOFT = 30.0  # px
-
-# --- Look -------------------------------------------------------------------------
-BACKGROUND = "#0a0d12"
-PELT = ["#2a1608", "#7a4618", "#c9862f", "#e8b25a", "#f7dfa6"]  # shadow .. highlight
-INK = "#160d08"
-LIGHT = np.array([-0.45, -0.55, 0.7])
-
-# --- Sound ------------------------------------------------------------------------
-STYLE = "lofi_keys"  # common.music.STYLES; an --audio-only tag naming one overrides it
-BPM = 80.0
-BASS_LINE = (0, 3, 0, 4, 0)
+MELODY = (4, 2, 3, 0, 1, -1, 2, 0)  # scale degrees, walked by the bright ripples
 
 
-def sim_time(t):
+def _rgb(colour: str) -> np.ndarray:
+    return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
+
+
+def rim():
     """
-    Sim time at video time t (seconds): steady, then easing to a stop at T_END
-    at SIM_END * DURATION (the last EASE of the way decelerates linearly).
+    POINTS points of the ellipse, uniform in arclength: position, outward unit
+    normal, signed radius of curvature, and the angle parameter theta.
     """
-    x = np.clip(np.asarray(t, float) / (SIM_END * DURATION), 0.0, 1.0)
-    y = np.clip(x - (1.0 - EASE), 0.0, None)
-    return T_END * (x - y * y / (2.0 * EASE)) / (1.0 - EASE / 2.0)
-
-
-def front_s(tau, length):
-    """Arc length of the switch-on front along the tail at sim time tau."""
-    x = np.clip((tau - FRONT_T[0]) / (FRONT_T[1] - FRONT_T[0]), 0.0, 1.0)
-    return -2 * FRONT_SOFT + x * (length + 4 * FRONT_SOFT)
-
-
-def centreline():
-    """Tail centreline sampled every SPACING px: points (M, 2), arc length, radius."""
-    p = np.array(TAIL)
-    chord = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))])
-    spline = CubicSpline(chord, p, bc_type="natural")
-    fine = spline(np.linspace(0, chord[-1], 20000))
-    seg = np.concatenate(
-        [[0], np.cumsum(np.linalg.norm(np.diff(fine, axis=0), axis=1))]
+    theta = np.linspace(0.0, 2 * np.pi, 200_001)
+    speed = np.hypot(SEMI_X * np.sin(theta), SEMI_Y * np.cos(theta))
+    arc = np.concatenate([[0.0], np.cumsum(0.5 * (speed[1:] + speed[:-1]))])
+    arc *= 2 * np.pi / 200_000
+    perimeter = arc[-1]
+    s = (np.arange(POINTS) + 0.5) * perimeter / POINTS
+    th = np.interp(s, arc, theta)
+    pos = np.stack([SEMI_X * np.cos(th), SEMI_Y * np.sin(th)], 1)
+    normal = np.stack([SEMI_Y * np.cos(th), SEMI_X * np.sin(th)], 1)
+    normal /= np.linalg.norm(normal, axis=1, keepdims=True)
+    rho = (SEMI_X**2 * np.sin(th) ** 2 + SEMI_Y**2 * np.cos(th) ** 2) ** 1.5 / (
+        SEMI_X * SEMI_Y
     )
-    s = np.arange(0, seg[-1], SPACING)
-    points = np.stack([np.interp(s, seg, fine[:, k]) for k in range(2)], axis=1)
-    r0, r1, power = TAIL_R
-    radius = r1 + (r0 - r1) * (1 - s / s[-1]) ** power
-    return points, s, radius
+    return pos, normal, rho, th, perimeter
 
 
-def anatomy(device, scale):
+def evolute():
     """
-    Signed distance to the animal, shading normal and tail arc length on a grid
-    `scale` screen px per cell: (sdf, nx, ny, s_tail, w_tail), each (H, W).
+    POINTS points of the evolute P - rho N, uniform in its own arclength, with
+    the radius of curvature rho of the rim point each one belongs to.
     """
-    points, s, radius = centreline()
-    h, w = HEIGHT // scale, WIDTH // scale
-    ys = (torch.arange(h, device=device, dtype=torch.float32) + 0.5) * scale
-    xs = (torch.arange(w, device=device, dtype=torch.float32) + 0.5) * scale
-    yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    c = torch.tensor(points, device=device, dtype=torch.float32)
-    rad = torch.tensor(radius, device=device, dtype=torch.float32)
-    arc = torch.tensor(s, device=device, dtype=torch.float32)
-    d_tail = torch.empty(h, w, device=device)
-    best = torch.empty(h, w, device=device, dtype=torch.long)
-    rows = max(1, 2_000_000 // (w * len(points)) * 8)
-    for i in range(0, h, rows):
-        px = xx[i : i + rows, :, None] - c[:, 0]
-        py = yy[i : i + rows, :, None] - c[:, 1]
-        d = torch.sqrt(px * px + py * py) - rad
-        d_tail[i : i + rows], best[i : i + rows] = d.min(dim=-1)
-    tx = (xx - c[best, 0]) / rad[best]
-    ty = (yy - c[best, 1]) / rad[best]
-    s_tail = arc[best]
-
-    cx, cy, a, b = BODY
-    qx, qy = (xx - cx) / a, (yy - cy) / b
-    q = torch.sqrt(qx * qx + qy * qy)
-    d_body = (q - 1.0) * min(a, b)
-
-    k = BLEND
-    h = (0.5 + 0.5 * (d_body - d_tail) / k).clamp(0, 1)
-    sdf = d_body + h * (d_tail - d_body) - k * h * (1 - h)
-    # Inside the flank the flank wins (shading, pattern); the tail takes over
-    # only once it has left it.
-    x = ((d_body + 0.5 * k) / (1.5 * k)).clamp(0, 1)
-    w_tail = h * x * x * (3 - 2 * x)
-    nx = w_tail * tx + (1 - w_tail) * qx
-    ny = w_tail * ty + (1 - w_tail) * qy
-    return sdf, nx, ny, s_tail, w_tail, float(s[-1])
+    theta = np.linspace(0.0, 2 * np.pi, 200_001)
+    a2s, b2c = SEMI_X**2 * np.sin(theta) ** 2, SEMI_Y**2 * np.cos(theta) ** 2
+    rho = (a2s + b2c) ** 1.5 / (SEMI_X * SEMI_Y)
+    c = SEMI_Y**2 - SEMI_X**2
+    ex = -c / SEMI_X * np.cos(theta) ** 3  # the ellipse's evolute (an "astroid")
+    ey = c / SEMI_Y * np.sin(theta) ** 3
+    arc = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(ex), np.diff(ey)))])
+    s = (np.arange(POINTS) + 0.5) * arc[-1] / POINTS
+    th = np.interp(s, arc, theta)
+    pts = np.stack([np.interp(th, theta, ex), np.interp(th, theta, ey)], 1)
+    return pts, np.interp(th, theta, rho), arc[-1]
 
 
-def soundtrack(rings, body_time, tip_time, style_name, rng):
+def ripple_amplitudes(rng):
+    """Weak ripples with a little variety, and STRONG bright ones spread round the loop."""
+    amp = rng.uniform(0.25, 0.45, EMISSIONS)
+    while True:
+        strong = np.sort(rng.choice(EMISSIONS, STRONG, replace=False))
+        gaps = np.diff(np.r_[strong, strong[0] + EMISSIONS])
+        if gaps.min() >= STRONG_GAP:
+            break
+    amp[strong] = rng.uniform(1.2, 1.4, STRONG)
+    return amp, strong
+
+
+def soundtrack(amp, strong, style_name, rng):
     """
-    Lo-fi keys. A brush of noise for the static, the flank's spots condensing
-    as a rolled Rhodes chord; then every
-    ring that forms down the tail strikes one Rhodes note, pitch by its height
-    on screen (higher up, higher note), pan by its x, softer as the tail thins,
-    pulled 70 % onto an eighth-note grid at BPM. A soft kick/tick beat and a
-    Rhodes bass walk BASS_LINE underneath once the spots are in, and the home
-    chord lands as the last ring forms at the tip.
+    Bamboo flute over plucked drops; a loop, so every tail wraps.
+
+    Ripple e leaves the rim at e * DURATION / EMISSIONS: a soft high pluck,
+    velocity from its amplitude, panned alternately. A ripple travelled d
+    folds where d equals the local radius of curvature, so its cusps are born
+    at d = rho_min = SEMI_X^2 / SEMI_Y (the star's top and bottom tips) and
+    die at d = rho_max = SEMI_Y^2 / SEMI_X (its side tips). Each bright ripple
+    holds a flute note over exactly that span, pitched by MELODY. A quiet low
+    pad on the root and fifth keeps the room breathing.
     """
     style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
     track = audio.silence(DURATION)
-    kw = dict(circular=False)
-    end = min(tip_time + 0.3, DURATION - 2.0)
+    period = DURATION / EMISSIONS
+    rho_min, rho_max = SEMI_X**2 / SEMI_Y, SEMI_Y**2 / SEMI_X
+    born, held = rho_min / SPEED, (rho_max - rho_min) / SPEED
 
-    hiss = audio.lowpass(audio.tick(rng, 0.5, 0.25, 2500.0), 5000.0, circular=False)
-    audio.add(track, audio.pan(hiss, -0.2), 0.0, **kw)  # the static
-    roll = max(0.12, body_time - 0.35)
-    for i, degree in enumerate((0, 2, 4, 6, 9)):  # the spots condense
-        note = style.voice(scale.hz(degree), 0.35 + 0.05 * i)
-        audio.add(track, audio.pan(note, -0.4 + 0.2 * i), roll + 0.09 * i, **kw)
+    for e in range(EMISSIONS):
+        degree = 7 + (e * 3) % 5
+        drop = audio.pluck(scale.hz(degree), 0.15 + 0.1 * float(amp[e]), 1.5)
+        side = 0.45 if e % 2 else -0.45
+        audio.add(track, audio.pan(audio.lowpass(drop, 3500.0), side), e * period)
 
-    if len(rings):
-        times = quantize([r[0] for r in rings], DURATION, BPM, 2, amount=0.7)
-        last = -1.0
-        for when, (_, x, y, width) in sorted(zip(times, rings)):
-            if when - last < 0.11 or when > end - 0.05:
-                continue
-            last = when
-            degree = int(round(11 - 13 * y / HEIGHT))
-            velocity = 0.3 + 0.35 * np.clip(width / (2 * TAIL_R[0]), 0, 1)
-            note = audio.pan(
-                style.voice(scale.hz(degree), velocity), 1.3 * (x / WIDTH - 0.5)
-            )
-            audio.add(track, note, when, **kw)
+    for k, e in enumerate(strong):
+        degree = MELODY[k % len(MELODY)]
+        if style.voice is audio.flute:
+            note = audio.flute(scale.hz(degree), 0.55, held)
+        else:
+            note = style.voice(scale.hz(degree), 0.55)
+        audio.add(track, audio.pan(note, 0.0), e * period + born)
 
-    step = beat(BPM)
-    start = np.ceil(body_time / step) * step
-    for i, when in enumerate(np.arange(start, end, step)):
-        if i % 2 == 0:
-            audio.add(track, audio.kick(0.4, 55.0), when, **kw)
-        audio.add(
-            track, audio.pan(audio.tick(rng, 0.18, 0.04), 0.3), when + step / 2, **kw
-        )
-    for i, when in enumerate(np.arange(start, end, 4 * step)):
-        bass = style.bass(scale.hz(BASS_LINE[i % len(BASS_LINE)], -1), 0.55, length=4.0)
-        audio.add(track, bass, when, **kw)
-    for degree in (0, 2, 4):
-        audio.add(
-            track,
-            audio.pad(scale.hz(degree, -1), end - body_time, 0.1, 2.0, 2.5, 0.25),
-            body_time,
-            **kw,
-        )
+    for semitones in (0, 7):
+        hz = float(audio.midi_to_hz(scale.root - 24 + semitones))
+        audio.add(track, audio.pad(hz, DURATION, 0.16, 2.0, 2.0, 0.3), 0.0)
 
-    for i, degree in enumerate((0, 2, 4, 6, 7)):  # the home chord at the tip
-        audio.add(track, style.voice(scale.hz(degree), 0.5), end + 0.04 * i, **kw)
-    audio.add(track, style.bass(scale.hz(0, -1), 0.6, length=4.0), end, **kw)
-    track = audio.lowpass(track, 6000.0, circular=False)
-    return audio.master(style.room(track, rng, circular=False), loop=False)
+    logger.info(
+        f"Soundtrack: {style_name}, root MIDI {scale.root}, flute held {held:.2f} s "
+        f"from {born:.2f} s after each bright ripple"
+    )
+    return audio.master(style.room(track, rng))
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Murray's tail theorem with a Turing pattern, as a one-shot.
+    Parallel curves (wavefronts) of an ellipse, a loop.
 
-    The pattern is the Swift-Hohenberg equation, the generic model of a Turing
-    instability: u_t = r u - (1 + lap)^2 u + g u^2 - u^3, whose unstable band
-    sits at wavenumber 1 (wavelength 2 pi = WAVELENGTH screen px). With g = G
-    the quadratic term makes hexagonal spots (u maxima, drawn as INK) win over
-    stripes. It is solved on a 540 x 960 periodic grid (CELL = 2 px) on the GPU
-    by a semi-implicit pseudo-spectral step: the linear operator
-    -(1 - k^2)^2 implicitly, r(x) u + g u^2 - u^3 + FORCING * xi(x) explicitly,
-    dt = DT (~1100 FFT steps in all, about a second).
+    The rim is the ellipse (SEMI_X cos th, SEMI_Y sin th), sampled with POINTS
+    points uniform in arclength. A ripple that has travelled d inwards is
+    X = P - d N (N the outward unit normal): the parallel curve at distance
+    d, i.e. the wavefront of light leaving the rim along its normals. Its
+    length element is J = 1 - d / rho times the rim's (rho the radius of
+    curvature), so it folds into cusps where d = rho, and those cusps lie on
+    the evolute P - rho N, the four-cusped "astroid" of the ellipse.
 
-    The animal is a signed-distance shape: a flank (an ellipse off the top of
-    the frame) smoothly united with a tail, a tube of radius tapering from
-    TAIL_R[0] to TAIL_R[1] px along a spline through TAIL. Outside it r = R_OUT
-    (stable, so the field dies off: an effective Dirichlet edge); inside,
-    r = R_IN. Where the tail is narrower than about one wavelength only modes
-    along it fit, so the spots become bands across it: Murray's theorem. The
-    flank's r region runs BODY_MARGIN px past its drawn edge, so the flank shows
-    no edge effects and its silhouette simply crops the spots.
+    A ripple leaves the rim every DURATION / EMISSIONS s and moves at SPEED,
+    so ripple e has d = SPEED (tau - e DURATION / EMISSIONS); a ripple lives
+    REACH / SPEED < DURATION s, and emission indices are taken mod EMISSIONS,
+    so the loop closes exactly. `settings.rng` draws each ripple's amplitude
+    and which STRONG ripples are bright (that is all the seed changes).
 
-    Time: the flank starts as static (NOISE0 * white noise) and condenses into
-    spots in the first second. The tail is held stable (r = R_OUT) until a
-    switch-on front passes down it along arc length, from sim time FRONT_T[0]
-    at the root to FRONT_T[1] at the tip, seeded by the fixed whisper xi; the
-    rings therefore form one after another down the tail. Video time maps to
-    sim time by sim_time (steady, easing to a stop at SIM_END), then a rest and
-    a FADE. Every frame steps the field from the previous frame's sim time to
-    its own with a fixed dt (constant cost, render_frames(parallel=False)), so
-    RP_FPS previews show the same motion.
-
-    Drawing: u is normalised by min(max |u|, 3 std) over the flank (so the
-    opening static is visible), upsampled bilinearly to 1080 x 1920 and
-    thresholded smoothly into ink over a pelt shaded with a Lambert light on
-    the shape's normals (sphere-like flank, cylinder-like tail), over a dark
-    vignetted background with a faint rim glow and a fixed dither.
-
-    Sound (`soundtrack`): u is recorded along the tail centreline every other
-    step; each local maximum of the final profile is a ring (or a spot on the
-    centreline), sounding when it first reaches 60 % of its final height.
-    The posted video and soundtrack use the default --seed 0 (audio seed 0).
+    Rendering (torch, GPU when available): every live ripple's points are
+    splatted bilinearly with equal weight per unit of rim length, so the
+    brightness of a front is its ray density, proportional to 1 / |J|: the
+    folds blaze on their own and trace the evolute. Colour is jade where
+    J > 0 and coral where J < 0 (the point has passed its centre of
+    curvature), mixed over |J| < FOLD_WIDTH. Near a fold each point is further
+    brightened by min(FOLD_CAP, |J|^-FOLD_BOOST). The evolute itself (closed form
+    (-(a^2-b^2)/b cos^3 th, (a^2-b^2)/a sin^3 th)) is drawn faintly, and each
+    ripple lights the evolute points with rho <= d with an exp(-(d - rho) /
+    SPARK_TRAIL) tail: sparks riding its cusps along the star. A faint rim, two-scale bloom,
+    exponential tone mapping. The soundtrack is `soundtrack`; the posted
+    one used --seed 0 (audio seed 0).
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
+    amp, strong = ripple_amplitudes(rng)
+    logger.info(f"Bright ripples: {strong.tolist()}")
+
     device = select_device()
+    f32 = dict(device=device, dtype=torch.float32)
+    pos, normal, rho, _, perimeter = rim()
+    weight = perimeter / POINTS  # rim length per point: a J = 1 front sums ~1 per px
+    px0 = torch.tensor(CENTRE[0] + pos[:, 0], **f32)
+    py0 = torch.tensor(CENTRE[1] - pos[:, 1], **f32)
+    nx = torch.tensor(normal[:, 0], **f32)
+    ny = torch.tensor(-normal[:, 1], **f32)
+    inv_rho = torch.tensor(1.0 / rho, **f32)
+    before = torch.tensor(_rgb(BEFORE), **f32)
+    after = torch.tensor(_rgb(AFTER), **f32)
+    background = torch.tensor(_rgb(BACKGROUND), **f32)
 
-    gh, gw = HEIGHT // CELL, WIDTH // CELL
-    sdf, nx, ny, s_tail, w_tail, length = anatomy(device, CELL)
-    inside = torch.sigmoid(-(sdf - BODY_MARGIN * (1 - w_tail)) / 6.0)
-    noise0 = torch.tensor(
-        rng.standard_normal((gh, gw)), device=device, dtype=torch.float32
+    soft = gaussian_kernel(SOFT, device)
+    rim_canvas = torch.zeros(HEIGHT, WIDTH, 3, **f32)
+    splat(
+        rim_canvas,
+        px0,
+        py0,
+        (RIM_LIGHT * weight) * before.expand(POINTS, 3).contiguous(),
     )
-    whisper = torch.tensor(
-        rng.standard_normal((gh, gw)), device=device, dtype=torch.float32
+    star, star_rho, star_length = evolute()
+    star_weight = star_length / POINTS
+    sx = torch.tensor(CENTRE[0] + star[:, 0], **f32)
+    sy = torch.tensor(CENTRE[1] - star[:, 1], **f32)
+    star_rho = torch.tensor(star_rho, **f32)
+    white = torch.ones(3, **f32)
+    spark_colour = 0.5 * (before + after) + 0.5 * white
+    splat(
+        rim_canvas,
+        sx,
+        sy,
+        (STAR_LIGHT * star_weight) * spark_colour.expand(POINTS, 3).contiguous(),
     )
-    u = NOISE0 * noise0 * inside
-
-    h = 2 * np.pi * CELL / WAVELENGTH  # SH units per grid cell
-    ky = torch.fft.fftfreq(gh, d=h / (2 * np.pi), device=device)
-    kx = torch.fft.rfftfreq(gw, d=h / (2 * np.pi), device=device)
-    k2 = ky[:, None] ** 2 + kx[None, :] ** 2
-    implicit = 1.0 / (1.0 + DT * (1.0 - k2) ** 2)
-
-    # Listening line: the tail centreline on the grid.
-    points, arc, radius = centreline()
-    pi_ = torch.tensor(
-        np.clip(points[:, 1] / CELL, 0, gh - 1).astype(int), device=device
-    )
-    pj_ = torch.tensor(
-        np.clip(points[:, 0] / CELL, 0, gw - 1).astype(int), device=device
-    )
-    history = []  # (sim time, u along the centreline)
-
-    state = {"step": 0}
-
-    def advance(frame):
-        nonlocal u
-        t = frame / FPS
-        target = int(round(sim_time(t) / DT))
-        while state["step"] < target:
-            tau = state["step"] * DT
-            act = torch.sigmoid((front_s(tau, length) - s_tail) / FRONT_SOFT)
-            act = w_tail * act + (1 - w_tail)
-            r = R_OUT + (R_IN - R_OUT) * inside * act
-            nonlinear = r * u + G * u * u - u * u * u + FORCING * whisper
-            u = torch.fft.irfft2(
-                (torch.fft.rfft2(u) + DT * torch.fft.rfft2(nonlinear)) * implicit,
-                s=(gh, gw),
-            )
-            state["step"] += 1
-            if state["step"] % 2 == 0:
-                history.append((state["step"] * DT, u[pi_, pj_]))
-        return t
-
-    # --- picture --------------------------------------------------------------
-    up = dict(size=(HEIGHT, WIDTH), mode="bilinear", align_corners=False)
-    geo = F.interpolate(torch.stack([sdf, nx, ny])[None], **up)[0]
-    big_sdf, bnx, bny = geo[0], geo[1], geo[2]
-    nz = (1 - bnx**2 - bny**2).clamp(0, 1).sqrt()
-    light = LIGHT / np.linalg.norm(LIGHT)
-    lambert = (bnx * light[0] + bny * light[1] + nz * light[2]).clamp(0, 1)
-    shade = (0.18 + 0.82 * lambert) * (0.55 + 0.45 * nz)
-    alpha = (0.5 - big_sdf / 1.5).clamp(0, 1)
-    pelt = torch.tensor(palette_lut(PELT, 512), device=device)
-    pelt_img = pelt[(shade.clamp(0, 1) * 511).long()]
-    ink = torch.tensor(palette_lut([INK, INK], 2)[0], device=device)
-    bg = torch.tensor(palette_lut([BACKGROUND, BACKGROUND], 2)[0], device=device)
-    vy, vx = torch.meshgrid(
-        torch.linspace(-1, 1, HEIGHT, device=device),
-        torch.linspace(-1, 1, WIDTH, device=device),
-        indexing="ij",
-    )
-    vignette = 1.0 - 0.4 * (0.5 * vx**2 + 0.5 * vy**2).clamp(0, 1)
-    dither = torch.tensor(
-        rng.uniform(-0.5, 0.5, (HEIGHT, WIDTH, 1)) / 255.0,
-        device=device,
-        dtype=torch.float32,
-    )  # breaks the banding of the dark gradient
-    body_mask = (inside * (1 - w_tail)) > 0.5
+    canvas = torch.zeros(HEIGHT, WIDTH, 3, **f32)
+    period = DURATION / EMISSIONS
 
     def render(frame):
-        t = advance(frame)
-        body = u[body_mask]
-        level = torch.minimum(body.abs().amax(), 3.0 * body.std()).clamp(min=1e-3)
-        field = F.interpolate((u / level)[None, None], **up)[0, 0]
-        spot = smooth(0.15, 0.5, field)
-        skin = (
-            pelt_img * (1 - 0.35 * spot[..., None])
-            + spot[..., None] * (ink * (0.7 + 0.3 * shade[..., None]) - pelt_img) * 0.95
-        )
-        rim = wide_blur(alpha[..., None].expand(-1, -1, 3).contiguous(), 30.0, 4)
-        image = bg * vignette[..., None] + 0.05 * rim * pelt[300]
-        image = image + alpha[..., None] * (skin - image)
-        image = image * float(smoothstep((DURATION - t) / FADE)) + dither
-        return (image.clamp(0, 1) * 255).round()
+        tau = frame / FRAME_COUNT * DURATION
+        canvas.copy_(rim_canvas)
+        newest = int(np.floor(tau / period))
+        oldest = int(np.ceil((tau - REACH / SPEED) / period))
+        for e in range(oldest, newest + 1):
+            d = SPEED * (tau - e * period)
+            if d <= 0 or d >= REACH:
+                continue
+            level = float(amp[e % EMISSIONS])
+            level *= float(smoothstep(d / FADE_IN))
+            level *= float(smoothstep((1 - d / REACH) / FADE_OUT))
+            if level <= 0:
+                continue
+            jac = 1.0 - d * inv_rho
+            mix = (0.5 - 0.5 * torch.tanh(jac / FOLD_WIDTH))[:, None]
+            colour = (1 - mix) * before + mix * after
+            boost = jac.abs().clamp_min(1e-6) ** -FOLD_BOOST
+            colour = colour * boost.clamp_max(FOLD_CAP)[:, None]
+            splat(canvas, px0 - d * nx, py0 - d * ny, (level * weight) * colour)
+            # The cusps of this ripple sit where rho = d; light the star behind them.
+            behind = d - star_rho
+            trail = torch.exp(-behind / SPARK_TRAIL) * (behind >= 0)
+            trail = trail * (behind < 6 * SPARK_TRAIL)
+            spark = (SPARK_LIGHT * level * star_weight) * trail
+            splat(canvas, sx, sy, spark[:, None] * spark_colour)
+        light = blur(canvas, soft)
+        glow = sum(g * wide_blur(canvas, s, f) for s, f, g in GLOWS)
+        image = 1 - torch.exp(-EXPOSURE * (light + glow).clamp_min(0) ** GAMMA)
+        return (background + image).clamp(0, 1) * 255.0
 
-    if settings.audio_only:
-        for frame in range(FRAME_COUNT):
-            advance(frame)
-    else:
-        render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
-
-    rings, body_time, tip_time = listen(history, points, arc, radius, length)
-    style = settings.audio_tag if settings.audio_tag in STYLES else STYLE
-    track = soundtrack(rings, body_time, tip_time, style, settings.audio_rng)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
+    tag = settings.audio_tag
+    track = soundtrack(amp, strong, tag if tag in STYLES else STYLE, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
-
-
-def smooth(lo, hi, x):
-    x = ((x - lo) / (hi - lo)).clamp(0, 1)
-    return x * x * (3 - 2 * x)
-
-
-def video_time(tau):
-    grid = np.linspace(0, DURATION, 6001)
-    return np.interp(tau, sim_time(grid), grid)
-
-
-def listen(history, points, arc, radius, length):
-    """Rings along the tail: (time, x, y, width) of each, from the centreline history."""
-    taus = np.array([h[0] for h in history])
-    line = torch.stack([h[1] for h in history]).cpu().numpy()  # (steps, M)
-    final = line[-1]
-    peaks = [
-        i
-        for i in range(2, len(final) - 2)
-        if final[i] > 0.2 and final[i] == final[i - 2 : i + 3].max()
-    ]
-    rings = []
-    for i in peaks:
-        above = np.nonzero(line[:, i] > 0.6 * final[i])[0]
-        if len(above):
-            rings.append((float(video_time(taus[above[0]])), *points[i], 2 * radius[i]))
-    logger.info(
-        f"{len(rings)} rings along the tail, forming from "
-        f"{min([r[0] for r in rings], default=0):.1f} to {max([r[0] for r in rings], default=0):.1f} s"
-    )
-    body_time = float(video_time(18.0))
-    tip_time = max([r[0] for r in rings], default=12.0)
-    return rings, body_time, tip_time
 
 
 if __name__ == "__main__":

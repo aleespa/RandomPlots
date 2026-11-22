@@ -1,457 +1,383 @@
 """
-Every Circle Is a Whole Number
+The Room You Can't Light
 
-An Apollonian gasket, the fractal you get by packing circles into a circle, then into the
-gaps between them, forever. Each circle is labelled with its curvature, one over its
-radius, and every label is a whole number: 2, 3, 6, 11, 14, 15, 23, ...
+A room of mirrors that one candle can never fully light. Light bounces off
+the walls forever, yet the two side wings stay pitch black, though they open
+wide onto the glowing domes.
 
-The reason is a theorem by Descartes: four circles that all touch satisfy
-(k₁ + k₂ + k₃ + k₄)² = 2(k₁² + k₂² + k₃² + k₄²). So the circle filling a gap is
-k = 2(k₁ + k₂ + k₃) − k₄, built from its neighbours by adding and subtracting. Start
-with whole numbers (−1 for the outside circle, 2, 2 and 3) and you can never leave them.
-The zoom dives almost 200 times deeper into the fractal: the numbers reach the
-thousands, still whole.
+The trick is Roger Penrose's, from 1958. Each dome is half an ellipse, and
+the thin walls end exactly at its two focal points. In an elliptical mirror, a
+ray passing between the foci always bounces back between them; a ray passing
+outside them stays outside. Light from the hall can only fall back into the
+hall.
 
-Listen: each circle strikes a vibraphone bar as it appears, big circles low, tiny ones high,
-so the pitch climbs as the zoom goes deeper, then lands on one chord.
+Then a blue candle is lit in one wing. It lights both wings, even the far
+one, but never the hall between them. Two lights in one room that never meet.
 
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#apolloniangasket #fractal #mathart #generativeart #randomplots
+Every bell is a ray striking a mirror: high for the warm candle, low for the
+blue, higher notes higher up the room, and a gong as each candle is lit.
+
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#penroseunilluminableroom #optics #billiards #mathart #randomplots
 """
 
 import gc
 
 import cv2
 import numpy as np
+import torch
 from loguru import logger
 
 from common import audio
+from common.gpu import blur, gaussian_kernel, select_device, wide_blur
 from common.image_processing import ImageProcessingSettings
-from common.music import STYLES, Scale, quantize
-from common.video import (
-    FPS,
-    HEIGHT,
-    WIDTH,
-    blit_mask,
-    frame_count,
-    hex_to_bgr,
-    latex_mask,
-    render_frames,
-    smoothstep,
-)
+from common.music import STYLES, Scale
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
+
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'A room one candle can never light'
+HOOK_Y = 560
+HOOK_COLOUR = "#f4f0e7"
 
 DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- Timeline (s) ------------------------------------------------------------------
-POP = 0.3  # a circle grows to full size over this long
-BUILD = (0.1, 4.6)  # circles appear, by curvature, between these times
-BUILD_POWER = 1.25  # > 1: the big circles arrive quickly, the dust later
-TEXT_OUT = (4.9, 5.5)  # the opening text fades out
-ZOOM = (5.0, 13.2)  # the dive; then the picture rests
-END_TEXT_IN = (12.6, 13.2)
+# --- The room (px, y up, origin at the centre of the frame) ------------------------
+SEMI_A, SEMI_B = 470.0, 400.0  # each dome is the half-ellipse x^2/a^2 + y'^2/b^2 = 1
+HALF_H = 400.0  # the domes' flat sides sit at y = +-HALF_H
+FOCUS = float(np.sqrt(SEMI_A**2 - SEMI_B**2))  # the partitions stand at x = +-FOCUS
+CENTRE = (WIDTH / 2, HEIGHT / 2)
 
-# --- The gasket --------------------------------------------------------------------
-# The integral gasket (-1, 2, 2, 3): the unit circle, two of radius 1/2 above and
-# below, two of radius 1/3 left and right. Every other circle follows from Descartes.
-START_K = np.array([-1.0, 2.0, 2.0, 3.0, 3.0])
-START_Z = np.array([0, 0.5j, -0.5j, 2 / 3, -2 / 3])
-START_GAPS = ((0, 1, 3, 2), (0, 2, 3, 1), (1, 2, 3, 0), (0, 1, 4, 2), (0, 2, 4, 1))
-START_GAPS += ((1, 2, 4, 0),)  # each gap: three touching circles + the one opposite
-TARGET_K = (120, 360)  # the zoom ends centred on a circle with k in this range
-TARGET_RADIUS = 300.0  # px: its radius at the end of the zoom
-MIN_RADIUS = 0.3  # px: circles smaller than this on screen are never generated
+# --- The candles ----------------------------------------------------------------------
+# (position, lit at s, colour in linear RGB). Rays leave each one at evenly spaced
+# angles, with a random phase.
+CANDLES = (
+    ((-70.0, -170.0), 0.0, (1.0, 0.52, 0.16)),  # warm, in the hall
+    ((-(SEMI_A + FOCUS) / 2, 140.0), 6.5, (0.22, 0.52, 1.0)),  # blue, in the left wing
+)
+RAYS = 4000  # per candle
+SPEED = 900.0  # px of path per second
+HEAD_START = 140.0  # px of path the first candle's light has already run at t = 0
+STEP = 1.5  # px between samples along each ray
 
-# --- Layout (px) -------------------------------------------------------------------
-R0 = 520.0  # px radius of the outer circle before the zoom
-CX, CY = WIDTH / 2, HEIGHT / 2
-LABEL_R = 18.0  # px: a circle gets its number once its radius passes this
-LABEL_FADE = 14.0  # px of radius over which the label fades in
-DIGIT_SIZE = 150  # px per em of the digit masks (scaled down per label)
+# --- Look -----------------------------------------------------------------------------
+BACKGROUND = (0.012, 0.010, 0.016)
+EXPOSURE, GAMMA = 0.55, 0.8  # light = 1 - exp(-EXPOSURE * density^GAMMA)
+SETTLE = 2200.0  # px of path: the exposure stops adapting once light ran this far
+SOFT = 1.0  # px blur of the ray density
+SPARK_TRAIL, SPARK_GAIN = 28, 0.06  # samples of comet trail at each ray's head
+GLOWS = ((10.0, 2, 0.10), (40.0, 8, 0.06))  # (sigma px, shrink, gain) halos
+WALL_COLOUR, WALL_ALPHA, WALL_WIDTH = (0.86, 0.80, 0.70), 0.7, 3
+FLAME_SIGMA = 7.0  # px
 
-# --- Look --------------------------------------------------------------------------
-BACKGROUND = "#f4f0e7"
-INK = "#1b2238"
-# Flat swatches, cyclic in log k (k and CYCLE * k share a colour), so every zoom
-# level is as rich: navy, teal, sage, ochre, terracotta, plum.
-PALETTE = ["#1b2a4a", "#22707a", "#6f8f72", "#e3a53a", "#c8553d", "#6e2c5a"]
-CYCLE = 4.0
-COLOUR_PHASE = 0.1
-
-# --- Sound -------------------------------------------------------------------------
-STYLE = "vibes"  # common.music.STYLES; an --audio-only tag naming one overrides it
-BPM = 96.0  # tempo_choices(15): six bars
-TOP_DEGREE = 10  # the smallest circles reach this scale degree
-TOP_K = 3.0e4
+# --- Sound ----------------------------------------------------------------------------
+STYLE = "gamelan"  # common.music.STYLES; an --audio-only tag naming one overrides it
+LISTENED = ((2, 1), (2, 2))  # rays sounded per candle: before / after the blue candle
+DEGREES = 9  # pelog degrees from the bottom of the room to the top
+MIN_GAP = 0.14  # s: a ray's taps closer than this to its previous one are skipped
 
 
-def view(s, target, zoom_end):
-    """Zoom Z(s) and view centre c(s): Z = 1 until ZOOM[0], then a log-smooth dive to
-    zoom_end while the target slides from where it sits to the middle of the screen."""
-    u = smoothstep((np.asarray(s, float) - ZOOM[0]) / (ZOOM[1] - ZOOM[0]))
-    z = np.exp(np.log(zoom_end) * u)
-    return z, target - target * (1 - u) / z
+def wall_hit(p: np.ndarray, d: np.ndarray):
+    """Distance along d from each p (inside the room) to the next wall, and its normal."""
+    best = np.full(len(p), np.inf)
+    normal = np.zeros_like(p)
+    for side in (1.0, -1.0):  # the two domes, centred at (0, +-HALF_H)
+        q = p - np.array([0.0, side * HALF_H])
+        qa = d[:, 0] ** 2 / SEMI_A**2 + d[:, 1] ** 2 / SEMI_B**2
+        qb = 2 * (q[:, 0] * d[:, 0] / SEMI_A**2 + q[:, 1] * d[:, 1] / SEMI_B**2)
+        qc = q[:, 0] ** 2 / SEMI_A**2 + q[:, 1] ** 2 / SEMI_B**2 - 1
+        disc = qb * qb - 4 * qa * qc
+        root = np.sqrt(np.maximum(disc, 0))
+        for s in ((-qb - root) / (2 * qa), (-qb + root) / (2 * qa)):
+            y = q[:, 1] + s * d[:, 1]
+            ok = (disc > 0) & (s > 1e-6) & (side * y >= -1e-9) & (s < best)
+            best = np.where(ok, s, best)
+            hit = q + s[:, None] * d
+            n = np.stack([hit[:, 0] / SEMI_A**2, hit[:, 1] / SEMI_B**2], 1)
+            normal[ok] = n[ok] / np.linalg.norm(n[ok], axis=1, keepdims=True)
+    for x in (SEMI_A, -SEMI_A, FOCUS, -FOCUS):  # outer walls and the two partitions
+        with np.errstate(divide="ignore", invalid="ignore"):
+            s = (x - p[:, 0]) / d[:, 0]
+        y = p[:, 1] + s * d[:, 1]
+        ok = (s > 1e-6) & (np.abs(y) <= HALF_H) & (s < best)
+        best = np.where(ok, s, best)
+        normal[ok] = (1.0, 0.0)
+    return best, normal
 
 
-def appear_time(k):
-    """When a circle of curvature k pops in: increasing with k, BUILD[0] .. BUILD[1]."""
-    k_top = R0 / MIN_RADIUS
-    k = np.asarray(k, float)
-    x = np.clip(np.log(np.abs(k) / 2) / np.log(k_top / 2), 0, 1)
-    when = BUILD[0] + (BUILD[1] - BUILD[0]) * x**BUILD_POWER
-    return np.where(k < 0, -POP, when)  # the outer circle is there from the start
-
-
-def gasket(levels):
+def trace(source, angles, length: float) -> dict:
     """
-    Every circle that is ever bigger than MIN_RADIUS on screen, by Descartes' theorem:
-    a gap between three touching circles (k1, k2, k3) whose fourth neighbour is k4 is
-    filled by k = 2(k1 + k2 + k3) - k4, centre kz = 2(k1z1 + k2z2 + k3z3) - k4z4 (the
-    complex Descartes theorem). Breadth first over gaps; a gap is dropped once its new
-    circle is too small for every view (`levels`: zoom, centre, curvature limit) whose
-    window overlaps the gap's bounding box (from its three tangency points, padded).
+    Bounce rays from `source` until each has run `length` px: the arc length at
+    which each straight segment starts, its start point and direction,
+    (rays, segments) arrays. Rays that are done keep 'bouncing' at zero cost.
     """
-    zoom, centre, k_limit = levels
-    half_x = (CX + 4) / (R0 * zoom)
-    half_y = (CY + 4) / (R0 * zoom)
-    w_start = START_K * START_Z
-    gaps = np.array(START_GAPS)
-    gk, gw = START_K[gaps], w_start[gaps]
-    ks, ws = [START_K], [w_start]
-    while len(gk):
-        kn = 2 * gk[:, :3].sum(1) - gk[:, 3]
-        wn = 2 * gw[:, :3].sum(1) - gw[:, 3]
-        pairs = ((0, 1), (0, 2), (1, 2))
-        touch = np.stack(
-            [(gw[:, i] + gw[:, j]) / (gk[:, i] + gk[:, j]) for i, j in pairs], 1
+    p = np.tile(np.array(source, float), (len(angles), 1))
+    d = np.stack([np.cos(angles), np.sin(angles)], 1)
+    s = np.zeros(len(angles))
+    keep = [(s.copy(), p.copy(), d.copy())]
+    while s.min() <= length:
+        active = s <= length
+        step, n = wall_hit(p[active], d[active])
+        pa, da = p[active] + step[:, None] * d[active], d[active]
+        da = da - 2 * (da * n).sum(1, keepdims=True) * n
+        da /= np.linalg.norm(da, axis=1, keepdims=True)
+        p[active], d[active] = pa, da
+        s[active] += step
+        s[~active] = np.inf
+        keep.append((s.copy(), p.copy(), d.copy()))
+        if len(keep) > 20_000:
+            raise RuntimeError("a ray is stuck bouncing")
+    out = {key: np.stack([k[i] for k in keep], 1) for i, key in enumerate("spd")}
+    out["s"][:, 0] = 0.0
+    return out
+
+
+def path_length(seconds, lit: float, head: float = 0.0):
+    """How far a candle's light has run at `seconds` (0 before it is lit)."""
+    return np.where(seconds >= lit, head + SPEED * (seconds - lit), 0.0)
+
+
+def in_wing(x, y):
+    return (abs(x) > FOCUS) & (abs(x) < SEMI_A) & (abs(y) < HALF_H)
+
+
+def in_hall(x, y):
+    return (abs(x) < FOCUS) & (abs(y) < HALF_H)
+
+
+def sample(room: dict, count: int, device) -> torch.Tensor:
+    """
+    Pixel index of every ray every STEP px along its path, (count, rays) int32,
+    sample-major so any prefix is 'all the light up to that length'.
+    """
+    to = dict(device=device, dtype=torch.float64)
+    starts = torch.tensor(room["s"], **to)
+    points = torch.tensor(room["p"], **to)
+    dirs = torch.tensor(room["d"], **to)
+    starts = torch.where(torch.isinf(starts), torch.full_like(starts, 1e30), starts)
+    rays = starts.shape[0]
+    out = torch.empty(count, rays, dtype=torch.int32, device=device)
+    leaks = 0
+    for j0 in range(0, count, 1000):
+        j = torch.arange(j0, min(count, j0 + 1000), device=device, dtype=torch.float64)
+        query = (j * STEP)[None, :].expand(rays, -1).contiguous()
+        k = (torch.searchsorted(starts, query, right=True) - 1).clamp_min(0)
+        s0 = starts.gather(1, k)
+        x = points[..., 0].gather(1, k) + (query - s0) * dirs[..., 0].gather(1, k)
+        y = points[..., 1].gather(1, k) + (query - s0) * dirs[..., 1].gather(1, k)
+        leaks += int(in_wing(x, y).sum()) if room["home"] == "hall" else 0
+        leaks += int(in_hall(x, y).sum()) if room["home"] == "wing" else 0
+        px = torch.round(CENTRE[0] + x).clamp(0, WIDTH - 1).long()
+        py = torch.round(CENTRE[1] - y).clamp(0, HEIGHT - 1).long()
+        out[j0 : j0 + len(j)] = (py * WIDTH + px).T.to(torch.int32)
+    logger.info(f"Sampled {count:,} x {rays:,} points; {leaks} forbidden samples")
+    return out
+
+
+def walls() -> np.ndarray:
+    """The mirrors as an alpha mask (H, W), drawn at 4x and shrunk."""
+    big = np.zeros((HEIGHT * 4, WIDTH * 4), np.uint8)
+    u = np.linspace(0, np.pi, 1500)
+    dome = np.stack([SEMI_A * np.cos(u), HALF_H + SEMI_B * np.sin(u)], 1)
+    outline = np.concatenate([dome, dome[::-1] * [1, -1]])
+    lines = [outline]
+    for x in (FOCUS, -FOCUS):
+        lines.append(np.array([[x, HALF_H], [x, -HALF_H]]))
+    for pts, closed in zip(lines, (True, False, False)):
+        pix = np.stack([CENTRE[0] + pts[:, 0], CENTRE[1] - pts[:, 1]], 1)
+        cv2.polylines(
+            big,
+            [np.round(pix * 16 * 4).astype(np.int32)],
+            closed,
+            255,
+            WALL_WIDTH * 4,
+            cv2.LINE_AA,
+            4,
         )
-        lo_x, hi_x = touch.real.min(1), touch.real.max(1)
-        lo_y, hi_y = touch.imag.min(1), touch.imag.max(1)
-        pad = 0.3 * np.maximum(hi_x - lo_x, hi_y - lo_y)
-        lo_x, hi_x, lo_y, hi_y = lo_x - pad, hi_x + pad, lo_y - pad, hi_y + pad
-        overlap = (
-            (lo_x[:, None] < centre.real + half_x)
-            & (hi_x[:, None] > centre.real - half_x)
-            & (lo_y[:, None] < centre.imag + half_y)
-            & (hi_y[:, None] > centre.imag - half_y)
-        )
-        keep = kn <= np.where(overlap, k_limit, 0).max(1)
-        gk, gw, kn, wn = gk[keep], gw[keep], kn[keep], wn[keep]
-        ks.append(kn)
-        ws.append(wn)
-        a, b, c = gk[:, 0], gk[:, 1], gk[:, 2]
-        wa, wb, wc = gw[:, 0], gw[:, 1], gw[:, 2]
-        gk = np.concatenate(
-            [np.stack(q, 1) for q in ((a, b, kn, c), (a, c, kn, b), (b, c, kn, a))]
-        )
-        gw = np.concatenate(
-            [
-                np.stack(q, 1)
-                for q in ((wa, wb, wn, wc), (wa, wc, wn, wb), (wb, wc, wn, wa))
-            ]
-        )
-    k = np.concatenate(ks)
-    z = np.concatenate(ws) / k
-    order = np.argsort(k, kind="stable")
-    return k[order], z[order]
+    for x in (FOCUS, -FOCUS):  # the foci, where the partitions end
+        for y in (HALF_H, -HALF_H):
+            centre = (int(4 * (CENTRE[0] + x)), int(4 * (CENTRE[1] - y)))
+            cv2.circle(big, centre, 4 * WALL_WIDTH * 2, 255, -1, cv2.LINE_AA)
+    mask = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
+    return mask.astype(np.float32) / 255.0
 
 
-def screen(s, k, z, target, zoom_end):
-    """Screen x, y and full-grown radius (px) of circles (k, z) at time s."""
-    zoom, centre = view(s, target, zoom_end)
-    scale = R0 * zoom
-    x = CX + (z.real - centre.real) * scale
-    y = CY - (z.imag - centre.imag) * scale
-    return x, y, scale / np.abs(k)
-
-
-def on_screen(x, y, r):
-    return (x + r > -2) & (x - r < WIDTH + 2) & (y + r > -2) & (y - r < HEIGHT + 2)
-
-
-def label_events(k, z, target, zoom_end, step=0.01):
+def soundtrack(rooms: list, style_name: str, rng: np.random.Generator):
     """
-    (time, index) of every circle's label appearing: when its grown radius first passes
-    LABEL_R while on screen, sampled on a fixed 10 ms grid (independent of FPS), and
-    never before the circle has popped in. The outer circle (k = -1) has no label.
+    A one-shot in pelog bells.
+
+    - A gong (the style's bass, two octaves down) and a bell on the root as
+      each candle is lit, at 0 s and at the blue candle's time.
+    - Wall strikes: LISTENED rays of each candle (chosen with the audio rng)
+      sound every bounce at its exact time, (arc length) / SPEED after the
+      candle was lit. Pitch is the height of the bounce in the room (DEGREES
+      pelog steps bottom to top), the warm candle an octave above the blue
+      one; pan is x. Taps closer than MIN_GAP to the ray's previous one are
+      skipped (grazing hops in the domes), and fewer warm rays sound once the
+      blue candle is lit, to keep the density near 5 notes/s.
+    - A quiet pad on the root and fifth, joined by the third when the blue
+      candle is lit.
     """
-    first = np.full(len(k), np.inf)
-    born = appear_time(k) + 0.5 * POP
-    for s in np.arange(0.0, DURATION, step):
-        x, y, r = screen(s, k, z, target, zoom_end)
-        hit = (r >= LABEL_R) & on_screen(x, y, r) & (k > 0) & (born <= s)
-        hit &= np.isinf(first)
-        first[hit] = s
-    index = np.flatnonzero(np.isfinite(first))
-    return first[index], index
-
-
-def digit_masks():
-    """Masks of 0..9 in Computer Modern, each in an equal-width cell on one baseline."""
-    row = latex_mask(r"$0\,1\,2\,3\,4\,5\,6\,7\,8\,9$", DIGIT_SIZE)
-    ink = row.max(0) > 0.02
-    edges = np.flatnonzero(np.diff(ink.astype(int)))
-    starts, ends = edges[0::2] + 1, edges[1::2] + 1
-    cell = int(0.5 * DIGIT_SIZE) + 4
-    digits = []
-    for a, b in zip(starts, ends):
-        glyph = row[:, a:b]
-        box = np.zeros((row.shape[0], cell), np.float32)
-        x = (cell - glyph.shape[1]) // 2
-        box[:, x : x + glyph.shape[1]] = glyph
-        digits.append(box)
-    assert len(digits) == 10, len(digits)
-    return digits
-
-
-def soundtrack(k, z, target, zoom_end, style, rng):
-    """
-    The circles made audible, from the same closed forms as the picture.
-
-    - Build: one bar per distinct curvature as its circles pop in (appear_time), for
-      every k of the build; big circles low and loud, pitch rising with log k on the style's scale
-      (degree 0 for k = 2 up to TOP_DEGREE at TOP_K).
-    - Dive: one bar each time a circle's number appears (label_events), same mapping, so
-      the pitch climbs as the zoom goes deeper; panned by its screen x.
-    - Both are pulled onto a 16th-note grid at BPM, one note per slot (the biggest).
-    - A bass note under the first circles (2 and 3), a soft pad on the home chord whose
-      low-pass opens with log Z, and the home chord struck as the zoom lands.
-    One-shot: circular=False everywhere, master(loop=False).
-    """
+    style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
     track = audio.silence(DURATION)
+    kw = dict(circular=False)
+    blue_lit = CANDLES[1][1]
+    top = HALF_H + SEMI_B
 
-    def degree(kk):
-        x = np.log(kk / 2) / np.log(TOP_K / 2)
-        return int(round(TOP_DEGREE * np.clip(x, 0, 1)))
+    def low(hz):
+        while hz < 65:
+            hz *= 2
+        return hz
 
-    events = []  # (time, k, x position -1..1)
-    for kk in np.unique(k[(k > 0) & (k <= R0 / MIN_RADIUS)]):
-        i = np.flatnonzero(k == kk)[0]
-        events.append((float(appear_time(kk)), kk, float(z[i].real)))
-    times, index = label_events(k, z, target, zoom_end)
-    for when, i in zip(times, index):
-        if when >= ZOOM[0] and when <= ZOOM[1] + 0.2:
-            x, _, _ = screen(when, k[i : i + 1], z[i : i + 1], target, zoom_end)
-            events.append((float(when), k[i], float((x[0] - CX) / CX)))
-    slots = {}
-    snapped = quantize([e[0] for e in events], DURATION, BPM, subdivision=4)
-    for (when, kk, x), q in zip(events, snapped):
-        key = int(round(q / (60 / BPM / 4)))
-        if key not in slots or kk < slots[key][1]:
-            slots[key] = (max(q, 0.0), kk, x)
-    for when, kk, x in slots.values():
-        size = 1 - np.log(kk / 2) / np.log(TOP_K / 2)
-        note = style.voice(scale.hz(degree(kk)), 0.25 + 0.55 * np.clip(size, 0, 1))
-        audio.add(track, audio.pan(note, 0.6 * np.clip(x, -1, 1)), when, circular=False)
-    for kk in (2.0, 3.0):
-        bass = style.bass(scale.hz(0 if kk == 2 else 4, octave=-1), 0.6)
-        audio.add(track, audio.pan(bass, 0.0), float(appear_time(kk)), circular=False)
+    for lit in (CANDLES[0][1], blue_lit):
+        audio.add(track, style.bass(low(scale.hz(0, -2)), 0.6, length=6.0), lit, **kw)
+        audio.add(track, style.voice(scale.hz(0, 0), 0.45), lit + 0.02, **kw)
 
-    # The pad: home chord the whole way, opening up as the zoom deepens.
-    chord = [float(audio.midi_to_hz(n)) for n in scale.chord(0, 3, octave=-1)]
-    pad = sum(audio.pad(f, DURATION)[: len(track)] for f in chord) * 0.22
-    sr = audio.SAMPLE_RATE
-    s = np.arange(len(pad)) / sr
-    zoom, _ = view(s, target, zoom_end)
-    opening = np.log(zoom) / np.log(zoom_end)
-    dark = audio.lowpass(pad, 500.0, circular=False)
-    bright = audio.lowpass(pad, 3500.0, circular=False)
-    swell = 0.6 + 0.4 * opening
-    pad = (dark * (1 - opening)[:, None] + bright * opening[:, None]) * swell[:, None]
-    fade_in = np.clip(s / 0.4, 0, 1)
-    track += pad * fade_in[:, None]
+    taps = 0
+    for c, (room, (before, after), octave) in enumerate(zip(rooms, LISTENED, (0, -1))):
+        lit = CANDLES[c][1]
+        head = HEAD_START if c == 0 else 0.0
+        chosen = rng.choice(room["s"].shape[0], max(before, after), replace=False)
+        for r, ray in enumerate(chosen):
+            last = -1.0
+            for s, (x, y) in zip(room["s"][ray, 1:], room["p"][ray, 1:]):
+                when = lit + (s - head) / SPEED
+                if not np.isfinite(when) or when >= DURATION - 0.3:
+                    break
+                if when < 0.05 or when - last < MIN_GAP:
+                    continue
+                if c == 0 and r >= after and when >= blue_lit:
+                    break
+                last = when
+                degree = int(round((y + top) / (2 * top) * DEGREES))
+                fade = 1 - 0.6 * float(smoothstep((when - 13.0) / 2.0))
+                velocity = fade * rng.uniform(0.26, 0.4)
+                note = style.voice(scale.hz(degree, octave), velocity)
+                audio.add(track, audio.pan(note, 0.75 * x / SEMI_A), when, **kw)
+                taps += 1
 
-    # The landing chord, and its bass.
-    land = ZOOM[1] - 0.15
-    for n in scale.chord(0, 3, octave=1):
-        audio.add(track, style.voice(float(audio.midi_to_hz(n)), 0.55), land, False)
-    audio.add(track, style.bass(scale.hz(0, octave=-1), 0.7), land, circular=False)
+    for degree, start in ((0, 0.0), (3, 0.0), (2, blue_lit)):
+        hz = low(scale.hz(degree, -1))
+        audio.add(
+            track,
+            audio.pad(hz, DURATION - start - 1.5, 0.08, 2.0, 1.5, 0.3),
+            start,
+            **kw,
+        )
+    logger.info(f"Soundtrack: {style_name}, root MIDI {scale.root}, {taps} wall taps")
     track = style.room(track, rng, circular=False)
     return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    The integral Apollonian gasket (-1, 2, 2, 3), built and then zoomed, as a one-shot.
+    Penrose's unilluminable room, lit by two candles.
 
-    Circles come from Descartes' circle theorem, (Σk)^2 = 2Σk^2: the circle filling a
-    gap between touching circles k1, k2, k3 with fourth neighbour k4 is
-    k = 2(k1 + k2 + k3) - k4, and by the complex Descartes theorem its centre satisfies
-    kz = 2(k1z1 + k2z2 + k3z3) - k4z4, so all curvatures stay integers (exact in float64).
-    `gasket` generates breadth first over gaps, keeping only circles that are ever at
-    least MIN_RADIUS px on screen along the zoom path (sampled views), ~4 x 10^4 circles.
+    The room: two half-ellipses (semi-axes SEMI_A, SEMI_B) with flat sides at
+    y = +-HALF_H, joined by vertical outer walls at x = +-SEMI_A, plus two
+    two-sided partitions at x = +-FOCUS = +-sqrt(a^2 - b^2) from one dome's
+    focus to the other's. A chord of an ellipse that crosses the major axis
+    between the foci reflects into another such chord (its caustic is a
+    confocal hyperbola); one that crosses outside them stays outside (a
+    confocal ellipse). Reflection in the flat side preserves this, so the
+    domes return light from the hall (|x| < FOCUS) to the hall and light from
+    the wings (FOCUS < |x| < SEMI_A) to the wings: a candle in the hall never
+    lights the wings and vice versa (`sample` counts forbidden samples; 0).
 
-    Time: circles pop in by curvature (appear_time, a power of log k, over BUILD) and
-    grow with an ease-out over POP; then from ZOOM[0] to ZOOM[1] the view zooms with
-    log Z = smoothstep(u) log Z_end onto a target circle drawn by settings.rng with k in
-    TARGET_K, which slides to the centre and ends TARGET_RADIUS px wide; then it rests.
-    Fill colour is cyclic in log k (period CYCLE), so every depth looks alike. Labels:
-    each circle wider than LABEL_R px shows k, composed from Computer Modern digit masks
-    (latex_mask), scaled to fit. Opening text (Descartes' theorem with the first four
-    curvatures) and the closing line are latex_mask too, built once.
+    Each candle sends RAYS rays at evenly spaced angles plus one random phase
+    from settings.rng; `trace` reflects them exactly (quadratic for the domes,
+    linear for the walls) in float64 until each has run the whole clip. Every
+    ray is then sampled every STEP px of path into a pixel index, sample-major,
+    so the light a candle has shed by path length L is a prefix of that array.
 
-    Render: per frame, a vectorised cull, cv2 anti-aliased filled discs (shift=4) for
-    circles over 1 px, a NumPy coverage splat for the dust, cv2 thread pool.
+    A frame is a pure function of t: L = HEAD_START + SPEED t for the warm
+    candle, SPEED (t - 6.5) for the blue one; each prefix is bincounted on the
+    GPU into a ray-density image, normalised by min(L, SETTLE) so the exposure
+    adapts as light spreads, then lightly blurred. The heads of the rays (the
+    last SPARK_TRAIL samples) are added as sparks. Both colours are tone-mapped
+    together as 1 - exp(-EXPOSURE * density), glowed, and the mirrors and foci
+    laid on top. Caustics of the domes show in the hall as bright envelopes.
 
-    Sound: see `soundtrack` (vibes: vibraphone). The posted
-    soundtrack is `--seed 0` with the default audio seed (= --seed 0).
+    The posted render uses --seed 0 (the default), with the gamelan soundtrack.
     """
     settings = settings or ImageProcessingSettings(1)
-    rng = settings.rng
-
-    # The zoom path: views sampled from the start of the dive to its end.
-    k0, z0 = gasket((np.ones(1), np.zeros(1, complex), np.array([R0 / MIN_RADIUS])))
-    candidates = np.flatnonzero((k0 >= TARGET_K[0]) & (k0 <= TARGET_K[1]))
-    pick = int(rng.choice(candidates))
-    target, k_target = complex(z0[pick]), float(k0[pick])
-    zoom_end = TARGET_RADIUS * k_target / R0
-    samples = np.concatenate([[0.0], np.linspace(ZOOM[0], DURATION, 240)])
-    zoom, centre = view(samples, target, zoom_end)
-    k, z = gasket((zoom, centre, R0 * zoom / MIN_RADIUS))
-    logger.info(
-        f"Gasket: {len(k)} circles, target k = {k_target:.0f}, zoom x{zoom_end:.0f}, "
-        f"largest k = {k.max():.0f}"
-    )
-
-    born = appear_time(k)
-    swatches = np.array([hex_to_bgr(c) for c in PALETTE], np.float32)
-    hue = (np.log(np.abs(k)) / np.log(CYCLE) + COLOUR_PHASE) % 1.0
-    fill = swatches[(hue * len(PALETTE)).astype(int) % len(PALETTE)]
-    light = (fill @ np.array([0.114, 0.587, 0.299], np.float32)) / 255 > 0.55
-    bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
-    ink = np.array(hex_to_bgr(INK), np.float32)
-    background = np.empty((HEIGHT, WIDTH, 3), np.uint8)
-    background[:] = bg.astype(np.uint8)
-
-    # Labels: digits composed per number (only numbers that ever show are built).
-    digits = digit_masks()
-    _, shown = label_events(k, z, target, zoom_end)
-    labels = {
-        int(kk): np.hstack([digits[int(d)] for d in str(int(kk))])
-        for kk in np.unique(k[shown])
-    }
-
-    # Text (LaTeX), built once.
-    top = [
-        latex_mask(r"$\mathrm{Label\ every\ circle\ with\ its\ curvature}$", 50),
-        latex_mask(
-            r"$k = 1/r\mathrm{{,}\ \ and\ every\ one\ is\ a\ whole\ number}$", 50
-        ),
-    ]
-    bottom = [
-        latex_mask(r"$(k_1+k_2+k_3+k_4)^2 = 2\,(k_1^2+k_2^2+k_3^2+k_4^2)$", 46),
-        latex_mask(r"$(-1+2+2+3)^2 = 2\,(1+4+4+9) = 36$", 46),
-    ]
-    ending = latex_mask(
-        rf"$\times\,{int(round(zoom_end))}\ \mathrm{{deeper{{,}}\ still\ whole\ numbers}}$",
-        50,
-    )
-    band = (1700, 1700 + ending.shape[0] + 48)
-
-    def render(frame: int) -> np.ndarray:
-        s = DURATION * frame / (FRAME_COUNT - 1)
-        x, y, r_full = screen(s, k, z, target, zoom_end)
-        grow = np.clip((s - born) / POP, 0, 1)
-        r = r_full * (1 - (1 - grow) ** 3)
-        visible = on_screen(x, y, r) & (r > 0.1)
-        image = background.copy()
-
-        # The outer circle, k = -1, as a ring (skipped once the view is inside it).
-        zoom_s, centre_s = view(s, target, zoom_end)
-        corners = np.array([-1, 1]) * CX / (R0 * zoom_s)
-        far = max(
-            abs(complex(centre_s.real + a, centre_s.imag + b))
-            for a in corners
-            for b in corners * CY / CX
+    lengths = []
+    rooms = []
+    for c, (source, lit, _) in enumerate(CANDLES):
+        head = HEAD_START if c == 0 else 0.0
+        length = float(path_length(DURATION, lit, head)) + 2 * STEP
+        phase = settings.rng.uniform(0, 2 * np.pi / RAYS)
+        angles = phase + 2 * np.pi * np.arange(RAYS) / RAYS
+        room = trace(source, angles, length)
+        room["home"] = "hall" if c == 0 else "wing"
+        rooms.append(room)
+        lengths.append(length)
+        logger.info(
+            f"Candle {c}: {RAYS} rays traced to {length:.0f} px, "
+            f"{room['s'].shape[1] - 1} bounces"
         )
-        if far > 1 - 1e-9:
-            # A dense polyline: cv2.circle facets visibly at this size.
-            radius = r_full[0]
-            n = int(np.clip(2 * np.pi * radius / 3, 256, 200000))
-            angle = np.linspace(0, 2 * np.pi, n, endpoint=False)
-            ring = np.stack(
-                [x[0] + radius * np.cos(angle), y[0] + radius * np.sin(angle)]
-            )
-            ring = np.round(ring.T * 16).astype(np.int32)
-            cv2.polylines(image, [ring], True, tuple(ink.tolist()), 3, cv2.LINE_AA, 4)
 
-        # Dust: sub-pixel circles as coverage splats.
-        dust = np.flatnonzero(visible & (r < 1.0) & (k > 0))
-        if len(dust):
-            ix = np.clip(np.round(x[dust]).astype(int), 0, WIDTH - 1)
-            iy = np.clip(np.round(y[dust]).astype(int), 0, HEIGHT - 1)
-            a = np.clip(np.pi * r[dust] ** 2 * 0.8, 0, 1)[:, None]
-            pixels = image[iy, ix].astype(np.float32)
-            image[iy, ix] = (pixels * (1 - a) + fill[dust] * a).astype(np.uint8)
+    if not settings.audio_only:
+        device = select_device()
+        to = dict(device=device, dtype=torch.float32)
+        samples = [
+            sample(room, int(length / STEP), device)
+            for room, length in zip(rooms, lengths)
+        ]
+        colours = [torch.tensor(c[2], **to) for c in CANDLES]
+        area = (4 * SEMI_A * HALF_H) + np.pi * SEMI_A * SEMI_B  # px^2
+        soft = gaussian_kernel(SOFT, device)
+        wall = torch.tensor(walls(), **to)[..., None]
+        wall_rgb = torch.tensor(WALL_COLOUR, **to)
+        background = torch.tensor(BACKGROUND, **to)
+        yy, xx = torch.meshgrid(
+            torch.arange(HEIGHT, **to), torch.arange(WIDTH, **to), indexing="ij"
+        )
+        flames = []
+        for (x, y), _, _ in CANDLES:
+            r2 = (xx - CENTRE[0] - x) ** 2 + (yy - CENTRE[1] + y) ** 2
+            flames.append(torch.exp(-r2 / (2 * FLAME_SIGMA**2))[..., None])
+        trail = torch.linspace(0.15, 1.0, SPARK_TRAIL, **to)[:, None]
+        heads = torch.ones(SPARK_TRAIL, RAYS, **to) * trail
 
-        # Discs, each shrunk a little so a thin cream line separates neighbours.
-        discs = np.flatnonzero(visible & (r >= 1.0) & (k > 0))
-        gap = np.clip(0.035 * r[discs], 0.4, 2.5)
-        for i, g in zip(discs, gap):
-            cv2.circle(
-                image,
-                (int(round(x[i] * 16)), int(round(y[i] * 16))),
-                int(round((r[i] - g) * 16)),
-                tuple(fill[i].tolist()),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
-
-        image = image.astype(np.float32)
-
-        # Numbers.
-        for i in discs:
-            if r[i] < LABEL_R or int(k[i]) not in labels:
+    def render(frame: int) -> torch.Tensor:
+        seconds = frame / (FRAME_COUNT - 1) * DURATION
+        linear = torch.zeros(HEIGHT * WIDTH, 3, **to)
+        sparks = torch.zeros(HEIGHT * WIDTH, 3, **to)
+        for c, (points, colour) in enumerate(zip(samples, colours)):
+            lit = CANDLES[c][1]
+            head = HEAD_START if c == 0 else 0.0
+            length = float(path_length(seconds, lit, head))
+            n = min(int(length / STEP) + 1, points.shape[0]) if seconds >= lit else 0
+            if n == 0:
                 continue
-            mask = labels[int(k[i])]
-            h, w = mask.shape
-            fit = min(0.55 * r[i] / h, 1.2 * r[i] / w, 1.0)
-            size = (max(1, int(w * fit)), max(1, int(h * fit)))
-            m = cv2.resize(mask, size, interpolation=cv2.INTER_AREA)
-            alpha = float(smoothstep((r[i] - LABEL_R) / LABEL_FADE))
-            colour = ink if light[i] else bg
-            blit_mask(
-                image,
-                m,
-                int(round(x[i])),
-                int(round(y[i] - m.shape[0] / 2)),
-                colour,
-                alpha=0.95 * alpha,
-                anchor="centre",
-            )
-
-        # Opening text.
-        text_in = float(smoothstep((s - 1.2) / 0.5))
-        text_out = 1 - float(
-            smoothstep((s - TEXT_OUT[0]) / (TEXT_OUT[1] - TEXT_OUT[0]))
-        )
-        if text_out > 0:
-            for mask, ty in zip(top, (190, 290)):
-                blit_mask(
-                    image, mask, int(CX), ty, ink, alpha=text_out, anchor="centre"
+            density = torch.bincount(points[:n].reshape(-1), minlength=HEIGHT * WIDTH)
+            scale = STEP * area / (RAYS * max(length, SETTLE))
+            linear += (density.to(torch.float32) * scale)[:, None] * colour
+            m = min(n, SPARK_TRAIL)
+            index = points[n - m : n].reshape(-1).long()
+            weight = heads[SPARK_TRAIL - m :].reshape(-1)
+            sparks.index_add_(0, index, weight[:, None] * colour[None, :])
+        linear = blur(linear.view(HEIGHT, WIDTH, 3), soft)
+        linear = linear + SPARK_GAIN * blur(sparks.view(HEIGHT, WIDTH, 3), soft) * 40
+        for c, flame in enumerate(flames):
+            lit = CANDLES[c][1]
+            if seconds >= lit:
+                on = float(smoothstep((seconds - lit) / 0.3))
+                flicker = 1 + 0.12 * np.sin(11.3 * seconds + 2 * c) * np.sin(
+                    3.7 * seconds
                 )
-            for mask, ty in zip(bottom, (1580, 1680)):
-                a = text_in * text_out
-                blit_mask(image, mask, int(CX), ty, ink, alpha=a, anchor="centre")
+                linear = linear + 6.0 * on * flicker * flame * colours[c]
+        glow = sum(g * wide_blur(linear, sigma, f) for sigma, f, g in GLOWS)
+        light = 1 - torch.exp(-EXPOSURE * (linear.clamp_min(0) ** GAMMA + glow))
+        image = background + (1 - background) * light
+        image = image * (1 - WALL_ALPHA * wall) + WALL_ALPHA * wall * wall_rgb
+        return image.clamp(0, 1) * 255.0
 
-        # Closing line on a cream band.
-        end = float(
-            smoothstep((s - END_TEXT_IN[0]) / (END_TEXT_IN[1] - END_TEXT_IN[0]))
-        )
-        if end > 0:
-            region = image[band[0] : band[1]]
-            region += 0.92 * end * (bg - region)
-            blit_mask(
-                image, ending, int(CX), band[0] + 24, ink, alpha=end, anchor="centre"
-            )
-        return image
-
-    render_frames(settings, render, FRAME_COUNT)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
     tag = settings.audio_tag
-    style = STYLES[tag] if tag in STYLES else STYLES[STYLE]
-    track = soundtrack(k, z, target, zoom_end, style, settings.audio_rng)
+    track = soundtrack(rooms, tag if tag in STYLES else STYLE, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

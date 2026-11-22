@@ -1,405 +1,480 @@
 """
-The Knight's Tour
+Two Smoke Rings Playing Leapfrog
 
-A chess knight visits all 64 squares of a chessboard exactly once, then jumps
-back to where it started: a closed knight's tour, a loop it can run forever.
+Two smoke rings fly up the screen, one behind the other, cut in half so you see each one as
+a pair of spinning curls. The ring behind shrinks, speeds up and shoots straight through the
+one in front. Then the new ring behind does the same. They take turns all the way up.
 
-Join every pair of squares a knight move apart and you get the knight's graph,
-the faint web behind the board. The tour is one loop through that network that
-touches every square once, a Hamiltonian cycle. Euler studied them in 1759; in
-1997 a computer counted all the closed tours: 13,267,364,410,532.
+Each ring is a vortex, a loop of spinning air, and every vortex pushes on the other. The front
+ring's spin widens the ring behind it and slows it down; the ring behind squeezes the front one
+narrow and fast. A narrow ring travels faster, so the roles swap, again and again. Helmholtz
+predicted this leapfrogging in 1858. Here each curl is a point vortex, and the faint smoke lines
+are the still air they pass through, pulled up and wound into spirals.
 
-This one is special: turn the board upside down and it looks the same, so a
-second knight half a tour behind always mirrors the first.
+Listen: a flute note sounds each time one ring passes through the other, over a soft chord
+that follows the rings up the screen.
 
-Listen: a slow chord moves every eight jumps, and a kalimba chimes when the
-knights land near the corners and edges, where squares have the fewest moves.
-
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#knightstour #graphtheory #mathart #generativeart #randomplots
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#vortexring #fluiddynamics #mathart #generativeart #randomplots
 """
 
 import gc
 
-import cv2
 import numpy as np
+import torch
 from loguru import logger
+from scipy.integrate import solve_ivp
 
 from common import audio
+from common.gpu import blur, gaussian_kernel, select_device, splat, wide_blur
 from common.image_processing import ImageProcessingSettings
-from common.music import Scale
+from common.music import STYLES, Scale
 from common.video import (
     FPS,
     HEIGHT,
     WIDTH,
     blit_mask,
     frame_count,
-    hex_to_bgr,
     latex_mask,
-    palette_lut,
     render_frames,
     smoothstep,
 )
 
-DURATION = 15.0  # seconds, one loop
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'Two smoke rings take turns flying through each other'
+HOOK_Y = 230
+HOOK_COLOUR = "#f4f0e7"
+
+DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
+TAU = 2 * np.pi
 
-# --- The tour ----------------------------------------------------------------------
-N = 8  # board size
-KNIGHT = ((1, 2), (2, 1), (-1, 2), (-2, 1), (1, -2), (2, -1), (-1, -2), (-2, -1))
-HOPS = 32  # each knight makes half the tour per loop (the other half is its mirror)
-HOP_TIME = DURATION / HOPS  # 0.469 s per jump
-MOVE = 0.6  # fraction of a hop spent in the air; the rest is a pause on the square
-SEARCH_LIMIT = 200_000  # backtracking nodes before a restart with new tie-breaks
+# The two vortex pairs (axisymmetric slice): right cores at (+x_i, z_i) with
+# circulation -GAMMA, mirrored at (-x_i, z_i) with +GAMMA, so both move up (+z).
+GAMMA = 1.0
+WIDE = 1.0  # half-width of the wider pair at the moment they are level
+NARROW = 0.42  # ... and of the narrower one (Love: leapfrog for NARROW > 0.382)
+CORE = 0.075  # Lamb-Oseen core radius that regularises the tracers' velocity
 
-# --- Layout (px) -------------------------------------------------------------------
-CELL = 112
-BOARD = N * CELL  # 896
-BOARD_X, BOARD_Y = (WIDTH - BOARD) // 2, (HEIGHT - BOARD) // 2
-PAD = 40  # the drawn region extends this far past the board (glow)
-TITLE_Y, SUBTITLE_Y = 300, 392
-FOOT_Y, FOOT2_Y = 1500, 1572
+# Screen: world units are the wide pair's half-width.
+UNIT_PX = 300.0
+Z_FIRST = 1.35  # centre of the vortices above the bottom edge at t = 0 (units)
+EXIT_TIME = 14.6  # s: the vortices' centre is EXIT_MARGIN above the top edge
+EXIT_MARGIN = 0.5
+PHASE = -0.32  # sim time at t = 0, in passes (0 = level): the first pass ~0.7 s in
+WARMUP = 0.9  # sim time the cores' dye spins before t = 0
+EASE_IN = 0.18  # s: the clock starts gently
+FADE_OUT = 0.35  # s: fade to the background at the end
+DT_MAX = 0.01  # largest RK4 step for the dye (sim time)
 
-# --- Look --------------------------------------------------------------------------
-BG_TOP, BG_BOTTOM = "#0b0d1c", "#04050a"
-SQUARES = ("#0d1022", "#12162c")  # dark and light squares, barely apart
-WEB = "#5260b0"  # the knight's graph, drawn faint
-WEB_ALPHA = 0.3
-TRAIL = ["#1a1d4a", "#2e4f96", "#5d93cf", "#a9d2f0", "#f4ecf6"]  # old -> fresh
-HEAD = "#ff8a5e"  # the knight, and the edge it is drawing
-TEXT, TEXT_DIM = "#ecebf4", "#9097bd"
-TAU = 7.0  # hops for a trail to fade by e
-FLOOR = 0.12  # brightness of the oldest trail
-CELL_GLOW = 1.4  # hops for a landed square to fade by e
-KNIGHT_R = 18.0  # px
-GLOW_SCALE, GLOW_SIGMA, GLOW = 4, 4.0, 1.1
+# Dye.
+CORE_DYE_RADIUS = 0.30
+CORE_DYE_OFFSET = (0.07, 0.09)  # disc centre: inwards and below the core
+CORE_DYE_BAND = 0.075  # spacing of its concentric bands
+CORE_DYE = 70_000  # particles per core
+LINE_SPACING = 0.24  # units between smoke lines
+LINES_BELOW = 10  # lines seeded under the bottom edge
+LINE_PARTICLES = 16_000  # per half line
+LINE_HALF_WIDTH = 3.2  # units: well past the frame's edges (the air is drawn in)
 
-# --- Sound -------------------------------------------------------------------------
-ROOTS = range(50, 56)  # MIDI root of the chords (D3 .. G3)
-PROGRESSION = (0, 3, 5, 4)  # I IV vi V, one chord per 8 hops
-CHIME_DEGREE = 4  # landings on squares with at most this many knight moves chime
+BACKGROUND = ("#04050a", "#0a0d18")  # bottom, top
+RING_COLOURS = ("#ff7b3a", "#3fd7c6")  # the pair that starts wide, the narrow one
+LINE_COLOUR = "#c9d3e6"
+GAINS = (0.10, 0.10, 0.22)  # optical gain per particle density: ring A, ring B, lines
+BLOOM = 0.55
 
+# Text
+TEXT_COLOUR = "#e8e4da"
+TITLE = r"$\mathrm{two\ smoke\ rings{,}\ cut\ in\ half}$"
+SUBTITLE = r"$\mathrm{watch\ them\ take\ turns}$"
+TEXT_SIZES = (66, 46)
+TEXT_Y = (140, 236)
+TEXT_TIMES = (0.15, 3.6, 0.5)  # fade in by, start fading out at, fade length
 
-def square_xy(square):
-    """Pixel centre of a square (0..63, row-major from the top-left)."""
-    r, c = divmod(square, N)
-    return BOARD_X + (c + 0.5) * CELL, BOARD_Y + (r + 0.5) * CELL
-
-
-def neighbours(square):
-    r, c = divmod(square, N)
-    return [
-        (r + dr) * N + c + dc
-        for dr, dc in KNIGHT
-        if 0 <= r + dr < N and 0 <= c + dc < N
-    ]
+# Sound
+STYLE = (
+    "bamboo_flute"  # common.music.STYLES; an --audio-only tag naming one overrides it
+)
+PASS_DEGREES = (0, 2, 4, 3, 5, 4, 7, 6, 9)  # flute melody, one degree per pass
+MID_DEGREES = (-1, 1, 2, 1, 3, 2, 4)  # softer answers half-way between passes
+CHORDS = (0, 5, 3, 4)  # pad progression, scale degrees
 
 
-def symmetric_tour(rng):
+def _rgb(colour):
+    return np.array([int(colour[i : i + 2], 16) / 255.0 for i in (1, 3, 5)])
+
+
+# ------------------------------------------------------------------ the vortices
+def _rhs(_, state):
+    """Point-vortex dynamics of the symmetric pair of pairs (4 dof)."""
+    x = state[0::2]
+    z = state[1::2]
+    xs = np.concatenate((x, -x))
+    zs = np.concatenate((z, z))
+    gs = np.array((-GAMMA, -GAMMA, GAMMA, GAMMA))
+    out = np.zeros(4)
+    for i in range(2):
+        dx, dz = x[i] - xs, z[i] - zs
+        r2 = dx * dx + dz * dz
+        r2[i] = np.inf
+        out[2 * i] = np.sum(-gs * dz / r2) / TAU
+        out[2 * i + 1] = np.sum(gs * dx / r2) / TAU
+    return out
+
+
+class Orbit:
     """
-    A closed knight's tour that maps onto itself under a half turn of the board
-    (square s -> 63 - s). Backtracking over the first half, p0 .. p31: each square
-    claims its mirror image too, and the half closes if p31 is a knight move from
-    63 - p0. The full tour is p0 .. p31, 63 - p0 .. 63 - p31. Moves are tried in
-    Warnsdorff order (fewest onward moves first), ties broken by random priorities.
+    The leapfrogging orbit, solved once (it is integrable: the symmetric
+    four-vortex problem has two degrees of freedom), dense in sim time. Sim
+    time 0 is a moment the pairs are level, the narrow one passing through.
     """
-    adjacency = [neighbours(s) for s in range(N * N)]
-    for attempt in range(100):
-        priority = rng.random(N * N)
-        start = int(rng.integers(N * N))
-        used = np.zeros(N * N, bool)
-        path = [start]
-        used[start] = used[63 - start] = True
-        nodes = 0
 
-        def options(square):
-            free = [q for q in adjacency[square] if not used[q]]
-            onward = [sum(not used[x] for x in adjacency[q]) for q in free]
-            return [q for _, _, q in sorted(zip(onward, priority[free], free))]
+    def __init__(self, s_min, s_max):
+        y0 = np.array((WIDE, 0.0, NARROW, 0.0))
+        kw = dict(rtol=1e-10, atol=1e-12, dense_output=True)
+        self.back = solve_ivp(_rhs, (0, s_min), y0, **kw)
+        self.fwd = solve_ivp(_rhs, (0, s_max), y0, **kw)
+        # Passes (pairs level) and the mean speed over two of them.
+        s = np.linspace(0, s_max, 200_001)
+        y = self.fwd.sol(s)
+        gap = y[3] - y[1]
+        k = np.nonzero(np.sign(gap[1:]) != np.sign(gap[:-1]))[0]
+        self.passes = s[k] - gap[k] * (s[k + 1] - s[k]) / (gap[k + 1] - gap[k])
+        self.period = float(np.mean(np.diff(self.passes)))  # sim time per pass
+        z_mid = 0.5 * (y[1] + y[3])
+        self.speed = float(np.interp(2 * self.period, s, z_mid) / (2 * self.period))
 
-        def extend():
-            nonlocal nodes
-            nodes += 1
-            if nodes > SEARCH_LIMIT:
-                return False
-            if len(path) == HOPS:
-                return (63 - path[0]) in adjacency[path[-1]]
-            for q in options(path[-1]):
-                path.append(q)
-                used[q] = used[63 - q] = True
-                if extend():
-                    return True
-                path.pop()
-                used[q] = used[63 - q] = False
-            return False
-
-        if extend():
-            logger.info(f"Symmetric tour found on attempt {attempt + 1}, {nodes} nodes")
-            return path + [63 - s for s in path]
-    raise RuntimeError("No symmetric tour found")
+    def __call__(self, s):
+        """(x1, z1, x2, z2) at sim time(s) s."""
+        s = np.asarray(s, float)
+        out = np.where(
+            s >= 0, self.fwd.sol(np.maximum(s, 0)), self.back.sol(np.minimum(s, 0))
+        )
+        return out
 
 
-def hop_state(s):
+def clock_shape(seconds):
+    """Video seconds -> eased seconds: starts at zero speed, full speed by ~3 EASE_IN."""
+    seconds = np.asarray(seconds, float)
+    return seconds - EASE_IN * (1 - np.exp(-seconds / EASE_IN))
+
+
+class Timeline:
+    """Video time <-> sim time and the lab-frame offset of the vortices."""
+
+    def __init__(self):
+        probe = Orbit(-10, 400)
+        self.period = probe.period
+        s0 = PHASE * probe.period
+        height = HEIGHT / UNIT_PX
+        travel = (height + EXIT_MARGIN) - Z_FIRST
+        # Mean-z of the vortices at s0 is ~ speed * s0; solve for the rate.
+        z_mid = lambda s: 0.5 * (probe(s)[1] + probe(s)[3])
+        target = z_mid(s0) + travel
+        lo, hi = s0, s0 + 400
+        for _ in range(80):
+            mid = 0.5 * (lo + hi)
+            lo, hi = (mid, hi) if z_mid(mid) < target else (lo, mid)
+        self.s0 = s0
+        self.rate = (lo - s0) / float(clock_shape(EXIT_TIME))
+        self.s_end = self.sim(DURATION)
+        self.orbit = Orbit(s0 - WARMUP - 1, self.s_end + 1)
+        self.z_shift = Z_FIRST - z_mid(s0)  # lab z = orbit z + z_shift
+
+    def sim(self, seconds):
+        return self.s0 + self.rate * clock_shape(seconds)
+
+    def video(self, s):
+        """Inverse of sim (by bisection, vectorised)."""
+        s = np.asarray(s, float)
+        lo, hi = np.zeros_like(s), np.full_like(s, DURATION * 2)
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            below = self.sim(mid) < s
+            lo, hi = np.where(below, mid, lo), np.where(below, hi, mid)
+        return 0.5 * (lo + hi)
+
+    def vortices(self, s):
+        """(4, 3) array of lab (x, z, circulation) for sim time s."""
+        x1, z1, x2, z2 = self.orbit(s)
+        z1, z2 = z1 + self.z_shift, z2 + self.z_shift
+        return np.array(
+            (
+                (x1, z1, -GAMMA),
+                (x2, z2, -GAMMA),
+                (-x1, z1, GAMMA),
+                (-x2, z2, GAMMA),
+            )
+        )
+
+
+# ----------------------------------------------------------------- the dye
+class Dye:
+    """Passive tracers advected (RK4, fixed max step) by the regularised field."""
+
+    def __init__(self, timeline, rng, device):
+        self.tl = timeline
+        self.device = device
+        f = dict(device=device, dtype=torch.float32)
+        s_seed = timeline.s0 - WARMUP
+        vort = timeline.vortices(s_seed)
+        # The flow is mirror-symmetric about the axis x = 0, so only the right
+        # half (x > 0) is advected; the renderer draws it twice.
+        # Core dye: an off-centre disc of concentric bands beside each core,
+        # which the core's differential spin winds into a spiral of arms.
+        groups, xs, zs = [], [], []
+        for j in range(2):  # the right-hand cores: wide pair, narrow pair
+            cx = vort[j, 0] - CORE_DYE_OFFSET[0]
+            cz = vort[j, 1] - CORE_DYE_OFFSET[1]
+            r = CORE_DYE_RADIUS * np.sqrt(rng.random(4 * CORE_DYE))
+            keep = rng.random(r.size) < 0.5 + 0.5 * np.cos(TAU * r / CORE_DYE_BAND)
+            r = r[keep][:CORE_DYE]
+            a = rng.uniform(0, TAU, r.size)
+            xs.append(np.abs(cx + r * np.cos(a)))
+            zs.append(cz + r * np.sin(a))
+            groups.append(np.full(r.size, j))
+        # Smoke lines: the still air, from below the frame (it is drawn up
+        # into the wake) to above its top.
+        top = HEIGHT / UNIT_PX + 0.6
+        levels = LINE_SPACING * (0.5 + np.arange(int(top / LINE_SPACING)))
+        below = levels[0] - LINE_SPACING * np.arange(LINES_BELOW, 0, -1)
+        levels = np.concatenate((below, levels))
+        for level in levels:
+            x = (np.arange(LINE_PARTICLES) + 0.5) * LINE_HALF_WIDTH / LINE_PARTICLES
+            xs.append(x)
+            zs.append(np.full(LINE_PARTICLES, level) + rng.normal(0, 0.002, x.size))
+            groups.append(np.full(LINE_PARTICLES, 2))
+        self.x = torch.tensor(np.concatenate(xs), **f)
+        self.z = torch.tensor(np.concatenate(zs), **f)
+        self.group = torch.tensor(np.concatenate(groups), device=device)
+        self.s = s_seed
+        logger.info(
+            f"Dye: {self.x.numel():,} tracers, {len(levels)} smoke lines, "
+            f"pass every {timeline.period / timeline.rate:.2f} s"
+        )
+
+    @staticmethod
+    def velocity(x, z, vort):
+        """Regularised Biot-Savart velocity of the 4 vortices (vort: (4, 3) tensor)."""
+        dx = x[:, None] - vort[:, 0]
+        dz = z[:, None] - vort[:, 1]
+        r2 = (dx * dx + dz * dz).clamp_min(1e-12)
+        f = (-torch.expm1(-r2 / CORE**2)) / (TAU * r2) * vort[:, 2]
+        return -(dz * f).sum(1), (dx * f).sum(1)
+
+    def advance(self, s_target):
+        """Step the tracers from self.s to s_target."""
+        span = s_target - self.s
+        if span <= 0:
+            return
+        n = int(np.ceil(span / DT_MAX))
+        h = span / n
+        times = self.s + h * np.arange(2 * n + 1) / 2
+        vorts = torch.tensor(
+            np.stack([self.tl.vortices(s) for s in times]),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        x, z = self.x, self.z
+        for k in range(n):
+            v0, vh, v1 = vorts[2 * k], vorts[2 * k + 1], vorts[2 * k + 2]
+            k1 = self.velocity(x, z, v0)
+            k2 = self.velocity(x + 0.5 * h * k1[0], z + 0.5 * h * k1[1], vh)
+            k3 = self.velocity(x + 0.5 * h * k2[0], z + 0.5 * h * k2[1], vh)
+            k4 = self.velocity(x + h * k3[0], z + h * k3[1], v1)
+            x = x + h / 6 * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0])
+            z = z + h / 6 * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1])
+        self.x, self.z, self.s = x, z, s_target
+
+
+# ----------------------------------------------------------------- the picture
+class Renderer:
+    def __init__(self, timeline, rng, device):
+        self.tl = timeline
+        self.device = device
+        f = dict(device=device, dtype=torch.float32)
+        self.dye = Dye(timeline, rng, device)
+        self.canvas = torch.zeros(HEIGHT, WIDTH, 3, **f)
+        self.kernel = gaussian_kernel(1.1, device)
+        rows = torch.linspace(1, 0, HEIGHT, **f)[:, None, None]
+        bottom, top = (torch.tensor(_rgb(c), **f) for c in BACKGROUND)
+        self.background = (bottom + (top - bottom) * rows).expand(HEIGHT, WIDTH, 3)
+        self.colours = [
+            torch.tensor(_rgb(c), **f) for c in RING_COLOURS + (LINE_COLOUR,)
+        ]
+        self.gains = GAINS
+        unit = torch.eye(3, **f)
+        self.weights = unit[self.dye.group]  # (N, 3): one density channel per group
+        self.text = [
+            latex_mask(tex, size) for tex, size in zip((TITLE, SUBTITLE), TEXT_SIZES)
+        ]
+        self.text_colour = _rgb(TEXT_COLOUR)[::-1].astype(np.float32)  # BGR
+
+    def frame(self, seconds):
+        s = float(self.tl.sim(seconds))
+        self.dye.advance(s)
+        dx = self.dye.x * UNIT_PX
+        py = HEIGHT - self.dye.z * UNIT_PX
+        self.canvas.zero_()
+        splat(self.canvas, WIDTH / 2 + dx, py, self.weights)
+        splat(self.canvas, WIDTH / 2 - dx, py, self.weights)  # the mirror half
+        density = blur(self.canvas, self.kernel)
+        image = self.background.clone()
+        for c in range(3):
+            ink = -torch.expm1(-self.gains[c] * density[..., c : c + 1])
+            image = image + (self.colours[c] - image) * ink * (0.95 if c < 2 else 0.75)
+        image = image + BLOOM * wide_blur(image - self.background, 14.0, 4)
+        fade = smoothstep((DURATION - seconds) / FADE_OUT)
+        image = self.background + (image - self.background) * float(fade)
+        image = image.flip(-1).clamp(0, 1) * 255.0  # BGR
+        alpha = self.text_alpha(seconds)
+        if alpha > 0:
+            image = image.cpu().numpy()
+            for mask, y in zip(self.text, TEXT_Y):
+                blit_mask(
+                    image, mask, WIDTH // 2, y, self.text_colour * 255, alpha, "centre"
+                )
+        return image
+
+    @staticmethod
+    def text_alpha(seconds):
+        fade_in, out_at, length = TEXT_TIMES
+        return float(
+            smoothstep(seconds / fade_in)
+            * smoothstep((out_at + length - seconds) / length)
+        )
+
+
+# ------------------------------------------------------------------- the sound
+def soundtrack(timeline, style_name, rng):
     """
-    Knight A's place at s hops into the loop: the hop index m and the eased
-    fraction u of that jump travelled (0 on take-off, 1 once landed).
+    Bamboo flute over a pad. Every pass seen on screen (the two pairs level,
+    found on the orbit) sounds a held flute note, climbing PASS_DEGREES; the
+    pass where the orange ring goes through is panned a little left, the teal
+    one right. Half a pass earlier (the pairs farthest apart, the one behind
+    starting to narrow) a softer, lower MID_DEGREES note answers. A soft pluck
+    bass (high-passed at 70 Hz) on root and fifth marks each pass. Under it, a pad
+    walks CHORDS (one chord per two passes), its low-pass opening as the rings
+    climb the screen and closing as they leave. The last pass rings out into
+    the rest. One-shot: nothing wraps.
     """
-    m = int(np.floor(s)) % (2 * HOPS)
-    u = float(smoothstep((s - np.floor(s)) / MOVE))
-    return m, u
+    style = STYLES[style_name]
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    track = audio.silence(DURATION)
+    passes = timeline.orbit.passes
+    passes = passes[passes > timeline.s0]
+    # Only the passes seen on screen: the vortices' centre below the top edge.
+    z_mid = 0.5 * (timeline.orbit(passes)[1] + timeline.orbit(passes)[3])
+    passes = passes[z_mid + timeline.z_shift < HEIGHT / UNIT_PX - 0.1]
+    times = timeline.video(passes)
+    for i, when in enumerate(times):
+        s = timeline.sim(when)
+        x1, _, x2, _ = timeline.orbit(s)
+        through = 0 if x1 < x2 else 1  # the narrower pair is the one passing through
+        degree = PASS_DEGREES[i % len(PASS_DEGREES)]
+        last = i == len(times) - 1
+        length = 2.6 if last else 1.5
+        held = dict(length=length) if style.voice is audio.flute else {}
+        note = style.voice(scale.hz(degree), 0.5 + 0.04 * i, **held)
+        audio.add(
+            track, audio.pan(note, -0.3 if through == 0 else 0.3), when, circular=False
+        )
+        bass = style.bass(scale.hz(0 if i % 2 == 0 else 4, octave=-2), 0.3)
+        bass = audio.highpass(audio.pan(bass, 0.0), 70.0, circular=False)
+        audio.add(track, bass, when, circular=False)
+    # Half-way between passes the pairs are farthest apart and the one behind
+    # starts to narrow: a softer, lower note answers from the other side.
+    halves = timeline.video(passes - 0.5 * timeline.period)
+    for i, when in enumerate(halves):
+        if when < 0.5:  # before the video: open on it instead
+            when = 0.05 if when > -1.0 else None
+        if when is None:
+            continue
+        x1, _, x2, _ = timeline.orbit(timeline.sim(when))
+        behind = 0 if x1 < x2 else 1  # narrower = about to pass
+        held = dict(length=1.1) if style.voice is audio.flute else {}
+        note = style.voice(scale.hz(MID_DEGREES[i % len(MID_DEGREES)]), 0.3, **held)
+        audio.add(
+            track, audio.pan(note, -0.45 if behind == 0 else 0.45), when, circular=False
+        )
+
+    # Pad: CHORDS, one per two passes, from the start to the end.
+    bounds = np.concatenate(([0.0], times[1::2], [DURATION]))
+    pad = audio.silence(DURATION)
+    for i in range(len(bounds) - 1):
+        start, stop = bounds[i], bounds[i + 1]
+        for note in scale.chord(CHORDS[i % len(CHORDS)], 3, -1):
+            hz = float(audio.midi_to_hz(note))
+            audio.add(
+                pad,
+                audio.pad(hz, stop - start + 0.8, 0.22, 0.6 if i else 0.2, 1.6, 0.35),
+                start - 0.3 if i else 0.0,
+                circular=False,
+            )
+    # Brightness follows the rings up the screen.
+    t = np.arange(len(pad)) / audio.SAMPLE_RATE
+    height = np.interp(t, (0, EXIT_TIME, DURATION), (0, 1, 0.3))
+    dark = audio.lowpass(pad, 800.0, circular=False)
+    bright = audio.lowpass(pad, 2500.0, circular=False)
+    track += dark * (1 - height[:, None]) + bright * height[:, None]
+    logger.info(f"Soundtrack: {len(times)} passes at {np.round(times, 2).tolist()} s")
+    track = style.room(track, rng, circular=False)
+    audio.fade(track, 0.0, 1.0)  # with the picture's fade
+    return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    A closed knight's tour with half-turn symmetry, travelled forever by two knights
-    half a tour apart. A seamless 15 s loop.
+    Leapfrogging vortex rings, as a one-shot, in an axisymmetric slice: each
+    ring is a pair of point vortices (+x_i, z_i, -Γ) and (-x_i, z_i, +Γ), the
+    two rings coaxial, so the four-vortex problem keeps its mirror symmetry and
+    reduces to two degrees of freedom, which is integrable: the motion is
+    periodic in the frame moving with the pair. From level with half-widths
+    WIDE = 1 and NARROW = 0.42 (Love 1894: leapfrogging for a ratio above
+    (3 - √5)/2 ≈ 0.382) the narrow pair shoots through, widens and slows, and
+    the roles swap. The orbit is solved once with solve_ivp (rtol 1e-10,
+    dense output); sim time s(t) = s0 + rate · (t − E(1 − e^(−t/E))) eases in
+    and is scaled so the vortices' centre climbs from Z_FIRST above the bottom
+    edge to EXIT_MARGIN above the top at EXIT_TIME, about six passes.
 
-    The tour: a Hamiltonian cycle on the 8x8 knight's graph (168 edges, drawn faint)
-    found by backtracking with Warnsdorff ordering, constrained so that the tour is
-    invariant under the half turn s -> 63 - s (see symmetric_tour; tie-breaks and the
-    start square come from settings.rng, so every seed gives a different tour). The
-    second half of the tour is the mirror of the first, so knight B, 32 hops behind
-    knight A, is always A's mirror image.
+    Dye: 764 k passive tracers on the GPU in the right half only (the flow is
+    mirror-symmetric; each frame splats them twice, at ±x): banded off-centre
+    discs of dye beside each core (wound into spirals during WARMUP sim time
+    before t = 0) and horizontal smoke lines LINE_SPACING apart, from
+    LINES_BELOW lines under the frame to above its top, out to
+    LINE_HALF_WIDTH (the air is drawn in), advected with RK4 (step ≤ DT_MAX in sim time, the
+    same for every RP_FPS) by the Biot-Savart field of the four vortices,
+    regularised as Lamb-Oseen cores of radius CORE: u = Γ/(2π) ẑ×r (1 −
+    e^(−r²/δ²))/r². The vortices themselves move as exact point vortices.
+    This is the one sequential part (constant cost per step, ~1 ms); frames
+    are rendered in order: bilinear splats into one density channel per dye,
+    a small blur, Beer-like 1 − e^(−g·ρ) inks over a dark gradient, a
+    quarter-size bloom, a fade over the last FADE_OUT s. The caption lines are
+    LaTeX masks (latex_mask) blitted for the first ~4 s.
 
-    Time: t = frame / FRAME_COUNT in [0, 1), s = 32 t hops. Knight A is on hop
-    m = floor(s) from square p_m to p_{m+1}, with smoothstep easing over the first 60%
-    of each 0.469 s hop and a pause on the square after; B is on hop m + 32. After one
-    loop A stands where B started and vice versa, so the frame repeats exactly. Each
-    tour edge k has age (s - k - 0.6) mod 32 hops since a knight last drew it;
-    brightness FLOOR + (1 - FLOOR) exp(-age / 7) through an indigo-to-ice LUT. The edge
-    in flight is drawn coral from p_m to the knight. Landed squares glow and fade with
-    the same age. Knights are coral discs that swell mid-jump.
-
-    Render: cv2 lines (LINE_AA, 4-bit subpixel) on a float32 crop of the board, plus a
-    glow (1/4-resolution Gaussian blur) of the light layer, over a precomputed
-    background (gradient, board, faint knight's graph, LaTeX text). Frames are pure
-    functions of t on the render_frames thread pool.
-
-    Sound (posted: --seed 0, no --audio-only tag, i.e. the "choir" variant of
-    ambient(), audio seed = seed, root F3): an ambient loop-periodic bed of pad and
-    "u" choir chords, I IV vi V in major, one chord per eight hops, with a kalimba
-    chime whenever the knights land on squares with at most four knight moves
-    (corner and edge regions): two tines for the pair of mirrored landings (pitch
-    by height on the board, pan by x), an octave doubled at the corners. Long
-    reverb and a hop-synced echo; circular throughout, master(loop=True).
+    Sound (secondary, from the same orbit): bamboo flute notes at every pass
+    over a pad; see `soundtrack`. The posted soundtrack is `--seed 0` (audio
+    seed 0, STYLE "bamboo_flute"). The seed only jitters the dye and picks the
+    musical root.
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
+    timeline = Timeline()
+    device = select_device()
+    with torch.no_grad():
+        renderer = Renderer(timeline, rng, device)
+        if not settings.audio_only:
+            renderer.dye.advance(timeline.s0)  # spin up the cores' dye
 
-    tour = symmetric_tour(rng)
-    points = np.array([square_xy(s) for s in tour])  # (64, 2) px, frame coords
-    degree = np.array([len(neighbours(s)) for s in range(N * N)])
+        def render(frame):
+            return renderer.frame(frame / (FRAME_COUNT - 1) * DURATION)
 
-    # --- Static background ------------------------------------------------------
-    top, bottom = np.array(hex_to_bgr(BG_TOP)), np.array(hex_to_bgr(BG_BOTTOM))
-    ramp = np.linspace(0, 1, HEIGHT, dtype=np.float32)[:, None, None]
-    background = np.broadcast_to(
-        (1 - ramp) * top + ramp * bottom, (HEIGHT, WIDTH, 3)
-    ).copy()
-    for r in range(N):
-        for c in range(N):
-            y0, x0 = BOARD_Y + r * CELL, BOARD_X + c * CELL
-            background[y0 : y0 + CELL, x0 : x0 + CELL] = hex_to_bgr(
-                SQUARES[(r + c) % 2]
-            )
-    web = np.zeros((HEIGHT, WIDTH), np.uint8)
-    for s in range(N * N):
-        for q in neighbours(s):
-            if q > s:
-                a, b = ((np.array(square_xy(x)) * 16).astype(int) for x in (s, q))
-                cv2.line(web, tuple(a), tuple(b), 255, 1, cv2.LINE_AA, shift=4)
-    alpha = WEB_ALPHA * web.astype(np.float32)[..., None] / 255
-    background += alpha * (np.array(hex_to_bgr(WEB), np.float32) - background)
-
-    for tex, size, y, colour in (
-        (r"$\mathrm{Every\ square\ once{,}\ then\ home}$", 64, TITLE_Y, TEXT),
-        (
-            r"$\mathrm{a\ closed\ tour\ of\ the\ knight\ graph}$",
-            42,
-            SUBTITLE_Y,
-            TEXT_DIM,
-        ),
-        (r"$13{,}267{,}364{,}410{,}532\ \mathrm{such\ tours}$", 44, FOOT_Y, TEXT),
-        (
-            r"$\mathrm{this\ one\ looks\ the\ same\ upside\ down}$",
-            40,
-            FOOT2_Y,
-            TEXT_DIM,
-        ),
-    ):
-        mask = latex_mask(tex, size)
-        blit_mask(background, mask, WIDTH // 2, y, hex_to_bgr(colour), anchor="centre")
-    background_u8 = np.clip(background, 0, 255).astype(np.uint8)
-
-    # The drawn region: the board plus a margin, in its own coordinates.
-    cx0, cy0 = BOARD_X - PAD, BOARD_Y - PAD
-    side = BOARD + 2 * PAD
-    crop = background[cy0 : cy0 + side, cx0 : cx0 + side].copy()
-    local = (points - [cx0, cy0]) * 16  # 4-bit subpixel coordinates
-    lut = palette_lut(TRAIL, 256)[:, ::-1] * 255  # BGR
-    head = np.array(hex_to_bgr(HEAD), np.float32)
-    head_c = tuple(float(v) for v in head)
-    cell_xy = [
-        (int(points[j, 0]) - cx0 - CELL // 2, int(points[j, 1]) - cy0 - CELL // 2)
-        for j in range(2 * HOPS)
-    ]
-
-    def line(layer, a, b, colour, thickness):
-        cv2.line(
-            layer,
-            (int(a[0]), int(a[1])),
-            (int(b[0]), int(b[1])),
-            tuple(float(v) for v in colour),
-            thickness,
-            cv2.LINE_AA,
-            shift=4,
-        )
-
-    def render(frame):
-        t = frame / FRAME_COUNT
-        s = HOPS * t
-        m, u = hop_state(s)
-        light = np.zeros((side, side, 3), np.float32)
-
-        # Squares glow as a knight lands on them (square k + 1 at the end of hop k).
-        age = (s - np.arange(2 * HOPS) - MOVE) % HOPS
-        for k in np.flatnonzero(age < 6 * CELL_GLOW):
-            x, y = cell_xy[(k + 1) % (2 * HOPS)]
-            glow = 0.12 * np.exp(-age[k] / CELL_GLOW) * min(1.0, age[k] / 0.12)
-            light[y + 3 : y + CELL - 3, x + 3 : x + CELL - 3] += glow * lut[200]
-
-        # Trail edges, oldest first so fresh ones draw on top.
-        strength = FLOOR + (1 - FLOOR) * np.exp(-age / TAU)
-        for k in np.argsort(-age):
-            colour = lut[int(255 * strength[k])] * (0.25 + 0.75 * strength[k])
-            line(light, local[k], local[(k + 1) % (2 * HOPS)], colour, 3)
-
-        # The two knights and the edge each is drawing right now.
-        lift = np.sin(np.pi * u)
-        # During the pause on the square the coral edge cools into the colour it
-        # has as a finished trail edge at the start of the next hop: no pop.
-        settle = float(smoothstep((s - np.floor(s) - MOVE) / (1 - MOVE)))
-        done = FLOOR + (1 - FLOOR) * np.exp(-(1 - MOVE) / TAU)
-        done = lut[int(255 * done)] * (0.25 + 0.75 * done)
-        edge = head + settle * (done - head)
-        for k in (m, (m + HOPS) % (2 * HOPS)):
-            a, b = local[k], local[(k + 1) % (2 * HOPS)]
-            pos = a + u * (b - a)
-            if u > 0:
-                line(light, a, pos, edge, 3)
-            radius = KNIGHT_R * (1 + 0.45 * lift)
-            centre = (int(pos[0]), int(pos[1]))
-            cv2.circle(light, centre, int(16 * radius), head_c, -1, cv2.LINE_AA, 4)
-            cv2.circle(
-                light,
-                centre,
-                int(16 * radius * 0.4),
-                (235.0, 240.0, 255.0),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
-
-        small = cv2.resize(
-            light,
-            (side // GLOW_SCALE, side // GLOW_SCALE),
-            interpolation=cv2.INTER_AREA,
-        )
-        small = cv2.GaussianBlur(small, (0, 0), GLOW_SIGMA)
-        glow = cv2.resize(small, (side, side), interpolation=cv2.INTER_LINEAR)
-        region = crop + light + GLOW * glow
-        image = background_u8.copy()
-        image[cy0 : cy0 + side, cx0 : cx0 + side] = np.clip(region, 0, 255)
-        return image
-
-    render_frames(settings, render, FRAME_COUNT)
-    track = ambient(tour, degree, settings.audio_tag, settings.audio_rng)
+        render_frames(settings, render, FRAME_COUNT, parallel=False, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
+    style_name = settings.audio_tag if settings.audio_tag in STYLES else STYLE
+    track = soundtrack(timeline, style_name, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
+    del renderer
     gc.collect()
-
-
-def ambient(tour, degree, variant, rng):
-    """
-    The posted soundtrack: a sustained bed with sparse chimes, all loop-periodic.
-
-    Bed: I IV vi V in major, one chord per eight hops (3.75 s), as soft pads (and a
-    quiet "u" choir; the "strings" variant swaps the choir for strings and chimes
-    only on squares with at most three moves). Chimes:
-    every hop both knights land at once on mirrored squares p and 63 - p, which have
-    the same number of knight moves. If that number is at most CHIME_DEGREE (corner
-    and edge regions), two kalimba tines sound, one per knight: pitch from the
-    square's height on the board within the current chord's tones, pan from its x.
-    Corners (2 moves) ring loudest with an octave above, squares with 4 moves
-    softest. A hop-synced echo and a long room; circular throughout,
-    master(loop=True).
-    """
-    root = int(rng.choice(ROOTS))
-    scale = Scale(root, "major")
-    track = audio.silence(DURATION)
-    bar = 8 * HOP_TIME
-    bed = audio.silence(DURATION)
-    for i, chord_degree in enumerate(PROGRESSION):
-        start = i * bar
-        notes = scale.chord(chord_degree, 3)
-        for j, midi in enumerate(notes):
-            hz = float(audio.midi_to_hz(midi))
-            held = audio.pad(hz, bar, 0.30, attack=1.4, release=2.6, brightness=0.35)
-            audio.add(bed, held, start - 0.6)
-            if variant == "strings":
-                voice = audio.strings(
-                    float(audio.midi_to_hz(midi + 12)),
-                    bar,
-                    0.16,
-                    attack=1.6,
-                    release=2.4,
-                    brightness=0.3,
-                )
-            else:
-                voice = audio.choir(
-                    float(audio.midi_to_hz(midi + 12)),
-                    bar,
-                    0.17,
-                    attack=1.6,
-                    release=2.4,
-                    vowel="u",
-                )
-            audio.add(bed, voice, start - 0.6)
-    bed = audio.lowpass(bed, 2200.0)
-    track += bed
-
-    chimes = audio.silence(DURATION)
-    threshold = CHIME_DEGREE - (variant == "strings")  # strings: corner regions only
-    count = 0
-    for k in range(HOPS):
-        landing = (k + MOVE) * HOP_TIME
-        chord_degree = PROGRESSION[int(k // 8) % len(PROGRESSION)]
-        tones = sorted(
-            {m + 12 * o for m in scale.chord(chord_degree, 3) for o in (1, 2, 3)}
-        )
-        tones = [m for m in tones if root + 16 <= m <= root + 36]
-        for square in (tour[(k + 1) % len(tour)], tour[(k + 1 + HOPS) % len(tour)]):
-            moves = degree[square]
-            if moves > threshold:
-                continue
-            r, c = divmod(square, N)
-            midi = tones[round((N - 1 - r) / (N - 1) * (len(tones) - 1))]
-            velocity = {2: 0.55, 3: 0.42, 4: 0.28}[moves]
-            position = 0.8 * (c - (N - 1) / 2) / ((N - 1) / 2)
-            note = audio.kalimba(float(audio.midi_to_hz(midi)), velocity, 3.0)
-            audio.add(chimes, audio.pan(note, position), landing)
-            if moves == 2:
-                high = audio.kalimba(float(audio.midi_to_hz(midi + 12)), 0.3, 3.0)
-                audio.add(chimes, audio.pan(high, position), landing + 0.03)
-            count += 1
-    chimes = audio.lowpass(chimes, 5000.0, order=4)
-    chimes = audio.delay(chimes, 2 * HOP_TIME, feedback=0.35, wet=0.3)
-    track += chimes
-    track = audio.highpass(track, 80.0)
-    track = audio.reverb(track, rng, rt60=4.5, wet=0.42, tone=4200.0)
-    logger.info(
-        f"Ambient soundtrack ({variant or 'choir'}): root {root}, {count} chimes"
-    )
-    return audio.master(track)
 
 
 if __name__ == "__main__":

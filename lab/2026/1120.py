@@ -33,6 +33,11 @@ from common.image_processing import ImageProcessingSettings
 from common.music import STYLES, Scale
 from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames
 
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'Can you un-stir ink?'
+HOOK_Y = 380
+HOOK_COLOUR = "#f4f0e7"
+
 DURATION = 15.0  # seconds
 FRAME_COUNT = frame_count(DURATION)
 TAU = 2 * np.pi
@@ -451,7 +456,7 @@ def generate(settings: ImageProcessingSettings = None):
         with torch.no_grad():
             return renderer.frame(frame / FPS)
 
-    render_frames(settings, render, FRAME_COUNT, parallel=False)
+    render_frames(settings, render, FRAME_COUNT, parallel=False, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
     drop_list = renderer.drops
     del renderer
     gc.collect()

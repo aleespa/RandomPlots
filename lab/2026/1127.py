@@ -1,371 +1,400 @@
 """
-Random Numbers That Refuse to Touch
+Lines Into Circles
 
-Each thread is one eigenvalue of a random matrix, a 72×72 grid of random numbers
-that slowly changes. At the top only its diagonal is switched on, so the eigenvalues
-are just independent random numbers: they wander, collide and cross freely. Going
-down, the other entries fade in and the eigenvalues start to feel each other.
+Every Möbius transformation of the complex plane is secretly a ball moving above it.
+Paint the plane's grid on a glass ball, the Riemann sphere, put a lamp on top, and the
+light throws the grid onto the floor. Slide, spin, lift or roll the ball, and the grid
+on the floor moves exactly as the formula w = (az + b)/(cz + d) says.
 
-By the bottom, no two threads touch. They swerve apart at the last moment and keep
-an almost even spacing. This is level repulsion, the heart of random matrix theory:
-Eugene Wigner found it in the energy levels of heavy nuclei, and the same spacings
-turn up in the zeros of the Riemann zeta function and in bus arrivals in Cuernavaca.
+Whenever a painted line passes through the lamp, its image is straight; every other
+line lands as a perfect circle. So a Möbius transformation turns lines into circles and
+circles into lines, nothing else. Once per loop the ball's point at infinity passes
+under the lamp, and every circle straightens at once.
 
-Every collision strikes a marimba bar, pitched by where it happens. The clatter
-thins to the odd near miss as the threads learn to dodge, a soft chord settles in,
-and the last row of eigenvalues plays itself, each note waiting out the gap to
-its neighbour.
+Listen: each line plays a note as it straightens, rushing upward into the chord.
 
-Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
-#randommatrixtheory #eigenvalues #probability #mathart #randomplots
+Made with Python & PyTorch. Sound synthesized in NumPy.
+#mobiustransformation #complexanalysis #riemannsphere #mathart #randomplots
 """
 
 import gc
+import math
 
-import cv2
 import numpy as np
+import torch
+import torch.nn.functional as F
 from loguru import logger
 
 from common import audio
+from common.gpu import select_device, wide_blur
 from common.image_processing import ImageProcessingSettings
 from common.music import STYLES, Scale
-from common.video import (
-    FPS,
-    HEIGHT,
-    WIDTH,
-    frame_count,
-    hex_to_bgr,
-    palette_lut,
-    render_frames,
-    smoothstep,
-)
+from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames
 
-DURATION = 15.0  # seconds, one-shot
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'How a ball turns lines into circles'
+HOOK_Y = 230
+HOOK_COLOUR = "#f4f0e7"
+
+DURATION = 15.0  # seconds, one loop
 FRAME_COUNT = frame_count(DURATION)
+TAU = 2.0 * math.pi
 
-# --- The matrices -------------------------------------------------------------------
-N = 72  # levels
-SIGMA_D = 0.8  # spread of the independent (diagonal) levels
-EPS = 0.45  # how far the free levels wander: M0 + EPS (M1 cos θ + M2 sin θ)
-EPS_G = 1.2  # the same for the coupled matrix, whose levels move less
-TURNS = 1.1  # turns of θ from the top of the screen to the bottom
-U_ON, U_FULL = 0.22, 0.78  # coupling starts / is full at these fractions of the height
-G_MIN = 0.01  # the first notch of the mixing angle, as a fraction of 90°
+# The ball (radius 1) and its motion, all whole cycles per loop.
+GRID = 0.5  # spacing of the painted grid, in floor units at rest
+FLIPS = 1  # full forward rolls of the ball per loop
+SPINS = 1  # turns about the vertical per loop
+LIFT = (1.0, 1.75)  # lowest and highest centre height (1 = touching the floor)
+LIFTS = 2  # rises per loop
+WANDER = (0.45, 0.7)  # x, y amplitude of the centre's figure-eight
+PHASE = 0.12  # loop time of frame 0: the all-straight moment sits at t = 1 - PHASE
 
-# --- Layout & time --------------------------------------------------------------------
-Y_TOP, Y_BOTTOM = 150, 1790  # px: the drawing area
-X_LEFT, X_RIGHT = 40, WIDTH - 40
-LAMBDA_MAX = 2.25  # |λ| mapped to the margins
-T_PEN = 13.3  # s: the pen reaches the bottom
-FADE = 0.4  # s fade at the end
-SS = 2  # supersampling of the static drawing
+# Camera
+EYE = (0.0, -5.0, 5.2)
+TARGET = (0.0, 1.2, 0.3)
+VFOV = math.radians(50.0)
+SS = 2  # supersampling
+FOG = 9.0  # floor units: distant lines fade into the dark
 
-# --- Collisions ----------------------------------------------------------------------
-TOUCH = 0.12  # a closest approach under this many local spacings is a touch
-CLOSE = 0.45  # ... and under this, once coupled, a close call (sound only)
-U_CLOSE = 0.6  # close calls are heard below this height
-FLASH = 0.55  # s of afterglow for a touch
+# Look (linear light is built from these)
+BACKGROUND = "#08060f"
+RE_LINES = "#34e6b4"  # lines Re z = const: mint
+IM_LINES = "#ff4f86"  # lines Im z = const: rose
+LAMP = "#fff1d6"
+GLASS = "#6c5cff"
+LINE_PX = 1.15  # line half-width, in output pixels
+AXIS_GAIN = 2.2  # the two axes are brighter
+CHECKER = 0.06  # faint tint of alternate grid cells
+DENSE = 0.25  # brightness of lines too dense to draw, relative to their mean
 
-# --- Look -------------------------------------------------------------------------
-BACKGROUND = "#05070d"
-PALETTE = ["#2f6bff", "#6fc3e8", "#f3eedb", "#ffb94a", "#ff6a3d"]  # by position
-BEAD = hex_to_bgr("#fff4dc")
-SPARK = np.array(hex_to_bgr("#fffaf0"), np.float32)
-LINE_W = 1.6  # px
-
-# --- Sound ----------------------------------------------------------------------------
-STYLE = (
-    "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one overrides it
-)
-NOTE_GAP = 0.13  # s: at most one touch note per gap
-CLOSE_GAP = 0.4  # s: ... and one close-call note
-ROLL = 9  # central levels of the last row played as the closing roll
+# Sound
+STYLE = "vibes"  # common.music.STYLES; an --audio-only tag naming one overrides it
+SOUND_LINES = 7  # lines |k| <= this play a note when their shadow straightens
+RUSH_LINES = 36  # farther lines, up to this, play a quick rush into the chord
+RUSH_GAP = 0.07  # s, closest two rush notes may be
 
 
-def gue(rng):
-    """A complex Hermitian Gaussian matrix with E|H_ij|^2 = 1/N (spectrum ~ [-2, 2])."""
-    x = (rng.standard_normal((N, N)) + 1j * rng.standard_normal((N, N))) / np.sqrt(2)
-    return (x + x.conj().T) / np.sqrt(2 * N)
+def _rgb(colour: str):
+    return [(int(colour[i : i + 2], 16) / 255.0) ** 2.2 for i in (1, 3, 5)]
 
 
-def mixing(u):
+def _rot_x(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[1, 0, 0], [0, c, -s], [0, s, c]])
+
+
+def _rot_z(a):
+    c, s = math.cos(a), math.sin(a)
+    return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+def motion(t: float, wander_phase, spin_sign: int):
+    """Centre C (3,) and orientation R (3, 3, body -> world) of the ball at loop time t."""
+    u = (t + PHASE) % 1.0
+    cx = WANDER[0] * math.sin(TAU * u + wander_phase[0])
+    cy = WANDER[1] * math.sin(2 * TAU * u + wander_phase[1])
+    lo, hi = LIFT
+    h = lo + (hi - lo) * 0.5 * (1.0 - math.cos(LIFTS * TAU * u))
+    rot = _rot_x(FLIPS * TAU * u) @ _rot_z(spin_sign * SPINS * TAU * u)
+    return np.array([cx, cy, h]), rot
+
+
+def lamp_point(rot):
+    """Where the lamp sits on the painted plane: the body point under world-up, as z."""
+    q = rot.T @ np.array([0.0, 0.0, 1.0])
+    return 2.0 * complex(q[0], q[1]) / max(1.0 - q[2], 1e-12)
+
+
+class Renderer:
+    def __init__(self, device):
+        self.device = device
+        f32 = dict(device=device, dtype=torch.float32)
+        self.h, self.w = HEIGHT * SS, WIDTH * SS
+        eye = np.array(EYE)
+        fwd = np.array(TARGET) - eye
+        fwd /= np.linalg.norm(fwd)
+        right = np.cross(fwd, [0.0, 0.0, 1.0])
+        right /= np.linalg.norm(right)
+        up = np.cross(right, fwd)
+        self.focal = (self.h / 2) / math.tan(VFOV / 2)
+        ys = torch.arange(self.h, **f32) + 0.5 - self.h / 2
+        xs = torch.arange(self.w, **f32) + 0.5 - self.w / 2
+        u = (xs / self.focal)[None, :, None]
+        v = (-ys / self.focal)[:, None, None]
+        d = (
+            torch.tensor(fwd, **f32)
+            + u * torch.tensor(right, **f32)
+            + v * torch.tensor(up, **f32)
+        )
+        self.dirs = d / d.norm(dim=-1, keepdim=True)  # (h, w, 3)
+        self.eye = eye
+        self.cam = (eye, fwd, right, up)
+        self.px = xs[None, :]
+        self.py = ys[:, None]
+        # The floor: fixed, since the camera is.
+        dz = self.dirs[..., 2]
+        self.floor_ok = dz < -1e-4
+        tf = torch.where(self.floor_ok, -eye[2] / dz.clamp(max=-1e-4), 0.0)
+        self.floor_p = torch.tensor(eye, **f32) + tf[..., None] * self.dirs
+        self.fog = torch.exp(-tf / FOG) * self.floor_ok
+        self.bg = torch.tensor(_rgb(BACKGROUND), **f32)
+        self.re_c = torch.tensor(_rgb(RE_LINES), **f32)
+        self.im_c = torch.tensor(_rgb(IM_LINES), **f32)
+        self.lamp_c = torch.tensor(_rgb(LAMP), **f32)
+        self.glass_c = torch.tensor(_rgb(GLASS), **f32)
+        # A faint sky gradient above the horizon so the floor has an edge.
+        sky = (1.0 - (self.py / (self.h / 2)).clamp(-1, 1).abs())[..., None]
+        self.sky = (0.6 + 0.4 * sky) * self.bg
+
+    @staticmethod
+    def _grad(f):
+        """|grad f| in supersampled pixels (forward differences, edge repeated)."""
+        gx = torch.diff(f, dim=1, append=f[:, -1:])
+        gy = torch.diff(f, dim=0, append=f[-1:, :])
+        return torch.sqrt(gx * gx + gy * gy).clamp_min(1e-6)
+
+    def _lines(self, f):
+        """Anti-aliased glow of the lines f = integer, fading to their mean where dense."""
+        g = self._grad(f)
+        df = (f - torch.round(f)).abs()
+        width = LINE_PX * SS
+        core = torch.exp(-((df / g / width) ** 2))
+        spacing = 1.0 / g
+        sharp = ((spacing - 3.0 * SS) / (8.0 * SS)).clamp(0, 1)
+        mean = (1.77 * width * g).clamp(max=1.0)
+        axis = torch.where(torch.round(f) == 0, AXIS_GAIN, 1.0)
+        return core * sharp * axis + DENSE * mean * (1 - sharp), sharp
+
+    def _pattern(self, qx, qy, qz):
+        """The painted grid at body points q: (Re-lines, Im-lines, checker) intensities."""
+        den = (1.0 - qz).clamp_min(1e-6)
+        f = (2.0 / GRID) * qx / den
+        g = (2.0 / GRID) * qy / den
+        f = f.clamp(-1e5, 1e5)
+        g = g.clamp(-1e5, 1e5)
+        lf, sf = self._lines(f)
+        lg, sg = self._lines(g)
+        parity = torch.remainder(torch.floor(f) + torch.floor(g), 2.0)
+        checker = parity * sf * sg
+        return lf, lg, checker
+
+    def frame(self, t, centre, rot):
+        f32 = dict(device=self.device, dtype=torch.float32)
+        C = torch.tensor(centre, **f32)
+        Rt = torch.tensor(rot.T.copy(), **f32)  # world -> body
+        lamp = C + torch.tensor([0.0, 0.0, 1.0], **f32)
+
+        # Floor: each point P is lit through the ball point on the segment lamp -> P.
+        d = self.floor_p - lamp
+        d2 = (d * d).sum(-1).clamp_min(1e-9)
+        s = -2.0 * d[..., 2] / d2
+        rel = s[..., None] * d
+        rel[..., 2] += 1.0
+        q = rel @ Rt.T
+        lf, lg, chk = self._pattern(q[..., 0], q[..., 1], q[..., 2])
+        r = torch.sqrt(d2)
+        pool = ((centre[2] + 1.0) / r) ** 3
+        gain = (0.28 + 0.72 * pool**0.6) * self.fog
+        floor = (
+            self.bg * (1.0 + 1.0 * pool[..., None] * self.fog[..., None])
+            + 0.05 * pool[..., None] * self.lamp_c * self.fog[..., None]
+            + gain[..., None]
+            * (
+                0.85 * lf[..., None] * self.re_c
+                + 0.85 * lg[..., None] * self.im_c
+                + CHECKER * chk[..., None] * self.glass_c
+            )
+        )
+        image = torch.where(self.floor_ok[..., None], floor, self.sky)
+
+        # The glass ball: lines painted on it, front bright, back dim.
+        oc = torch.tensor(self.eye, **f32) - C
+        eye, fwd, right, up = self.cam
+        rel_c = centre - eye
+        depth_c = rel_c @ fwd
+        cx = self.focal * (rel_c @ right) / depth_c + self.w / 2
+        cy = -self.focal * (rel_c @ up) / depth_c + self.h / 2
+        reach = 1.4 * self.focal / math.sqrt(max(rel_c @ rel_c - 1.0, 1e-3)) + 8
+        y0, y1 = max(0, int(cy - reach)), min(self.h, int(cy + reach))
+        x0, x1 = max(0, int(cx - reach)), min(self.w, int(cx + reach))
+        box = image[y0:y1, x0:x1]
+        dirs = self.dirs[y0:y1, x0:x1]
+        b = dirs @ oc
+        disc = b * b - (float(oc @ oc) - 1.0)
+        hit = disc > 0
+        root = torch.sqrt(disc.clamp_min(0))
+        glass = torch.zeros_like(box)
+        for sign, weight in ((-1.0, 1.0), (1.0, 0.33)):
+            dist = -b + sign * root
+            p = oc + dist[..., None] * dirs  # relative to C
+            q = p @ Rt.T
+            lf, lg, chk = self._pattern(q[..., 0], q[..., 1], q[..., 2])
+            glass += weight * (
+                lf[..., None] * self.re_c
+                + lg[..., None] * self.im_c
+                + 0.6 * CHECKER * chk[..., None] * self.glass_c
+            )
+            if sign < 0:
+                n = p
+                facing = (n * dirs).sum(-1).abs()
+        rim = (1.0 - facing).clamp(0, 1) ** 3
+        glass += 0.55 * rim[..., None] * self.glass_c + 0.03 * self.glass_c
+        # Soft edge over one pixel so the silhouette is anti-aliased.
+        edge = (disc.clamp_min(0).sqrt() * self.focal / (2.0 * float(oc.norm()))).clamp(
+            0, 1
+        )
+        edge = edge * hit
+        image[y0:y1, x0:x1] = (
+            box * (1.0 - 0.45 * edge[..., None]) + edge[..., None] * glass
+        )
+
+        # The lamp on top.
+        rel_l = lamp.cpu().numpy() - eye
+        depth = rel_l @ fwd
+        lx = self.focal * (rel_l @ right) / depth
+        ly = -self.focal * (rel_l @ up) / depth
+        r2 = (self.px - lx) ** 2 + (self.py - ly) ** 2
+        glow = 3.0 * torch.exp(-r2 / (2 * (5.0 * SS) ** 2)) + 0.35 * torch.exp(
+            -r2 / (2 * (28.0 * SS) ** 2)
+        )
+        image = image + glow[..., None] * self.lamp_c
+
+        image = F.avg_pool2d(image.permute(2, 0, 1)[None], SS)[0].permute(1, 2, 0)
+        image = image + 0.45 * wide_blur(image, 14.0, 4)
+        image = 1.0 - torch.exp(-1.15 * image)  # soft shoulder
+        return image.clamp(0, 1) ** (1 / 2.2) * 255.0  # RGB
+
+
+def straight_events(wander_phase, spin_sign, samples=300_000):
     """
-    The mixing angle φ(u): 0 above U_ON, then (π/2) G_MIN^(1 - w), w eased from
-    0 to 1 by U_FULL, so the coupling sin φ grows geometrically and lands
-    smoothly on a pure random matrix.
+    When each painted line passes through the lamp (its shadow is straight).
+    Returns [(seconds, family 0 = Re / 1 = Im, k)] for |k| <= SOUND_LINES, and the
+    times every line is straight at once (the ball's north pole under the lamp).
     """
-    w = smoothstep((np.asarray(u, float) - U_ON) / (U_FULL - U_ON))
-    phi = 0.5 * np.pi * G_MIN ** (1.0 - w)
-    return np.where(np.asarray(u) < U_ON, 0.0, phi)
+    ts = np.arange(samples) / samples
+    u = (ts + PHASE) % 1.0
+    a, b = FLIPS * TAU * u, spin_sign * SPINS * TAU * u
+    # rot.T @ e3 for rot = Rx(a) Rz(b): Rz(-b) Rx(-a) e3 = Rz(-b) (0, sin a, cos a)
+    qx = np.sin(b) * np.sin(a)
+    qy = np.cos(b) * np.sin(a)
+    qz = np.cos(a)
+    den = np.maximum(1.0 - qz, 1e-12)
+    events = []
+    for family, val in enumerate((2 * qx / den / GRID, 2 * qy / den / GRID)):
+        val = np.clip(val, -1e6, 1e6)
+        lo = np.floor(np.minimum(val, np.roll(val, -1)))
+        hi = np.floor(np.maximum(val, np.roll(val, -1)))
+        for i in np.nonzero((hi > lo) & (np.abs(val) < 4 * RUSH_LINES))[0]:
+            k = int(hi[i])
+            if abs(k) <= RUSH_LINES:
+                events.append((ts[i] * DURATION, family, k))
+    straight = [((j / FLIPS - PHASE) % 1.0) * DURATION for j in range(FLIPS)]
+    return sorted(events), straight
 
 
-def pen_u(t):
-    """Fraction of the height drawn at time t: steady, easing into the bottom."""
-    x = np.clip(np.asarray(t, float) / T_PEN, 0.0, 1.0)
-    return 0.06 + 0.94 * (1.0 - (1.0 - x) ** 1.6)
-
-
-def pen_time(u):
-    """Inverse of pen_u (u below its start maps to 0)."""
-    x = np.clip((np.asarray(u, float) - 0.06) / 0.94, 0.0, 1.0)
-    return T_PEN * (1.0 - (1.0 - x) ** (1 / 1.6))
-
-
-def spectra(rng, rows):
-    """Sorted eigenvalues of H(u) for the given heights u: shape (len(rows), N)."""
-    diag = [SIGMA_D * rng.standard_normal(N) for _ in range(3)]
-    full = [gue(rng) for _ in range(3)]
-    norm, norm_g = np.sqrt(1 + EPS**2), np.sqrt(1 + EPS_G**2)
-    out = np.empty((len(rows), N))
-    for k, u in enumerate(rows):
-        theta = 2 * np.pi * TURNS * u
-        c, s = np.cos(theta), np.sin(theta)
-        d = (diag[0] + EPS * (c * diag[1] + s * diag[2])) / norm
-        f = (full[0] + EPS_G * (c * full[1] + s * full[2])) / norm_g
-        phi = float(mixing(u))
-        out[k] = np.linalg.eigvalsh(np.cos(phi) * np.diag(d) + np.sin(phi) * f)
-    return out
-
-
-def touches(lam, limit=TOUCH):
+def soundtrack(events, straight, style_name, rng):
     """
-    Closest approaches of neighbouring levels: local minima in u of the gap,
-    in units of the local mean spacing (the mean of the 7 surrounding gaps).
-    Returns arrays (row index, pair index, normalised gap) with gap < limit.
-    """
-    gaps = np.diff(lam, axis=1)  # (rows, N - 1)
-    pad = np.pad(gaps, ((0, 0), (3, 3)), mode="edge")
-    local = np.mean([pad[:, k : k + N - 1] for k in range(7)], axis=0)
-    s = gaps / local
-    minimum = (s[1:-1] <= s[:-2]) & (s[1:-1] < s[2:]) & (s[1:-1] < limit)
-    r, i = np.nonzero(minimum)
-    return r + 1, i, s[r + 1, i]
-
-
-def lam_to_x(lam):
-    return X_LEFT + (X_RIGHT - X_LEFT) * (np.asarray(lam) + LAMBDA_MAX) / (
-        2 * LAMBDA_MAX
-    )
-
-
-def soundtrack(lam, rows, events, style_name, rng):
-    """
-    One-shot. Touches (closest approaches under TOUCH spacings) in the order the
-    pen reaches them strike the style's voice, at most one per NOTE_GAP s: pitch
-    from the position (left low, right high, scale degrees -4 .. 9), louder the
-    closer the touch, panned by x. They are dense while the levels are free and
-    thin out as the coupling grows. Below U_CLOSE, close calls (closest
-    approaches between TOUCH and CLOSE spacings, the swerves of repelled
-    levels) strike softer notes, at most one per CLOSE_GAP s. A soft pad on the
-    home chord swells in with the coupling. When the pen lands, the ROLL central levels of the last row
-    are struck left to right with onsets proportional to their positions, so
-    the rhythm is their (repelled, near-even) spacing, over a bass note.
+    A loop. Every line |k| <= SOUND_LINES whose shadow straightens strikes the
+    style's voice: the mint (Re) lines at degree |k|, the rose (Im) lines three
+    degrees lower, panned by side. Farther lines (up to RUSH_LINES) straighten ever
+    faster as the ball's north pole nears the lamp: they play a soft, rising rush
+    (at most one note per RUSH_GAP) into the moment every shadow is straight, where
+    a held chord and a bass note land, and fall away after it. A quiet pad holds the
+    home chord underneath.
     """
     style = STYLES[style_name]
-    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    root = int(rng.choice(style.roots))
+    scale = Scale(root, style.mode)
     track = audio.silence(DURATION)
-    kw = dict(circular=False)
-
-    when, xs, s = events
-    last = -1.0
-    notes = 0
-    for k in np.argsort(when):
-        if when[k] - last < NOTE_GAP or when[k] > T_PEN:
+    hz = lambda midi: float(audio.midi_to_hz(midi))
+    last = {}
+    struck = 0
+    for when, family, k in events:
+        if any(
+            abs(when - s) < 0.12 or abs(abs(when - s) - DURATION) < 0.12
+            for s in straight
+        ):
             continue
-        last = when[k]
-        pos = float(np.clip(xs[k] / LAMBDA_MAX, -1, 1))
-        degree = int(round(-4 + 13 * (pos + 1) / 2))
-        velocity = 0.2 + 0.4 * (1 - s[k] / TOUCH)
-        note = audio.pan(style.voice(scale.hz(degree), velocity), 0.7 * pos)
-        audio.add(track, note, float(when[k]), **kw)
-        notes += 1
-
-    r, i, s = touches(lam, CLOSE)
-    keep = (rows[r] >= U_CLOSE) & (s >= TOUCH)
-    r, i, s = r[keep], i[keep], s[keep]
-    close_when = pen_time(rows[r])
-    close_lam = 0.5 * (lam[r, i] + lam[r, i + 1])
-    last = -1.0
-    calls = 0
-    for k in np.argsort(close_when):
-        if close_when[k] - last < CLOSE_GAP or close_when[k] > T_PEN:
+        side = 1 if family == 0 else -1
+        if abs(k) > SOUND_LINES:
+            if when - last.get("rush", -9) < RUSH_GAP:
+                continue
+            last["rush"] = when
+            degree = SOUND_LINES + 1 + (abs(k) - SOUND_LINES) // 3
+            note = style.voice(scale.hz(min(degree, 16)), 0.22)
+            audio.add(track, audio.pan(note, 0.5 * side * np.sign(k)), when)
             continue
-        last = close_when[k]
-        pos = float(np.clip(close_lam[k] / LAMBDA_MAX, -1, 1))
-        degree = int(round(-4 + 13 * (pos + 1) / 2))
-        velocity = 0.12 + 0.2 * (1 - s[k] / CLOSE)
-        note = audio.pan(style.voice(scale.hz(degree), velocity), 0.7 * pos)
-        audio.add(track, note, float(close_when[k]), **kw)
-        calls += 1
-
-    on = float(pen_time(U_ON + 0.25 * (U_FULL - U_ON)))
-    length = DURATION - on
-    for degree in (0, 2, 4):
-        voice = audio.pad(scale.hz(degree, -1), length, 0.16, 4.0, 1.5, 0.3)
-        audio.add(track, voice, on, **kw)
-
-    last_row = lam[-1]
-    centre = N // 2 - ROLL // 2
-    roll = last_row[centre : centre + ROLL]
-    land = T_PEN + 0.1
-    span = 1.4  # s for the whole roll
-    onsets = land + span * (roll - roll[0]) / (roll[-1] - roll[0])
-    for j, (at, value) in enumerate(zip(onsets, roll)):
-        pos = float(value / LAMBDA_MAX)
-        note = audio.pan(style.voice(scale.hz(j), 0.45), 0.7 * pos)
-        audio.add(track, note, float(at), **kw)
-    audio.add(track, style.bass(scale.hz(0, -2), 0.55, length=3.0), land, **kw)
+        key = (family, k)
+        if when - last.get(key, -9) < 0.15:
+            continue
+        last[key] = when
+        degree = abs(k) - (0 if family == 0 else 3)
+        velocity = 0.6 - 0.03 * abs(k)
+        note = style.voice(scale.hz(degree), velocity)
+        audio.add(track, audio.pan(note, 0.1 * k * side), when)
+        struck += 1
+    for s in straight:
+        for i, note in enumerate(scale.chord(0, 4) + [scale.note(0, 1)]):
+            audio.add(track, style.voice(hz(note), 0.5), s + 0.02 * i)
+        audio.add(track, style.bass(scale.hz(0, octave=-2), 0.7), s)
+    for note in Scale(root, style.mode).chord(0, 3, octave=-1):
+        audio.add(track, audio.pad(hz(note), DURATION, 0.12, 2.0, 2.0, 0.25), 0.0)
     logger.info(
-        f"Soundtrack: {style_name}, root MIDI {scale.root}, {notes} touch notes, "
-        f"{calls} close calls, "
-        f"roll gaps {np.round(np.diff(onsets), 3)}"
+        f"Soundtrack: {style_name}, root MIDI {root}, {struck} line notes, "
+        f"{len(straight)} all-straight chords"
     )
-    return audio.master(style.room(track, rng, circular=False), loop=False)
+    return audio.master(style.room(track, rng))
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Level dynamics of a random Hermitian matrix with a coupling switched on.
+    Möbius transformations as rigid motions of the Riemann sphere (after Arnold &
+    Rogness, "Möbius Transformations Revealed"). A unit glass ball carries the square
+    grid of the plane, painted by inverse stereographic projection from its own north
+    pole: body point q <-> z = 2(q_x + i q_y)/(1 - q_z), so at rest (resting on the
+    floor, north pole up) a lamp at the top projects the grid back onto the floor
+    exactly. Moving the ball (centre C(t), rotation R(t)) and projecting from the
+    lamp at C + e_z again gives a floor map z -> w that is always Möbius: horizontal
+    slides are translations, spinning about the vertical is rotation, lifting is
+    scaling, and tilting the pole away from the lamp is the inversion part. Painted
+    lines through the lamp project to straight lines; all others to circles.
 
-    H(u) = cos φ(u) D(u) + sin φ(u) G(u), where u in [0, 1] is the height on screen,
-    D(u) is diagonal (N independent N(0, SIGMA_D²) levels) and G(u) a GUE matrix
-    (E|G_ij|² = 1/N, semicircle on [-2, 2]); both wander as M0 + EPS (M1 cos θ +
-    M2 sin θ), normalised, with θ = 2π TURNS u, so each stays in its ensemble.
-    φ(u) = 0 above U_ON (the levels are independent and cross), then grows from
-    (π/2) G_MIN geometrically to π/2 at U_FULL (`mixing`; Wigner-Dyson
-    repulsion, P(s) ~ s²). The
-    sorted eigenvalues (eigvalsh) are computed once for every output pixel row
-    (seconds) and drawn as polylines, each segment coloured by position, into a
-    static 2x image.
+    Loop: t in [0, 1), u = t + PHASE. C = (WANDER_x sin(2πu + φ1), WANDER_y sin(4πu + φ2), h), h rising
+    LIFTS times between LIFT; R = Rx(2π FLIPS u) Rz(±2π SPINS u). All whole cycles.
 
-    A frame is a pure function of t: the pen height pen_u(t) reveals the static
-    drawing above it (a soft edge and a fading "wet ink" glow just behind it),
-    beads sit at the interpolated eigenvalues on the pen row with a blurred glow,
-    and every touch (closest approach of neighbours, under TOUCH local mean
-    spacings) the pen has passed in the last FLASH s sparks. Frames render on the
-    thread pool. The posted video and soundtrack use --seed 0 (the default).
+    Render: torch, per pixel at 2x supersampling. Camera rays are fixed; the floor
+    point P maps to the ball point lamp + s (P - lamp), s = -2 (P - lamp)_z / |P - lamp|²,
+    then to body coordinates and z. Grid lines are drawn as Gaussian glows of width
+    LINE_PX using |grad| of Re z / GRID and Im z / GRID from finite differences, faded
+    to their mean where the lines are denser than a few pixels (near the image of
+    infinity). The ball is ray-traced as glass: front and back grids, a Fresnel rim.
+    Bloom, a soft shoulder, gamma.
+
+    Sound: the times each painted line |k| <= SOUND_LINES passes the lamp, from the
+    same rotation, sampled finely; see `soundtrack`. Rendered with the default seed 0
+    unless noted in the schedule.
     """
     settings = settings or ImageProcessingSettings(1)
     rng = settings.rng
+    wander_phase = rng.uniform(0, TAU, 2)
+    spin_sign = int(rng.choice((-1, 1)))
 
-    rows = (np.arange(Y_TOP, Y_BOTTOM + 1) - Y_TOP) / (Y_BOTTOM - Y_TOP)
-    lam = spectra(rng, rows)
-    xs = lam_to_x(lam)
-    ys = Y_TOP + rows * (Y_BOTTOM - Y_TOP)
-
-    r, i, s = touches(lam)
-    ev_time = pen_time(rows[r])
-    ev_lam = 0.5 * (lam[r, i] + lam[r, i + 1])
-    ev_x, ev_y = lam_to_x(ev_lam), ys[r]
-    ev_strength = 1.0 - s / TOUCH
-    logger.info(
-        f"{len(r)} touches; {np.sum(rows[r] < U_ON)} free, "
-        f"{np.sum(rows[r] >= U_FULL)} fully coupled"
-    )
-
-    # The static drawing.
-    bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
-    lut = (palette_lut(PALETTE) * 255)[:, ::-1]
-    big = np.zeros((HEIGHT * SS, WIDTH * SS, 3), np.uint8)
-    shift = 4
-    px = np.round(xs * SS * (1 << shift)).astype(np.int64)
-    py = np.round(ys * SS * (1 << shift)).astype(np.int64)
-    colour_index = np.clip(
-        np.round(255 * (lam + LAMBDA_MAX) / (2 * LAMBDA_MAX)), 0, 255
-    ).astype(int)
-    width = max(1, int(round(LINE_W * SS)))
-    for n in range(N):
-        for k in range(len(rows) - 1):
-            c = tuple(float(v) for v in lut[colour_index[k, n]])
-            cv2.line(
-                big,
-                (int(px[k, n]), int(py[k])),
-                (int(px[k + 1, n]), int(py[k + 1])),
-                c,
-                width,
-                cv2.LINE_AA,
-                shift,
-            )
-    drawing = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-    drawing = drawing.astype(np.float32)
-    top_fade = smoothstep((np.arange(HEIGHT) - Y_TOP + 4) / 70.0).astype(np.float32)
-    drawing *= top_fade[:, None, None]  # the threads emerge from the dark
-    del big
-    y_axis = np.arange(HEIGHT, dtype=np.float32)
+    device = select_device()
+    renderer = Renderer(device)
 
     def render(frame):
-        t = frame / (FRAME_COUNT - 1) * DURATION
-        u = float(pen_u(t))
-        pen_y = Y_TOP + u * (Y_BOTTOM - Y_TOP)
-        behind = pen_y - y_axis
-        reveal = np.clip(behind / 4.0 + 0.5, 0.0, 1.0)
-        wet = 1.0 + 0.35 * np.exp(-np.maximum(behind, 0.0) / 90.0) * reveal
-        if t > T_PEN:  # the ink dries over the rest
-            wet = 1.0 + (wet - 1.0) * np.exp(-(t - T_PEN) / 0.4)
-        image = bg + drawing * (reveal * wet)[:, None, None]
+        t = frame / FRAME_COUNT
+        centre, rot = motion(t, wander_phase, spin_sign)
+        with torch.no_grad():
+            return renderer.frame(t, centre, rot)
 
-        glow = np.zeros((HEIGHT, WIDTH, 3), np.float32)
-        # Sparks at touches the pen has just passed.
-        age = t - ev_time
-        live = np.nonzero((age >= 0) & (age < FLASH))[0]
-        for k in live:
-            a = 1.0 - age[k] / FLASH
-            amp = ev_strength[k] * a * a
-            centre = (int(round(ev_x[k] * 16)), int(round(ev_y[k] * 16)))
-            cv2.circle(
-                glow,
-                centre,
-                int((6 + 22 * (1 - a)) * 16),
-                tuple(float(v) for v in SPARK * amp * 1.2),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
-            cv2.circle(
-                glow,
-                centre,
-                int(3 * 16),
-                tuple(float(v) for v in SPARK * amp * 3.0),
-                -1,
-                cv2.LINE_AA,
-                4,
-            )
+    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
+    del renderer
+    torch.cuda.empty_cache() if device.type == "cuda" else None
 
-        # Beads on the pen row, while the pen moves (they fade into the rest).
-        if t <= T_PEN + 1.0:
-            fade_beads = 1.0 - smoothstep((t - T_PEN) / 1.0)
-            row = u * (len(rows) - 1)
-            k0 = min(int(row), len(rows) - 2)
-            f = row - k0
-            bx = xs[k0] * (1 - f) + xs[k0 + 1] * f
-            colour = tuple(float(v) * fade_beads for v in BEAD)
-            for x in bx:
-                c = (int(round(x * 16)), int(round(pen_y * 16)))
-                cv2.circle(image, c, 4 * 16, colour, -1, cv2.LINE_AA, 4)
-                cv2.circle(
-                    glow, c, 9 * 16, tuple(0.5 * v for v in colour), -1, cv2.LINE_AA, 4
-                )
-            cv2.line(
-                glow,
-                (0, int(pen_y)),
-                (WIDTH - 1, int(pen_y)),
-                tuple(25.0 * fade_beads for _ in range(3)),
-                1,
-            )
-
-        image += cv2.GaussianBlur(glow, (0, 0), 7) * 1.3 + glow * 0.3
-        image *= smoothstep((DURATION - t) / FADE)
-        return image
-
-    render_frames(settings, render, FRAME_COUNT)
-    tag = settings.audio_tag
-    track = soundtrack(
-        lam,
-        rows,
-        (ev_time, ev_lam, s),
-        tag if tag in STYLES else STYLE,
-        settings.audio_rng,
-    )
+    events, straight = straight_events(wander_phase, spin_sign)
+    style = settings.audio_tag if settings.audio_tag in STYLES else STYLE
+    track = soundtrack(events, straight, style, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 

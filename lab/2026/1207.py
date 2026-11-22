@@ -1,33 +1,34 @@
 """
-The Cat That Always Comes Back
+Fermat's Christmas Theorem
 
-This is Arnold's cat map, the textbook example of chaos. Take a 322 × 322 pixel
-picture of a cat, shear it up, shear it sideways, and wrap whatever spills off
-one edge back in at the other: (x, y) → (2x + y, x + y) mod 322. Neighbouring
-pixels fly apart, and within a few steps the cat is pure static.
+Which prime numbers are a sum of two squares? 5 = 1² + 2² and 13 = 2² + 3²
+are; 3, 7 and 11 never are. Here a circle grows across a grid of whole-number
+points. Each time its radius squared reaches a prime p, it lights the points
+(a, b) with a² + b² = p, if there are any.
 
-Yet nothing is lost. There are only so many pixels, so the shuffle must
-repeat: after 12 steps the cat returns upside down, after 24 it is back
-exactly. This chaos is not randomness, just order scrambled beyond recognition.
+Watch the gold rings catch points and the blue ones catch nothing. The rule
+is simple: an odd prime is a sum of two squares exactly when it leaves
+remainder 1 on division by 4. Fermat announced it in a letter dated
+Christmas Day, 1640. Zoom out and the lit points are the primes of the
+Gaussian integers a + bi, with the primes 3, 7, 11… sitting alone on the
+axes, a snowflake with eight-fold symmetry that no one designed.
 
-Listen: a slow chord brightens with the static, a soft piano note climbs with
-every step, and each return lands on a rolled chord, minor upside down, home
-when the cat is back.
+Listen: every prime the circle catches strikes two marimba notes, one for
+each square, while strings swell as the view pulls back; the axis primes ring
+low.
 
-Made with Python & PyTorch. Sound synthesized in NumPy.
-#arnoldscatmap #chaostheory #mathart #generativeart #randomplots
+Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
+#gaussianprimes #numbertheory #mathart #generativeart #randomplots
 """
 
 import gc
 
 import cv2
 import numpy as np
-import torch
-import torch.nn.functional as F
 from loguru import logger
+from scipy.interpolate import PchipInterpolator
 
 from common import audio
-from common.gpu import select_device
 from common.image_processing import ImageProcessingSettings
 from common.music import STYLES, Scale
 from common.video import (
@@ -36,376 +37,374 @@ from common.video import (
     WIDTH,
     blit_mask,
     frame_count,
+    hex_to_bgr,
     latex_mask,
+    palette_lut,
     render_frames,
     smoothstep,
 )
 
-DURATION = 15.0  # seconds, an exact loop
+DURATION = 15.0
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The map -----------------------------------------------------------------------
-N = 322  # grid size; the cat map M = [[2, 1], [1, 1]] has period 24 mod 322
-CAT = np.array([[2, 1], [1, 1]], dtype=np.int64)
-HOLD = 1.0  # s of rest on the cat and on the upside-down cat
-SLOW = 1.3  # steps near a return last up to 1 + SLOW times as long as the others
-SHEAR = 0.44  # fraction of a step each of the two shears takes
+# --- The sweep ---------------------------------------------------------------------
+# Radius of the circle (lattice units) at key times (s); PCHIP in log r, so it
+# eases out into R_END at SWEEP_END and then rests.
+KEYS = ((0.0, 1.12), (1.0, 1.9), (2.6, 3.2), (5.5, 5.4), (8.5, 14.0), (11.5, 40.0))
+SWEEP_END, R_END = 13.6, 64.0
+ZOOM_MARGIN, ZOOM_MIN = 1.1, 2.3  # half-width of the view: hypot(margin r, min)
+TICKER_LAST = (
+    17  # the ticker names each prime up to here (later ones come < 0.6 s apart)
+)
+THEOREM_AT = 5.9  # s: the theorem replaces the ticker
+FADE = 0.4  # s: fade to the background at the end
 
-# --- Layout & look -----------------------------------------------------------------
+# --- Layout (px, 1x) ---------------------------------------------------------------
 SS = 2  # supersampling
-SIDE = 1008  # px, the torus square
-LEFT, TOP = (WIDTH - SIDE) // 2, 380
-BG_TOP, BG_BOTTOM = "#141022", "#06050c"
-FRAME_LINE = "#3a3352"
-TEXT, TEXT_DIM, ACCENT = "#efe8dc", "#9a93b0", "#f2a03d"
+CX, CY = WIDTH / 2, 1000
+TITLE_Y, TICKER_Y = 190, 300
+LATTICE_TOP = 440  # no lattice behind the text
+
+# --- Look --------------------------------------------------------------------------
+BACKGROUND = "#05060c"
+LATTICE = "#1c2033"
+HIT_PALETTE = ["#ffd86b", "#ffaa3d", "#ff6f5c", "#e2479b", "#9b4dd6"]
+AXIS = "#5fe3ff"  # the inert primes 3, 7, 11, ... on the axes
+MISS = "#4a6cff"  # rings that catch no point
+SWEEP = "#c9d2ff"
+TEXT, TEXT_DIM = "#f6f0ff", "#9aa3c8"
+GLOW_SIGMA, GLOW_GAIN = 5.0, 1.1
+FLASH = 0.18  # s: a newly lit point flares and settles
+RING_LIFE = 0.32  # s: e-folding of a prime's ring flash
 
 # --- Sound -------------------------------------------------------------------------
-LEADS = {"felt_piano": audio.piano, "harp": audio.pluck}  # --audio-only tag picks one
-LEAD = "felt_piano"
-ROOTS = (50, 52, 53)  # MIDI roots (D3, E3, F3) of the chords; the lead is an octave up
+STYLE = "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one wins
+BPM = 96  # notes snap to an eighth-note grid at this tempo (15 s = 6 bars)
+CHORDS = (0, 3, 5, 4, 0)  # strings, scale degrees of each chord root
 
 
-def period(n: int = N) -> int:
-    """Smallest k with M^k = I mod n."""
-    power = np.eye(2, dtype=np.int64)
-    for k in range(1, 10 * n):
-        power = CAT @ power % n
-        if (power == np.eye(2, dtype=np.int64)).all():
-            return k
-    raise ValueError(n)
+def primes_up_to(n):
+    sieve = np.ones(n + 1, bool)
+    sieve[:2] = False
+    for k in range(2, int(n**0.5) + 1):
+        if sieve[k]:
+            sieve[k * k :: k] = False
+    return sieve
 
 
-STEPS = period()  # 24
-HALF = STEPS // 2  # M^12 = -I mod 322: the cat upside down
+def radius_curve():
+    """r(s), the circle's radius at time s, as a vectorised function."""
+    times = [k[0] for k in KEYS] + [SWEEP_END, SWEEP_END + 1.0]
+    logs = [np.log(k[1]) for k in KEYS] + [np.log(R_END)] * 2
+    spline = PchipInterpolator(times, logs)
+
+    def radius(s):
+        s = np.clip(np.asarray(s, float), 0.0, SWEEP_END)
+        return np.exp(spline(s))
+
+    return radius
 
 
-def schedule():
+def lattice_events(radius):
     """
-    Start time (s) of every step and its length. Time 0 is the middle of the rest on
-    the cat; the steps slow down near the two returns (k = 0, HALF, STEPS) and a rest
-    of HOLD sits at each.
+    Every Gaussian prime a + bi with a² + b² <= R_END², and the time the circle
+    reaches it; plus each rational prime p <= R_END² with its ring time √p.
     """
-    centres = np.arange(STEPS) + 0.5
-    near = np.minimum.reduce([abs(centres - r) for r in (0, HALF, STEPS)])
-    weight = 1 + SLOW * np.exp(-((near / 2.2) ** 2))
-    lengths = weight / weight.sum() * (DURATION - 2 * HOLD)
-    starts = np.empty(STEPS)
-    clock = HOLD / 2
-    for k in range(STEPS):
-        if k == HALF:
-            clock += HOLD
-        starts[k] = clock
-        clock += lengths[k]
-    return starts, lengths
+    m = int(R_END)
+    is_prime = primes_up_to(m * m)
+    a, b = np.meshgrid(np.arange(-m, m + 1), np.arange(-m, m + 1))
+    a, b = a.ravel(), b.ravel()
+    norm = a * a + b * b
+    inside = norm <= m * m
+    a, b, norm = a[inside], b[inside], norm[inside]
+    off_axis = (a != 0) & (b != 0) & is_prime[norm]
+    side = np.abs(a + b)  # on an axis: |a| or |b|
+    on_axis = ((a == 0) | (b == 0)) & is_prime[side] & (side % 4 == 3)
+    gauss = off_axis | on_axis
+    # When does the circle reach radius ρ? Invert r(s) on a fine grid.
+    grid = np.linspace(0.0, SWEEP_END, 20001)
+    r_grid = radius(grid)
+
+    def when(rho):
+        return np.interp(rho, r_grid, grid)
+
+    points = {
+        "a": a[gauss],
+        "b": b[gauss],
+        "norm": norm[gauss],
+        "axis": on_axis[gauss],
+        "time": when(np.sqrt(norm[gauss])),
+    }
+    primes = np.flatnonzero(is_prime)
+    rings = {"p": primes, "time": when(np.sqrt(primes)), "hit": primes % 4 != 3}
+    return points, rings, when
 
 
-def state(seconds, starts, lengths):
-    """(completed steps k, first shear s1, second shear s2) at a time in the loop."""
-    k = int(np.searchsorted(starts, seconds, side="right")) - 1
-    if k < 0:
-        return 0, 0.0, 0.0
-    tau = (seconds - starts[k]) / lengths[k]
-    if tau >= 1:  # resting after step k
-        return k + 1, 0.0, 0.0
-    s1 = float(smoothstep(tau / SHEAR))
-    s2 = float(smoothstep((tau - (1 - SHEAR)) / SHEAR))
-    return k, s1, s2
+def two_squares(p):
+    """(a, b) with a <= b and a² + b² = p, or None."""
+    for a in range(1, int(np.sqrt(p / 2)) + 1):
+        b = int(round(np.sqrt(p - a * a)))
+        if a * a + b * b == p:
+            return a, b
+    return None
 
 
-def inverse_powers():
-    """M^-k mod N for k = 0 .. STEPS, as integer 2x2 matrices."""
-    inverse = np.array([[1, -1], [-1, 2]], dtype=np.int64) % N
-    out = [np.eye(2, dtype=np.int64)]
-    for _ in range(STEPS):
-        out.append(inverse @ out[-1] % N)
-    return np.array(out)
+def soundtrack(points, rings, style_name, rng):
+    """
+    Mallet garden over a strings swell, from the same event times as the picture.
 
+    - Every prime p = a² + b² (gold ring) strikes a dyad on `style.voice`: scale
+      degree a (low) and b (high), wrapped into two octaves, panned by the angle
+      of (a, b). Events are pulled onto an eighth-note grid at BPM and at most one
+      dyad sounds per slot (the latest prime in it), louder the more primes share
+      the slot, so the dense late sweep becomes a steady arpeggio.
+    - Each axis prime q ≡ 3 (mod 4), lit at radius q, plays a low bass note.
+    - Blue rings (primes ≡ 3 mod 4) make no sound: the silence is the miss.
+    - Strings hold CHORDS, swelling with log r, and the home chord lands at
+      SWEEP_END and rings over the rest.
+    One-shot: circular=False throughout and master(loop=False).
+    """
+    style = STYLES[style_name]
+    scale = Scale(int(rng.choice(style.roots)), style.mode)
+    size = len(scale.steps)
+    track = audio.silence(DURATION)
+    kw = {"circular": False}
+    step = 60.0 / BPM / 2
 
-def _rgb(colour: str):
-    return tuple(int(colour[i : i + 2], 16) for i in (1, 3, 5))
-
-
-def draw_cat(n: int = N) -> np.ndarray:
-    """The picture: a ginger cat's face on a dusk gradient, (n, n, 3) RGB uint8."""
-    big = 4  # draw at 4x and shrink, for clean edges at grid resolution
-    s = n * big / 322.0
-
-    def p(x, y):
-        return int(round(x * s)), int(round(y * s))
-
-    def r(a):
-        return int(round(a * s))
-
-    yy, xx = np.mgrid[0 : n * big, 0 : n * big] / (n * big)
-    top, bottom = np.array(_rgb("#2a7f8f")), np.array(_rgb("#3b1f5e"))
-    g = np.clip(0.65 * yy + 0.35 * xx, 0, 1)[..., None]
-    image = ((1 - g) * top + g * bottom).astype(np.uint8)
-    image = np.ascontiguousarray(image)
-    aa = cv2.LINE_AA
-
-    # A low moon behind, and a few stars.
-    cv2.circle(image, p(258, 62), r(40), _rgb("#f6e7b8"), -1, aa)
-    for x, y, a in (
-        (40, 40, 3),
-        (90, 22, 2),
-        (30, 120, 2),
-        (296, 150, 2),
-        (220, 20, 2),
-    ):
-        cv2.circle(image, p(x, y), r(a), _rgb("#fdf6dc"), -1, aa)
-
-    fur, dark, light = _rgb("#f08a24"), _rgb("#b4520f"), _rgb("#fbf1df")
-    pink, ink = _rgb("#f4a1ae"), _rgb("#1a1020")
-    # Ears.
-    for sign in (-1, 1):
-        outer = np.array(
-            [p(161 + sign * 112, 150), p(161 + sign * 92, 32), p(161 + sign * 36, 104)]
+    hits = rings["hit"] & (rings["time"] < SWEEP_END - 0.05)
+    slots = {}
+    for p, when in zip(rings["p"][hits], rings["time"][hits]):
+        slot = int(round(when / step)) if when > 3.0 else when / step
+        slots.setdefault(slot, []).append(int(p))
+    for slot, ps in sorted(slots.items()):
+        when = slot * step
+        a, b = two_squares(ps[-1])
+        crowd = len(ps)
+        velocity = float(np.clip(0.42 + 0.08 * np.log1p(crowd), 0.3, 0.7))
+        position = float(np.cos(2 * np.arctan2(b, a)))  # 45° centre, axes wide
+        low = scale.hz(a % size)
+        high = scale.hz(size + b % (2 * size))
+        audio.add(track, audio.pan(style.voice(low, 0.8 * velocity), -0.4), when, **kw)
+        audio.add(
+            track, audio.pan(style.voice(high, velocity), 0.6 * position), when, **kw
         )
-        inner = np.array(
-            [p(161 + sign * 98, 132), p(161 + sign * 88, 56), p(161 + sign * 54, 106)]
-        )
-        cv2.fillPoly(image, [outer], fur, aa)
-        cv2.fillPoly(image, [inner], pink, aa)
-    # Head, cheeks and chin.
-    cv2.ellipse(image, p(161, 190), (r(118), r(100)), 0, 0, 360, fur, -1, aa)
-    cv2.ellipse(image, p(161, 248), (r(96), r(62)), 0, 0, 360, fur, -1, aa)
-    # Forehead stripes.
-    for dx, h in ((-26, 44), (0, 56), (26, 44)):
-        poly = np.array([p(161 + dx - 9, 96), p(161 + dx + 9, 96), p(161 + dx, 96 + h)])
-        cv2.fillPoly(image, [poly], dark, aa)
-    for sign in (-1, 1):  # cheek stripes
-        for dy in (0, 20):
-            poly = np.array(
-                [
-                    p(161 + sign * 118, 196 + dy),
-                    p(161 + sign * 116, 208 + dy),
-                    p(161 + sign * 78, 204 + dy),
-                ]
+
+    axis = points["axis"] & (points["a"] > 0)
+    for q, when in zip(points["a"][axis], points["time"][axis]):
+        bass = scale.hz(int(q) % size, octave=-2)
+        audio.add(track, style.bass(bass, 0.55), float(when), **kw)
+
+    # Strings: a chord per stretch of the sweep, louder as the view widens.
+    edges = np.linspace(0.0, SWEEP_END, len(CHORDS))
+    for i, degree in enumerate(CHORDS[:-1]):
+        start, end = edges[i], edges[i + 1]
+        velocity = 0.12 + 0.2 * i / (len(CHORDS) - 1)
+        for note in scale.chord(degree, 3, octave=-1):
+            sound = audio.strings(
+                float(audio.midi_to_hz(note)), end - start + 0.6, velocity, 1.0, 1.2
             )
-            cv2.fillPoly(image, [poly], dark, aa)
-    # Muzzle.
-    for sign in (-1, 1):
-        cv2.ellipse(
-            image, p(161 + sign * 24, 238), (r(32), r(24)), 0, 0, 360, light, -1, aa
+            audio.add(track, sound, start, **kw)
+    for note in scale.chord(CHORDS[-1], 4, octave=-1):
+        sound = audio.strings(
+            float(audio.midi_to_hz(note)), DURATION - SWEEP_END, 0.42, 0.25, 1.4, 0.6
         )
-    cv2.ellipse(image, p(161, 262), (r(30), r(18)), 0, 0, 360, light, -1, aa)
-    # Eyes: green, slit pupils, a highlight.
-    for sign in (-1, 1):
-        c = (161 + sign * 46, 172)
-        cv2.ellipse(image, p(*c), (r(25), r(29)), 0, 0, 360, ink, -1, aa)
-        cv2.ellipse(image, p(*c), (r(22), r(26)), 0, 0, 360, _rgb("#a6e05a"), -1, aa)
-        cv2.ellipse(image, p(*c), (r(5), r(22)), 0, 0, 360, ink, -1, aa)
-        cv2.circle(image, p(c[0] + 8, c[1] - 10), r(5), _rgb("#ffffff"), -1, aa)
-    # Nose and mouth.
-    nose = np.array([p(147, 218), p(175, 218), p(161, 234)])
-    cv2.fillPoly(image, [nose], pink, aa)
-    cv2.line(image, p(161, 234), p(161, 246), ink, r(2.5), aa)
-    cv2.ellipse(image, p(149, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
-    cv2.ellipse(image, p(173, 246), (r(12), r(9)), 0, 0, 180, ink, r(2.5), aa)
-    # Whiskers.
-    for sign in (-1, 1):
-        for dy, ey in ((-6, -18), (2, 2), (10, 22)):
-            cv2.line(
-                image,
-                p(161 + sign * 50, 240 + dy),
-                p(161 + sign * 150, 240 + ey),
-                light,
-                r(2),
-                aa,
-            )
-    return cv2.resize(image, (n, n), interpolation=cv2.INTER_AREA)
+        audio.add(track, sound, SWEEP_END, **kw)
+    audio.add(track, style.voice(scale.hz(size), 0.75), SWEEP_END, **kw)
+    audio.add(track, style.bass(scale.hz(0, octave=-2), 0.7), SWEEP_END, **kw)
+    logger.info(
+        f"Soundtrack: {style_name}, root {scale.root}, {len(slots)} dyads, "
+        f"{int(axis.sum())} bass notes"
+    )
+    track = style.room(track, rng, circular=False)
+    return audio.master(track, loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Arnold's cat map on a 322 x 322 torus, as an exact loop. The picture is a grid of
-    N = 322 cells (a cat's face drawn with cv2). One step of the map is M = [[2, 1],
-    [1, 1]] = A·B with the shears B: (x, y) -> (x, y + x) and A: (x, y) -> (x + y, y),
-    mod N. M has period 24 mod 322 (Pisano-type period; 322 is the Lucas number L12)
-    and M^12 = -I, so the cat returns rotated by 180° halfway and exactly at the end.
+    Fermat's two-squares theorem and the Gaussian primes, as a one-shot.
 
-    Time: the loop's 15 s hold HOLD = 1 s on each return and spread the 24 steps over
-    the rest, longer near the returns (weight 1 + SLOW·exp(-(d/2.2)²), d = steps to
-    the nearest return). Within a step the two shears are animated continuously:
-    column i slides by s1·i cells, then row j by s2·j cells (smoothstep over SHEAR
-    of the step each), wrapping round the torus. A display point (u, v) in cell units
-    shows the cell x1 = ⌊u − s2⌊v⌋⌋, y1 = ⌊v − s1·x1⌋ of the image after k steps,
-    which is the cell M^-k (x1, y1) mod N of the original. Integer arithmetic, so
-    the map is exact and the loop closes bit for bit.
+    A circle centred on the origin of the integer lattice Z² grows with radius
+    r(s) (PCHIP through KEYS in log r, easing out into R_END = 64 at
+    s = SWEEP_END, then resting). When r² passes a rational prime p its ring
+    flashes: gold if p = 2 or p ≡ 1 (mod 4), when the circle passes through the
+    8 lattice points (±a, ±b), (±b, ±a) with a² + b² = p (4 for p = 2), which
+    light up; blue if p ≡ 3 (mod 4), when it passes through none. Points
+    (±q, 0), (0, ±q) light when r = q for primes q ≡ 3 (mod 4). The lit set is
+    exactly the Gaussian primes of norm <= R_END², in cyan on the axes and
+    coloured by norm elsewhere. The camera's half-width is
+    hypot(ZOOM_MARGIN r, ZOOM_MIN), so the view pulls back from a close-up of
+    the first lattice points to the whole disc; grey lattice points fade out
+    as their spacing drops below ~12 px.
 
-    Rendering: one integer gather per 2x supersampled pixel of the square on the GPU
-    (torch), average-pooled to 1x and composited over a gradient with LaTeX text (a
-    step counter n, the map, a note at the halfway return), render_frames(parallel=
-    False). Nothing is random, so --seed does not change the picture.
+    Text (Computer Modern via matplotlib mathtext, typeset once): a title, a
+    ticker naming each prime up to TICKER_LAST as a² + b² or ≠ a² + b², then
+    the theorem from THEOREM_AT.
 
-    Soundtrack (`soundtrack`, ambient Drone & pad with a felt-piano lead): pad and
-    "u" choir chords I, IV, vi, V on the step schedule, lowpass opening with the
-    scramble, one piano note per completed step (pitch by distance from the nearest
-    return), rolled vi / I chords plus a bell at the two returns, delay and a 5 s
-    reverb, all circular. `--audio-only harp` swaps the lead for a harp pluck. The
-    posted soundtrack is LEAD = "felt_piano" with --seed 0 (settings.audio_rng
-    picks root MIDI 52 and the room).
+    Rendering: every event time comes from inverting r(s) once, so each frame
+    is a pure function of s: cv2 circles at 2x (lattice, ring flashes, points
+    with a short flare), INTER_AREA downsample, Gaussian glow, text, a fade in
+    the last FADE s, on the render_frames thread pool. Nothing is random:
+    --seed does not change the picture. The soundtrack (`soundtrack`, Mallet
+    garden over strings) uses settings.audio_rng for its root and reverb; the
+    posted one is STYLE = "mallet_garden" with --seed 0 (root MIDI 61). An
+    --audio-only tag naming a common.music style swaps the style.
     """
     settings = settings or ImageProcessingSettings(1)
-    device = select_device()
-    starts, lengths = schedule()
-    powers = torch.tensor(inverse_powers(), device=device)
-    logger.info(f"Cat map period mod {N}: {STEPS} steps, M^{HALF} = -I")
-
-    def tensor(a, dtype=torch.float32):
-        return torch.tensor(np.asarray(a), device=device, dtype=dtype)
-
-    cat = tensor(draw_cat().reshape(-1, 3))
-    px = SIDE * SS
-    centres = (torch.arange(px, device=device, dtype=torch.float64) + 0.5) * N / px
-    v, u = torch.meshgrid(centres, centres, indexing="ij")
-    v_cell = torch.floor(v)
-
-    # Background with the static text, RGB 0..255.
-    rows = np.linspace(0, 1, HEIGHT)[:, None, None]
-    top, bottom = np.array(_rgb(BG_TOP)), np.array(_rgb(BG_BOTTOM))
-    background = ((1 - rows) * top + rows * bottom) * np.ones((1, WIDTH, 1))
-    background = background.astype(np.float32)
-    line = np.array(_rgb(FRAME_LINE), np.float32)
-    background[TOP - 3 : TOP + SIDE + 3, LEFT - 3 : LEFT + SIDE + 3] = line
-    text, dim, accent = (
-        np.array(_rgb(c), np.float32) for c in (TEXT, TEXT_DIM, ACCENT)
+    radius = radius_curve()
+    points, rings, when = lattice_events(radius)
+    logger.info(
+        f"{len(points['a'])} Gaussian primes, {len(rings['p'])} rings; "
+        f"p = 5 at {when(np.sqrt(5)):.2f} s, p = 41 at {when(np.sqrt(41)):.2f} s"
     )
-    title = r"$\mathrm{Arnold}\text{'}\mathrm{s\ cat\ map}$"
-    for tex, size, y, colour in (
-        (title, 74, 92, text),
-        (r"$(x{,}\,y)\ \mapsto\ (2x+y{,}\ x+y)\ \mathrm{mod}\ 322$", 54, 192, accent),
-        (
-            r"$\mathrm{on\ a}\ 322\times 322\ \mathrm{grid{,}\ the\ cat\ returns\ after}\ 24\ \mathrm{steps}$",
-            42,
-            284,
-            dim,
-        ),
-    ):
-        blit_mask(
-            background, latex_mask(tex, size), WIDTH // 2, y, colour, anchor="centre"
-        )
-    background = tensor(background)
 
-    def layer(tex, size, y, colour):
-        """A text mask as (alpha, premultiplied colour) tensors and its box."""
-        mask = latex_mask(tex, size)
-        h, w = mask.shape
-        x = WIDTH // 2 - w // 2
-        alpha = tensor(mask[..., None])
-        return alpha, alpha * tensor(colour), (y, y + h, x, x + w)
+    W2, H2 = WIDTH * SS, HEIGHT * SS
+    shift = 3
+    one = 1 << shift
+    bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
+    lattice_colour = np.array(hex_to_bgr(LATTICE), np.float32)
+    lut = palette_lut(HIT_PALETTE, 256)[:, ::-1] * 255  # BGR
+    level = np.sqrt(points["norm"]) / R_END
+    point_colour = lut[np.clip(level * 255, 0, 255).astype(int)]
+    point_colour[points["axis"]] = hex_to_bgr(AXIS)
+    hit_colour = np.array(hex_to_bgr(HIT_PALETTE[1]), np.float32)
+    miss_colour = np.array(hex_to_bgr(MISS), np.float32)
+    sweep_colour = np.array(hex_to_bgr(SWEEP), np.float32)
+    order = np.argsort(points["time"])
+    for key in points:
+        points[key] = points[key][order]
+    point_colour = point_colour[order]
 
-    counters = [layer(rf"$n = {k}$", 76, 1432, text) for k in range(STEPS + 1)]
-    upside = layer(r"$\mathrm{halfway{,}\ upside\ down}$", 46, 1540, accent)
-    half_time = starts[HALF] - HOLD / 2  # middle of the halfway rest
-
-    def put(image, overlay, a=1.0):
-        alpha, colour, (y0, y1, x0, x1) = overlay
-        region = image[y0:y1, x0:x1]
-        region.mul_(1 - a * alpha).add_(a * colour)
+    # Text, once.
+    title = latex_mask(r"$\mathrm{Which\ primes\ are\ a\ sum\ of\ two\ squares?}$", 50)
+    ticker = []  # (time, mask, colour)
+    for p, t_p, hit in zip(rings["p"], rings["time"], rings["hit"]):
+        if p > TICKER_LAST:
+            break
+        if hit:
+            a, b = two_squares(int(p))
+            tex = rf"${p} = {a}^2 + {b}^2$"
+        else:
+            tex = rf"${p} \neq a^2 + b^2$"
+        colour = HIT_PALETTE[1] if hit else MISS
+        ticker.append((float(t_p), latex_mask(tex, 100), hex_to_bgr(colour)))
+    ticker_times = np.array([t for t, _, _ in ticker])
+    theorem = latex_mask(
+        r"$p = a^2 + b^2 \ \Leftrightarrow\ p \equiv 1\ (\mathrm{mod}\ 4)$", 74
+    )
+    credit = latex_mask(
+        r"$\mathrm{for\ odd\ primes\ }p\mathrm{{,}\ Fermat{,}\ 25\ December\ 1640}$", 40
+    )
+    text, text_dim = hex_to_bgr(TEXT), hex_to_bgr(TEXT_DIM)
 
     def render(frame):
-        seconds = frame / FRAME_COUNT * DURATION
-        k, s1, s2 = state(seconds, starts, lengths)
-        x1 = torch.remainder(torch.floor(u - s2 * v_cell), N).long()
-        y1 = torch.remainder(torch.floor(v - s1 * x1), N).long()
-        m = powers[k % STEPS]
-        x0 = (m[0, 0] * x1 + m[0, 1] * y1) % N
-        y0 = (m[1, 0] * x1 + m[1, 1] * y1) % N
-        square = cat[(y0 * N + x0).reshape(-1)].reshape(px, px, 3)
-        square = F.avg_pool2d(square.permute(2, 0, 1)[None], SS)[0].permute(1, 2, 0)
-        image = background.clone()
-        image[TOP : TOP + SIDE, LEFT : LEFT + SIDE] = square
-        put(image, counters[k])
-        a = float(smoothstep((1.6 - abs(seconds - half_time)) / 0.3))
-        if a > 0:
-            put(image, upside, a)
+        s = frame / (FRAME_COUNT - 1) * DURATION
+        r = float(radius(s))
+        half = np.hypot(ZOOM_MARGIN * r, ZOOM_MIN)
+        scale = (WIDTH / 2) / half  # px per lattice unit
+        canvas = np.zeros((H2, W2, 3), np.float32)
+
+        def sx(x):
+            return np.round((CX + scale * x) * SS * one).astype(np.int64)
+
+        def sy(y):
+            return np.round((CY - scale * y) * SS * one).astype(np.int64)
+
+        dot = float(np.clip(0.15 * scale, 2.6, 32.0))
+
+        # Grey lattice points, while they are far enough apart to read.
+        fade = float(smoothstep((scale - 11.0) / 20.0))
+        if fade > 0:
+            nx = int(np.ceil(WIDTH / 2 / scale)) + 1
+            ny = int(np.ceil(HEIGHT / scale)) + 1
+            colour = (lattice_colour * fade).tolist()
+            lr = int(round(0.45 * dot * SS * one))
+            for j in range(-ny, ny + 1):
+                y = int(sy(j))
+                if not LATTICE_TOP * SS * one <= y <= H2 * one + lr:
+                    continue
+                for i in range(-nx, nx + 1):
+                    cv2.circle(
+                        canvas, (int(sx(i)), y), lr, colour, -1, cv2.LINE_AA, shift
+                    )
+
+        # Ring flashes of recent primes.
+        recent = (rings["time"] <= s) & (rings["time"] > s - 5 * RING_LIFE)
+        width = max(1, int(round(1.6 * SS)))
+        crowd = 0.75 * float(np.clip(scale / 60.0, 0.12, 1.0))  # dim when packed
+        for p, t_p, hit in zip(
+            rings["p"][recent], rings["time"][recent], rings["hit"][recent]
+        ):
+            strength = np.exp(-(s - t_p) / RING_LIFE)
+            colour = (hit_colour if hit else miss_colour) * (crowd * strength)
+            rr = int(round(np.sqrt(p) * scale * SS * one))
+            cv2.circle(
+                canvas,
+                (int(sx(0)), int(sy(0))),
+                rr,
+                colour.tolist(),
+                width,
+                cv2.LINE_AA,
+                shift,
+            )
+        # The sweeping circle itself.
+        if s < SWEEP_END:
+            sweep = 0.35 * float(smoothstep((SWEEP_END - s) / 0.8))
+            cv2.circle(
+                canvas,
+                (int(sx(0)), int(sy(0))),
+                int(round(r * scale * SS * one)),
+                (sweep_colour * sweep).tolist(),
+                width,
+                cv2.LINE_AA,
+                shift,
+            )
+
+        # The lit Gaussian primes, flaring as they appear.
+        lit = int(np.searchsorted(points["time"], s, side="right"))
+        if lit:
+            age = s - points["time"][:lit]
+            flare = np.exp(-age / FLASH)
+            radii = np.round(dot * (1 + 0.9 * flare) * SS * one).astype(int)
+            colours = point_colour[:lit] * (1 + 0.45 * flare[:, None])
+            xs, ys = sx(points["a"][:lit]), sy(points["b"][:lit])
+            for x, y, rad, c in zip(
+                xs.tolist(), ys.tolist(), radii.tolist(), colours.tolist()
+            ):
+                cv2.circle(canvas, (x, y), rad, c, -1, cv2.LINE_AA, shift)
+
+        image = cv2.resize(canvas, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
+        glow = cv2.GaussianBlur(image, (0, 0), GLOW_SIGMA)
+        image = image + GLOW_GAIN * glow + bg
+
+        # Text.
+        intro = float(smoothstep(s / 0.3))
+        blit_mask(image, title, WIDTH // 2, TITLE_Y, text, intro, "centre")
+        k = int(np.searchsorted(ticker_times, s, side="right")) - 1
+        ticker_out = float(smoothstep((THEOREM_AT - s) / 0.4))
+        if k >= 0 and ticker_out > 0:
+            t_k, mask, colour = ticker[k]
+            pop = float(smoothstep((s - t_k) / 0.12))
+            blit_mask(
+                image, mask, WIDTH // 2, TICKER_Y, colour, pop * ticker_out, "centre"
+            )
+        show = float(smoothstep((s - THEOREM_AT) / 0.6))
+        if show > 0:
+            blit_mask(image, theorem, WIDTH // 2, TICKER_Y + 10, text, show, "centre")
+            late = float(smoothstep((s - THEOREM_AT - 0.5) / 0.6))
+            blit_mask(
+                image, credit, WIDTH // 2, TICKER_Y + 120, text_dim, late, "centre"
+            )
+
+        out = float(smoothstep((DURATION - s) / FADE))
+        if out < 1:
+            image = bg + out * (image - bg)
         return image
 
-    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
-    lead = settings.audio_tag if settings.audio_tag in LEADS else LEAD
-    track = soundtrack(lead, starts, lengths, settings.audio_rng)
+    render_frames(settings, render, FRAME_COUNT)
+    style = settings.audio_tag if settings.audio_tag in STYLES else STYLE
+    track = soundtrack(points, rings, style, settings.audio_rng)
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
-
-
-def scramble(seconds, starts, lengths):
-    """How far the picture is from a return, 0 (a cat) .. 1 (deep static), smooth in t."""
-    k, s1, s2 = state(seconds, starts, lengths)
-    steps = k + 0.5 * (s1 + s2)  # continuous count of steps done
-    near = min(steps, abs(steps - HALF), STEPS - steps)
-    return float(smoothstep(near / 5.0))
-
-
-def soundtrack(lead, starts, lengths, rng):
-    """
-    Ambient, from the same schedule as the picture; an exact loop (everything wraps
-    circularly). A bed of pad and "u" choir chords: I around the cat, IV as it
-    scrambles, vi around the upside-down cat, V as it scrambles again, back to I.
-    The bed's lowpass opens with the scramble (crossfade of a dark and a bright
-    filtered copy, weighted by `scramble(t)`). One soft lead note (felt piano or
-    harp) as each step completes, its pitch climbing the scale with the distance
-    from the nearest return, so it rises into the static and falls back out; at
-    the two returns a rolled chord instead (I for the cat, vi for the upside-down
-    cat) with a quiet bell an octave up. Delay, long reverb, master(loop=True).
-    """
-    voice = LEADS[lead]
-    root = int(rng.choice(ROOTS))
-    scale = Scale(root, "major")
-    ends = starts + lengths  # when each step completes
-    cat_back, upside_back = ends[-1], ends[HALF - 1]
-
-    # The bed.
-    bed = audio.silence(DURATION)
-    sections = (  # (degree, start, end)
-        (0, cat_back - 1.6, DURATION + 2.6),
-        (3, 2.4, 5.6),
-        (5, upside_back - 1.6, upside_back + 2.6),
-        (4, upside_back + 2.4, cat_back - 1.4),
-    )
-    for degree, start, end in sections:
-        for i, midi in enumerate(scale.chord(degree, 3)):
-            hz = float(audio.midi_to_hz(midi))
-            held = audio.pad(hz, end - start, 0.26, attack=1.4, release=2.2)
-            audio.add(bed, audio.pan(held[:, 0], 0.45 * (i - 1)), start)
-            sung = audio.choir(
-                hz, end - start, 0.11, attack=1.6, release=2.2, vowel="u"
-            )
-            audio.add(bed, sung, start)
-    bed = audio.highpass(bed, 120.0)
-    weight = np.array(
-        [scramble(s, starts, lengths) for s in np.arange(0, DURATION, 0.01)]
-    )
-    weight = np.interp(
-        np.arange(len(bed)) / audio.SAMPLE_RATE, np.arange(len(weight)) * 0.01, weight
-    )[:, None]
-    track = (1 - weight) * audio.lowpass(bed, 700.0) + weight * audio.lowpass(
-        bed, 2600.0
-    )
-
-    # The lead: one note per completed step, a rolled chord at each return.
-    for k, when in enumerate(ends):
-        done = k + 1
-        if done in (HALF, STEPS):
-            degree = 0 if done == STEPS else 5
-            for j, midi in enumerate(scale.chord(degree, 4, octave=1)):
-                note = voice(float(audio.midi_to_hz(midi)), 0.42 - 0.04 * j)
-                audio.add(track, audio.pan(note, -0.3 + 0.2 * j), when + 0.07 * j)
-            shine = audio.bell(scale.hz(degree, 2), 0.16, length=5.0)
-            audio.add(track, audio.pan(shine, 0.2), when + 0.3)
-            continue
-        near = min(done, abs(done - HALF), STEPS - done)  # 1 .. 5
-        degree = 2 * near - 1 if near > 1 else 1  # 1, 3, 5, 7, 9: up the scale
-        note = voice(scale.hz(degree, 1), 0.30 + 0.03 * near)
-        audio.add(track, audio.pan(note, 0.35 if k % 2 else -0.35), when)
-
-    track = audio.delay(track, 0.42, feedback=0.35, wet=0.2)
-    track = audio.reverb(track, rng, rt60=5.0, wet=0.42, tone=4200.0)
-    logger.info(
-        f"Soundtrack ({lead}): root {root}, cat back at {cat_back:.2f} s, "
-        f"upside down at {upside_back:.2f} s"
-    )
-    return audio.master(track)
 
 
 if __name__ == "__main__":

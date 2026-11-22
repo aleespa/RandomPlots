@@ -1,378 +1,376 @@
 """
-The Room You Can't Light
+Random Numbers That Refuse to Touch
 
-A room of mirrors that one candle can never fully light. Light bounces off
-the walls forever, yet the two side wings stay pitch black, though they open
-wide onto the glowing domes.
+Each thread is one eigenvalue of a random matrix, a 72×72 grid of random numbers
+that slowly changes. At the top only its diagonal is switched on, so the eigenvalues
+are just independent random numbers: they wander, collide and cross freely. Going
+down, the other entries fade in and the eigenvalues start to feel each other.
 
-The trick is Roger Penrose's, from 1958. Each dome is half an ellipse, and
-the thin walls end exactly at its two focal points. In an elliptical mirror, a
-ray passing between the foci always bounces back between them; a ray passing
-outside them stays outside. Light from the hall can only fall back into the
-hall.
+By the bottom, no two threads touch. They swerve apart at the last moment and keep
+an almost even spacing. This is level repulsion, the heart of random matrix theory:
+Eugene Wigner found it in the energy levels of heavy nuclei, and the same spacings
+turn up in the zeros of the Riemann zeta function and in bus arrivals in Cuernavaca.
 
-Then a blue candle is lit in one wing. It lights both wings, even the far
-one, but never the hall between them. Two lights in one room that never meet.
+Every collision strikes a marimba bar, pitched by where it happens. The clatter
+thins to the odd near miss as the threads learn to dodge, a soft chord settles in,
+and the last row of eigenvalues plays itself, each note waiting out the gap to
+its neighbour.
 
-Every bell is a ray striking a mirror: high for the warm candle, low for the
-blue, higher notes higher up the room, and a gong as each candle is lit.
-
-Made with Python & PyTorch. Sound synthesized in NumPy.
-#penroseunilluminableroom #optics #billiards #mathart #randomplots
+Made with Python, NumPy & OpenCV. Sound synthesized in NumPy.
+#randommatrixtheory #eigenvalues #probability #mathart #randomplots
 """
 
 import gc
 
 import cv2
 import numpy as np
-import torch
 from loguru import logger
 
 from common import audio
-from common.gpu import blur, gaussian_kernel, select_device, wide_blur
 from common.image_processing import ImageProcessingSettings
 from common.music import STYLES, Scale
-from common.video import FPS, HEIGHT, WIDTH, frame_count, render_frames, smoothstep
+from common.video import (
+    FPS,
+    HEIGHT,
+    WIDTH,
+    frame_count,
+    hex_to_bgr,
+    palette_lut,
+    render_frames,
+    smoothstep,
+)
 
-DURATION = 15.0
+# Opening line over the first 3 s, drawn by render_frames.
+HOOK = 'Watch random numbers learn to avoid each other'
+HOOK_Y = 780
+HOOK_COLOUR = "#f4f0e7"
+
+DURATION = 15.0  # seconds, one-shot
 FRAME_COUNT = frame_count(DURATION)
 
-# --- The room (px, y up, origin at the centre of the frame) ------------------------
-SEMI_A, SEMI_B = 470.0, 400.0  # each dome is the half-ellipse x^2/a^2 + y'^2/b^2 = 1
-HALF_H = 400.0  # the domes' flat sides sit at y = +-HALF_H
-FOCUS = float(np.sqrt(SEMI_A**2 - SEMI_B**2))  # the partitions stand at x = +-FOCUS
-CENTRE = (WIDTH / 2, HEIGHT / 2)
+# --- The matrices -------------------------------------------------------------------
+N = 72  # levels
+SIGMA_D = 0.8  # spread of the independent (diagonal) levels
+EPS = 0.45  # how far the free levels wander: M0 + EPS (M1 cos θ + M2 sin θ)
+EPS_G = 1.2  # the same for the coupled matrix, whose levels move less
+TURNS = 1.1  # turns of θ from the top of the screen to the bottom
+U_ON, U_FULL = 0.22, 0.78  # coupling starts / is full at these fractions of the height
+G_MIN = 0.01  # the first notch of the mixing angle, as a fraction of 90°
 
-# --- The candles ----------------------------------------------------------------------
-# (position, lit at s, colour in linear RGB). Rays leave each one at evenly spaced
-# angles, with a random phase.
-CANDLES = (
-    ((-70.0, -170.0), 0.0, (1.0, 0.52, 0.16)),  # warm, in the hall
-    ((-(SEMI_A + FOCUS) / 2, 140.0), 6.5, (0.22, 0.52, 1.0)),  # blue, in the left wing
-)
-RAYS = 4000  # per candle
-SPEED = 900.0  # px of path per second
-HEAD_START = 140.0  # px of path the first candle's light has already run at t = 0
-STEP = 1.5  # px between samples along each ray
+# --- Layout & time --------------------------------------------------------------------
+Y_TOP, Y_BOTTOM = 150, 1790  # px: the drawing area
+X_LEFT, X_RIGHT = 40, WIDTH - 40
+LAMBDA_MAX = 2.25  # |λ| mapped to the margins
+T_PEN = 13.3  # s: the pen reaches the bottom
+FADE = 0.4  # s fade at the end
+SS = 2  # supersampling of the static drawing
 
-# --- Look -----------------------------------------------------------------------------
-BACKGROUND = (0.012, 0.010, 0.016)
-EXPOSURE, GAMMA = 0.55, 0.8  # light = 1 - exp(-EXPOSURE * density^GAMMA)
-SETTLE = 2200.0  # px of path: the exposure stops adapting once light ran this far
-SOFT = 1.0  # px blur of the ray density
-SPARK_TRAIL, SPARK_GAIN = 28, 0.06  # samples of comet trail at each ray's head
-GLOWS = ((10.0, 2, 0.10), (40.0, 8, 0.06))  # (sigma px, shrink, gain) halos
-WALL_COLOUR, WALL_ALPHA, WALL_WIDTH = (0.86, 0.80, 0.70), 0.7, 3
-FLAME_SIGMA = 7.0  # px
+# --- Collisions ----------------------------------------------------------------------
+TOUCH = 0.12  # a closest approach under this many local spacings is a touch
+CLOSE = 0.45  # ... and under this, once coupled, a close call (sound only)
+U_CLOSE = 0.6  # close calls are heard below this height
+FLASH = 0.55  # s of afterglow for a touch
+
+# --- Look -------------------------------------------------------------------------
+BACKGROUND = "#05070d"
+PALETTE = ["#2f6bff", "#6fc3e8", "#f3eedb", "#ffb94a", "#ff6a3d"]  # by position
+BEAD = hex_to_bgr("#fff4dc")
+SPARK = np.array(hex_to_bgr("#fffaf0"), np.float32)
+LINE_W = 1.6  # px
 
 # --- Sound ----------------------------------------------------------------------------
-STYLE = "gamelan"  # common.music.STYLES; an --audio-only tag naming one overrides it
-LISTENED = ((2, 1), (2, 2))  # rays sounded per candle: before / after the blue candle
-DEGREES = 9  # pelog degrees from the bottom of the room to the top
-MIN_GAP = 0.14  # s: a ray's taps closer than this to its previous one are skipped
+STYLE = (
+    "mallet_garden"  # common.music.STYLES; an --audio-only tag naming one overrides it
+)
+NOTE_GAP = 0.13  # s: at most one touch note per gap
+CLOSE_GAP = 0.4  # s: ... and one close-call note
+ROLL = 9  # central levels of the last row played as the closing roll
 
 
-def wall_hit(p: np.ndarray, d: np.ndarray):
-    """Distance along d from each p (inside the room) to the next wall, and its normal."""
-    best = np.full(len(p), np.inf)
-    normal = np.zeros_like(p)
-    for side in (1.0, -1.0):  # the two domes, centred at (0, +-HALF_H)
-        q = p - np.array([0.0, side * HALF_H])
-        qa = d[:, 0] ** 2 / SEMI_A**2 + d[:, 1] ** 2 / SEMI_B**2
-        qb = 2 * (q[:, 0] * d[:, 0] / SEMI_A**2 + q[:, 1] * d[:, 1] / SEMI_B**2)
-        qc = q[:, 0] ** 2 / SEMI_A**2 + q[:, 1] ** 2 / SEMI_B**2 - 1
-        disc = qb * qb - 4 * qa * qc
-        root = np.sqrt(np.maximum(disc, 0))
-        for s in ((-qb - root) / (2 * qa), (-qb + root) / (2 * qa)):
-            y = q[:, 1] + s * d[:, 1]
-            ok = (disc > 0) & (s > 1e-6) & (side * y >= -1e-9) & (s < best)
-            best = np.where(ok, s, best)
-            hit = q + s[:, None] * d
-            n = np.stack([hit[:, 0] / SEMI_A**2, hit[:, 1] / SEMI_B**2], 1)
-            normal[ok] = n[ok] / np.linalg.norm(n[ok], axis=1, keepdims=True)
-    for x in (SEMI_A, -SEMI_A, FOCUS, -FOCUS):  # outer walls and the two partitions
-        with np.errstate(divide="ignore", invalid="ignore"):
-            s = (x - p[:, 0]) / d[:, 0]
-        y = p[:, 1] + s * d[:, 1]
-        ok = (s > 1e-6) & (np.abs(y) <= HALF_H) & (s < best)
-        best = np.where(ok, s, best)
-        normal[ok] = (1.0, 0.0)
-    return best, normal
+def gue(rng):
+    """A complex Hermitian Gaussian matrix with E|H_ij|^2 = 1/N (spectrum ~ [-2, 2])."""
+    x = (rng.standard_normal((N, N)) + 1j * rng.standard_normal((N, N))) / np.sqrt(2)
+    return (x + x.conj().T) / np.sqrt(2 * N)
 
 
-def trace(source, angles, length: float) -> dict:
+def mixing(u):
     """
-    Bounce rays from `source` until each has run `length` px: the arc length at
-    which each straight segment starts, its start point and direction,
-    (rays, segments) arrays. Rays that are done keep 'bouncing' at zero cost.
+    The mixing angle φ(u): 0 above U_ON, then (π/2) G_MIN^(1 - w), w eased from
+    0 to 1 by U_FULL, so the coupling sin φ grows geometrically and lands
+    smoothly on a pure random matrix.
     """
-    p = np.tile(np.array(source, float), (len(angles), 1))
-    d = np.stack([np.cos(angles), np.sin(angles)], 1)
-    s = np.zeros(len(angles))
-    keep = [(s.copy(), p.copy(), d.copy())]
-    while s.min() <= length:
-        active = s <= length
-        step, n = wall_hit(p[active], d[active])
-        pa, da = p[active] + step[:, None] * d[active], d[active]
-        da = da - 2 * (da * n).sum(1, keepdims=True) * n
-        da /= np.linalg.norm(da, axis=1, keepdims=True)
-        p[active], d[active] = pa, da
-        s[active] += step
-        s[~active] = np.inf
-        keep.append((s.copy(), p.copy(), d.copy()))
-        if len(keep) > 20_000:
-            raise RuntimeError("a ray is stuck bouncing")
-    out = {key: np.stack([k[i] for k in keep], 1) for i, key in enumerate("spd")}
-    out["s"][:, 0] = 0.0
+    w = smoothstep((np.asarray(u, float) - U_ON) / (U_FULL - U_ON))
+    phi = 0.5 * np.pi * G_MIN ** (1.0 - w)
+    return np.where(np.asarray(u) < U_ON, 0.0, phi)
+
+
+def pen_u(t):
+    """Fraction of the height drawn at time t: steady, easing into the bottom."""
+    x = np.clip(np.asarray(t, float) / T_PEN, 0.0, 1.0)
+    return 0.06 + 0.94 * (1.0 - (1.0 - x) ** 1.6)
+
+
+def pen_time(u):
+    """Inverse of pen_u (u below its start maps to 0)."""
+    x = np.clip((np.asarray(u, float) - 0.06) / 0.94, 0.0, 1.0)
+    return T_PEN * (1.0 - (1.0 - x) ** (1 / 1.6))
+
+
+def spectra(rng, rows):
+    """Sorted eigenvalues of H(u) for the given heights u: shape (len(rows), N)."""
+    diag = [SIGMA_D * rng.standard_normal(N) for _ in range(3)]
+    full = [gue(rng) for _ in range(3)]
+    norm, norm_g = np.sqrt(1 + EPS**2), np.sqrt(1 + EPS_G**2)
+    out = np.empty((len(rows), N))
+    for k, u in enumerate(rows):
+        theta = 2 * np.pi * TURNS * u
+        c, s = np.cos(theta), np.sin(theta)
+        d = (diag[0] + EPS * (c * diag[1] + s * diag[2])) / norm
+        f = (full[0] + EPS_G * (c * full[1] + s * full[2])) / norm_g
+        phi = float(mixing(u))
+        out[k] = np.linalg.eigvalsh(np.cos(phi) * np.diag(d) + np.sin(phi) * f)
     return out
 
 
-def path_length(seconds, lit: float, head: float = 0.0):
-    """How far a candle's light has run at `seconds` (0 before it is lit)."""
-    return np.where(seconds >= lit, head + SPEED * (seconds - lit), 0.0)
-
-
-def in_wing(x, y):
-    return (abs(x) > FOCUS) & (abs(x) < SEMI_A) & (abs(y) < HALF_H)
-
-
-def in_hall(x, y):
-    return (abs(x) < FOCUS) & (abs(y) < HALF_H)
-
-
-def sample(room: dict, count: int, device) -> torch.Tensor:
+def touches(lam, limit=TOUCH):
     """
-    Pixel index of every ray every STEP px along its path, (count, rays) int32,
-    sample-major so any prefix is 'all the light up to that length'.
+    Closest approaches of neighbouring levels: local minima in u of the gap,
+    in units of the local mean spacing (the mean of the 7 surrounding gaps).
+    Returns arrays (row index, pair index, normalised gap) with gap < limit.
     """
-    to = dict(device=device, dtype=torch.float64)
-    starts = torch.tensor(room["s"], **to)
-    points = torch.tensor(room["p"], **to)
-    dirs = torch.tensor(room["d"], **to)
-    starts = torch.where(torch.isinf(starts), torch.full_like(starts, 1e30), starts)
-    rays = starts.shape[0]
-    out = torch.empty(count, rays, dtype=torch.int32, device=device)
-    leaks = 0
-    for j0 in range(0, count, 1000):
-        j = torch.arange(j0, min(count, j0 + 1000), device=device, dtype=torch.float64)
-        query = (j * STEP)[None, :].expand(rays, -1).contiguous()
-        k = (torch.searchsorted(starts, query, right=True) - 1).clamp_min(0)
-        s0 = starts.gather(1, k)
-        x = points[..., 0].gather(1, k) + (query - s0) * dirs[..., 0].gather(1, k)
-        y = points[..., 1].gather(1, k) + (query - s0) * dirs[..., 1].gather(1, k)
-        leaks += int(in_wing(x, y).sum()) if room["home"] == "hall" else 0
-        leaks += int(in_hall(x, y).sum()) if room["home"] == "wing" else 0
-        px = torch.round(CENTRE[0] + x).clamp(0, WIDTH - 1).long()
-        py = torch.round(CENTRE[1] - y).clamp(0, HEIGHT - 1).long()
-        out[j0 : j0 + len(j)] = (py * WIDTH + px).T.to(torch.int32)
-    logger.info(f"Sampled {count:,} x {rays:,} points; {leaks} forbidden samples")
-    return out
+    gaps = np.diff(lam, axis=1)  # (rows, N - 1)
+    pad = np.pad(gaps, ((0, 0), (3, 3)), mode="edge")
+    local = np.mean([pad[:, k : k + N - 1] for k in range(7)], axis=0)
+    s = gaps / local
+    minimum = (s[1:-1] <= s[:-2]) & (s[1:-1] < s[2:]) & (s[1:-1] < limit)
+    r, i = np.nonzero(minimum)
+    return r + 1, i, s[r + 1, i]
 
 
-def walls() -> np.ndarray:
-    """The mirrors as an alpha mask (H, W), drawn at 4x and shrunk."""
-    big = np.zeros((HEIGHT * 4, WIDTH * 4), np.uint8)
-    u = np.linspace(0, np.pi, 1500)
-    dome = np.stack([SEMI_A * np.cos(u), HALF_H + SEMI_B * np.sin(u)], 1)
-    outline = np.concatenate([dome, dome[::-1] * [1, -1]])
-    lines = [outline]
-    for x in (FOCUS, -FOCUS):
-        lines.append(np.array([[x, HALF_H], [x, -HALF_H]]))
-    for pts, closed in zip(lines, (True, False, False)):
-        pix = np.stack([CENTRE[0] + pts[:, 0], CENTRE[1] - pts[:, 1]], 1)
-        cv2.polylines(
-            big,
-            [np.round(pix * 16 * 4).astype(np.int32)],
-            closed,
-            255,
-            WALL_WIDTH * 4,
-            cv2.LINE_AA,
-            4,
-        )
-    for x in (FOCUS, -FOCUS):  # the foci, where the partitions end
-        for y in (HALF_H, -HALF_H):
-            centre = (int(4 * (CENTRE[0] + x)), int(4 * (CENTRE[1] - y)))
-            cv2.circle(big, centre, 4 * WALL_WIDTH * 2, 255, -1, cv2.LINE_AA)
-    mask = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
-    return mask.astype(np.float32) / 255.0
+def lam_to_x(lam):
+    return X_LEFT + (X_RIGHT - X_LEFT) * (np.asarray(lam) + LAMBDA_MAX) / (
+        2 * LAMBDA_MAX
+    )
 
 
-def soundtrack(rooms: list, style_name: str, rng: np.random.Generator):
+def soundtrack(lam, rows, events, style_name, rng):
     """
-    A one-shot in pelog bells.
-
-    - A gong (the style's bass, two octaves down) and a bell on the root as
-      each candle is lit, at 0 s and at the blue candle's time.
-    - Wall strikes: LISTENED rays of each candle (chosen with the audio rng)
-      sound every bounce at its exact time, (arc length) / SPEED after the
-      candle was lit. Pitch is the height of the bounce in the room (DEGREES
-      pelog steps bottom to top), the warm candle an octave above the blue
-      one; pan is x. Taps closer than MIN_GAP to the ray's previous one are
-      skipped (grazing hops in the domes), and fewer warm rays sound once the
-      blue candle is lit, to keep the density near 5 notes/s.
-    - A quiet pad on the root and fifth, joined by the third when the blue
-      candle is lit.
+    One-shot. Touches (closest approaches under TOUCH spacings) in the order the
+    pen reaches them strike the style's voice, at most one per NOTE_GAP s: pitch
+    from the position (left low, right high, scale degrees -4 .. 9), louder the
+    closer the touch, panned by x. They are dense while the levels are free and
+    thin out as the coupling grows. Below U_CLOSE, close calls (closest
+    approaches between TOUCH and CLOSE spacings, the swerves of repelled
+    levels) strike softer notes, at most one per CLOSE_GAP s. A soft pad on the
+    home chord swells in with the coupling. When the pen lands, the ROLL central levels of the last row
+    are struck left to right with onsets proportional to their positions, so
+    the rhythm is their (repelled, near-even) spacing, over a bass note.
     """
     style = STYLES[style_name]
     scale = Scale(int(rng.choice(style.roots)), style.mode)
     track = audio.silence(DURATION)
     kw = dict(circular=False)
-    blue_lit = CANDLES[1][1]
-    top = HALF_H + SEMI_B
 
-    def low(hz):
-        while hz < 65:
-            hz *= 2
-        return hz
+    when, xs, s = events
+    last = -1.0
+    notes = 0
+    for k in np.argsort(when):
+        if when[k] - last < NOTE_GAP or when[k] > T_PEN:
+            continue
+        last = when[k]
+        pos = float(np.clip(xs[k] / LAMBDA_MAX, -1, 1))
+        degree = int(round(-4 + 13 * (pos + 1) / 2))
+        velocity = 0.2 + 0.4 * (1 - s[k] / TOUCH)
+        note = audio.pan(style.voice(scale.hz(degree), velocity), 0.7 * pos)
+        audio.add(track, note, float(when[k]), **kw)
+        notes += 1
 
-    for lit in (CANDLES[0][1], blue_lit):
-        audio.add(track, style.bass(low(scale.hz(0, -2)), 0.6, length=6.0), lit, **kw)
-        audio.add(track, style.voice(scale.hz(0, 0), 0.45), lit + 0.02, **kw)
+    r, i, s = touches(lam, CLOSE)
+    keep = (rows[r] >= U_CLOSE) & (s >= TOUCH)
+    r, i, s = r[keep], i[keep], s[keep]
+    close_when = pen_time(rows[r])
+    close_lam = 0.5 * (lam[r, i] + lam[r, i + 1])
+    last = -1.0
+    calls = 0
+    for k in np.argsort(close_when):
+        if close_when[k] - last < CLOSE_GAP or close_when[k] > T_PEN:
+            continue
+        last = close_when[k]
+        pos = float(np.clip(close_lam[k] / LAMBDA_MAX, -1, 1))
+        degree = int(round(-4 + 13 * (pos + 1) / 2))
+        velocity = 0.12 + 0.2 * (1 - s[k] / CLOSE)
+        note = audio.pan(style.voice(scale.hz(degree), velocity), 0.7 * pos)
+        audio.add(track, note, float(close_when[k]), **kw)
+        calls += 1
 
-    taps = 0
-    for c, (room, (before, after), octave) in enumerate(zip(rooms, LISTENED, (0, -1))):
-        lit = CANDLES[c][1]
-        head = HEAD_START if c == 0 else 0.0
-        chosen = rng.choice(room["s"].shape[0], max(before, after), replace=False)
-        for r, ray in enumerate(chosen):
-            last = -1.0
-            for s, (x, y) in zip(room["s"][ray, 1:], room["p"][ray, 1:]):
-                when = lit + (s - head) / SPEED
-                if not np.isfinite(when) or when >= DURATION - 0.3:
-                    break
-                if when < 0.05 or when - last < MIN_GAP:
-                    continue
-                if c == 0 and r >= after and when >= blue_lit:
-                    break
-                last = when
-                degree = int(round((y + top) / (2 * top) * DEGREES))
-                fade = 1 - 0.6 * float(smoothstep((when - 13.0) / 2.0))
-                velocity = fade * rng.uniform(0.26, 0.4)
-                note = style.voice(scale.hz(degree, octave), velocity)
-                audio.add(track, audio.pan(note, 0.75 * x / SEMI_A), when, **kw)
-                taps += 1
+    on = float(pen_time(U_ON + 0.25 * (U_FULL - U_ON)))
+    length = DURATION - on
+    for degree in (0, 2, 4):
+        voice = audio.pad(scale.hz(degree, -1), length, 0.16, 4.0, 1.5, 0.3)
+        audio.add(track, voice, on, **kw)
 
-    for degree, start in ((0, 0.0), (3, 0.0), (2, blue_lit)):
-        hz = low(scale.hz(degree, -1))
-        audio.add(
-            track,
-            audio.pad(hz, DURATION - start - 1.5, 0.08, 2.0, 1.5, 0.3),
-            start,
-            **kw,
-        )
-    logger.info(f"Soundtrack: {style_name}, root MIDI {scale.root}, {taps} wall taps")
-    track = style.room(track, rng, circular=False)
-    return audio.master(track, loop=False)
+    last_row = lam[-1]
+    centre = N // 2 - ROLL // 2
+    roll = last_row[centre : centre + ROLL]
+    land = T_PEN + 0.1
+    span = 1.4  # s for the whole roll
+    onsets = land + span * (roll - roll[0]) / (roll[-1] - roll[0])
+    for j, (at, value) in enumerate(zip(onsets, roll)):
+        pos = float(value / LAMBDA_MAX)
+        note = audio.pan(style.voice(scale.hz(j), 0.45), 0.7 * pos)
+        audio.add(track, note, float(at), **kw)
+    audio.add(track, style.bass(scale.hz(0, -2), 0.55, length=3.0), land, **kw)
+    logger.info(
+        f"Soundtrack: {style_name}, root MIDI {scale.root}, {notes} touch notes, "
+        f"{calls} close calls, "
+        f"roll gaps {np.round(np.diff(onsets), 3)}"
+    )
+    return audio.master(style.room(track, rng, circular=False), loop=False)
 
 
 def generate(settings: ImageProcessingSettings = None):
     """
-    Penrose's unilluminable room, lit by two candles.
+    Level dynamics of a random Hermitian matrix with a coupling switched on.
 
-    The room: two half-ellipses (semi-axes SEMI_A, SEMI_B) with flat sides at
-    y = +-HALF_H, joined by vertical outer walls at x = +-SEMI_A, plus two
-    two-sided partitions at x = +-FOCUS = +-sqrt(a^2 - b^2) from one dome's
-    focus to the other's. A chord of an ellipse that crosses the major axis
-    between the foci reflects into another such chord (its caustic is a
-    confocal hyperbola); one that crosses outside them stays outside (a
-    confocal ellipse). Reflection in the flat side preserves this, so the
-    domes return light from the hall (|x| < FOCUS) to the hall and light from
-    the wings (FOCUS < |x| < SEMI_A) to the wings: a candle in the hall never
-    lights the wings and vice versa (`sample` counts forbidden samples; 0).
+    H(u) = cos φ(u) D(u) + sin φ(u) G(u), where u in [0, 1] is the height on screen,
+    D(u) is diagonal (N independent N(0, SIGMA_D²) levels) and G(u) a GUE matrix
+    (E|G_ij|² = 1/N, semicircle on [-2, 2]); both wander as M0 + EPS (M1 cos θ +
+    M2 sin θ), normalised, with θ = 2π TURNS u, so each stays in its ensemble.
+    φ(u) = 0 above U_ON (the levels are independent and cross), then grows from
+    (π/2) G_MIN geometrically to π/2 at U_FULL (`mixing`; Wigner-Dyson
+    repulsion, P(s) ~ s²). The
+    sorted eigenvalues (eigvalsh) are computed once for every output pixel row
+    (seconds) and drawn as polylines, each segment coloured by position, into a
+    static 2x image.
 
-    Each candle sends RAYS rays at evenly spaced angles plus one random phase
-    from settings.rng; `trace` reflects them exactly (quadratic for the domes,
-    linear for the walls) in float64 until each has run the whole clip. Every
-    ray is then sampled every STEP px of path into a pixel index, sample-major,
-    so the light a candle has shed by path length L is a prefix of that array.
-
-    A frame is a pure function of t: L = HEAD_START + SPEED t for the warm
-    candle, SPEED (t - 6.5) for the blue one; each prefix is bincounted on the
-    GPU into a ray-density image, normalised by min(L, SETTLE) so the exposure
-    adapts as light spreads, then lightly blurred. The heads of the rays (the
-    last SPARK_TRAIL samples) are added as sparks. Both colours are tone-mapped
-    together as 1 - exp(-EXPOSURE * density), glowed, and the mirrors and foci
-    laid on top. Caustics of the domes show in the hall as bright envelopes.
-
-    The posted render uses --seed 0 (the default), with the gamelan soundtrack.
+    A frame is a pure function of t: the pen height pen_u(t) reveals the static
+    drawing above it (a soft edge and a fading "wet ink" glow just behind it),
+    beads sit at the interpolated eigenvalues on the pen row with a blurred glow,
+    and every touch (closest approach of neighbours, under TOUCH local mean
+    spacings) the pen has passed in the last FLASH s sparks. Frames render on the
+    thread pool. The posted video and soundtrack use --seed 0 (the default).
     """
     settings = settings or ImageProcessingSettings(1)
-    lengths = []
-    rooms = []
-    for c, (source, lit, _) in enumerate(CANDLES):
-        head = HEAD_START if c == 0 else 0.0
-        length = float(path_length(DURATION, lit, head)) + 2 * STEP
-        phase = settings.rng.uniform(0, 2 * np.pi / RAYS)
-        angles = phase + 2 * np.pi * np.arange(RAYS) / RAYS
-        room = trace(source, angles, length)
-        room["home"] = "hall" if c == 0 else "wing"
-        rooms.append(room)
-        lengths.append(length)
-        logger.info(
-            f"Candle {c}: {RAYS} rays traced to {length:.0f} px, "
-            f"{room['s'].shape[1] - 1} bounces"
-        )
+    rng = settings.rng
 
-    if not settings.audio_only:
-        device = select_device()
-        to = dict(device=device, dtype=torch.float32)
-        samples = [
-            sample(room, int(length / STEP), device)
-            for room, length in zip(rooms, lengths)
-        ]
-        colours = [torch.tensor(c[2], **to) for c in CANDLES]
-        area = (4 * SEMI_A * HALF_H) + np.pi * SEMI_A * SEMI_B  # px^2
-        soft = gaussian_kernel(SOFT, device)
-        wall = torch.tensor(walls(), **to)[..., None]
-        wall_rgb = torch.tensor(WALL_COLOUR, **to)
-        background = torch.tensor(BACKGROUND, **to)
-        yy, xx = torch.meshgrid(
-            torch.arange(HEIGHT, **to), torch.arange(WIDTH, **to), indexing="ij"
-        )
-        flames = []
-        for (x, y), _, _ in CANDLES:
-            r2 = (xx - CENTRE[0] - x) ** 2 + (yy - CENTRE[1] + y) ** 2
-            flames.append(torch.exp(-r2 / (2 * FLAME_SIGMA**2))[..., None])
-        trail = torch.linspace(0.15, 1.0, SPARK_TRAIL, **to)[:, None]
-        heads = torch.ones(SPARK_TRAIL, RAYS, **to) * trail
+    rows = (np.arange(Y_TOP, Y_BOTTOM + 1) - Y_TOP) / (Y_BOTTOM - Y_TOP)
+    lam = spectra(rng, rows)
+    xs = lam_to_x(lam)
+    ys = Y_TOP + rows * (Y_BOTTOM - Y_TOP)
 
-    def render(frame: int) -> torch.Tensor:
-        seconds = frame / (FRAME_COUNT - 1) * DURATION
-        linear = torch.zeros(HEIGHT * WIDTH, 3, **to)
-        sparks = torch.zeros(HEIGHT * WIDTH, 3, **to)
-        for c, (points, colour) in enumerate(zip(samples, colours)):
-            lit = CANDLES[c][1]
-            head = HEAD_START if c == 0 else 0.0
-            length = float(path_length(seconds, lit, head))
-            n = min(int(length / STEP) + 1, points.shape[0]) if seconds >= lit else 0
-            if n == 0:
-                continue
-            density = torch.bincount(points[:n].reshape(-1), minlength=HEIGHT * WIDTH)
-            scale = STEP * area / (RAYS * max(length, SETTLE))
-            linear += (density.to(torch.float32) * scale)[:, None] * colour
-            m = min(n, SPARK_TRAIL)
-            index = points[n - m : n].reshape(-1).long()
-            weight = heads[SPARK_TRAIL - m :].reshape(-1)
-            sparks.index_add_(0, index, weight[:, None] * colour[None, :])
-        linear = blur(linear.view(HEIGHT, WIDTH, 3), soft)
-        linear = linear + SPARK_GAIN * blur(sparks.view(HEIGHT, WIDTH, 3), soft) * 40
-        for c, flame in enumerate(flames):
-            lit = CANDLES[c][1]
-            if seconds >= lit:
-                on = float(smoothstep((seconds - lit) / 0.3))
-                flicker = 1 + 0.12 * np.sin(11.3 * seconds + 2 * c) * np.sin(
-                    3.7 * seconds
+    r, i, s = touches(lam)
+    ev_time = pen_time(rows[r])
+    ev_lam = 0.5 * (lam[r, i] + lam[r, i + 1])
+    ev_x, ev_y = lam_to_x(ev_lam), ys[r]
+    ev_strength = 1.0 - s / TOUCH
+    logger.info(
+        f"{len(r)} touches; {np.sum(rows[r] < U_ON)} free, "
+        f"{np.sum(rows[r] >= U_FULL)} fully coupled"
+    )
+
+    # The static drawing.
+    bg = np.array(hex_to_bgr(BACKGROUND), np.float32)
+    lut = (palette_lut(PALETTE) * 255)[:, ::-1]
+    big = np.zeros((HEIGHT * SS, WIDTH * SS, 3), np.uint8)
+    shift = 4
+    px = np.round(xs * SS * (1 << shift)).astype(np.int64)
+    py = np.round(ys * SS * (1 << shift)).astype(np.int64)
+    colour_index = np.clip(
+        np.round(255 * (lam + LAMBDA_MAX) / (2 * LAMBDA_MAX)), 0, 255
+    ).astype(int)
+    width = max(1, int(round(LINE_W * SS)))
+    for n in range(N):
+        for k in range(len(rows) - 1):
+            c = tuple(float(v) for v in lut[colour_index[k, n]])
+            cv2.line(
+                big,
+                (int(px[k, n]), int(py[k])),
+                (int(px[k + 1, n]), int(py[k + 1])),
+                c,
+                width,
+                cv2.LINE_AA,
+                shift,
+            )
+    drawing = cv2.resize(big, (WIDTH, HEIGHT), interpolation=cv2.INTER_AREA)
+    drawing = drawing.astype(np.float32)
+    top_fade = smoothstep((np.arange(HEIGHT) - Y_TOP + 4) / 70.0).astype(np.float32)
+    drawing *= top_fade[:, None, None]  # the threads emerge from the dark
+    del big
+    y_axis = np.arange(HEIGHT, dtype=np.float32)
+
+    def render(frame):
+        t = frame / (FRAME_COUNT - 1) * DURATION
+        u = float(pen_u(t))
+        pen_y = Y_TOP + u * (Y_BOTTOM - Y_TOP)
+        behind = pen_y - y_axis
+        reveal = np.clip(behind / 4.0 + 0.5, 0.0, 1.0)
+        wet = 1.0 + 0.35 * np.exp(-np.maximum(behind, 0.0) / 90.0) * reveal
+        if t > T_PEN:  # the ink dries over the rest
+            wet = 1.0 + (wet - 1.0) * np.exp(-(t - T_PEN) / 0.4)
+        image = bg + drawing * (reveal * wet)[:, None, None]
+
+        glow = np.zeros((HEIGHT, WIDTH, 3), np.float32)
+        # Sparks at touches the pen has just passed.
+        age = t - ev_time
+        live = np.nonzero((age >= 0) & (age < FLASH))[0]
+        for k in live:
+            a = 1.0 - age[k] / FLASH
+            amp = ev_strength[k] * a * a
+            centre = (int(round(ev_x[k] * 16)), int(round(ev_y[k] * 16)))
+            cv2.circle(
+                glow,
+                centre,
+                int((6 + 22 * (1 - a)) * 16),
+                tuple(float(v) for v in SPARK * amp * 1.2),
+                -1,
+                cv2.LINE_AA,
+                4,
+            )
+            cv2.circle(
+                glow,
+                centre,
+                int(3 * 16),
+                tuple(float(v) for v in SPARK * amp * 3.0),
+                -1,
+                cv2.LINE_AA,
+                4,
+            )
+
+        # Beads on the pen row, while the pen moves (they fade into the rest).
+        if t <= T_PEN + 1.0:
+            fade_beads = 1.0 - smoothstep((t - T_PEN) / 1.0)
+            row = u * (len(rows) - 1)
+            k0 = min(int(row), len(rows) - 2)
+            f = row - k0
+            bx = xs[k0] * (1 - f) + xs[k0 + 1] * f
+            colour = tuple(float(v) * fade_beads for v in BEAD)
+            for x in bx:
+                c = (int(round(x * 16)), int(round(pen_y * 16)))
+                cv2.circle(image, c, 4 * 16, colour, -1, cv2.LINE_AA, 4)
+                cv2.circle(
+                    glow, c, 9 * 16, tuple(0.5 * v for v in colour), -1, cv2.LINE_AA, 4
                 )
-                linear = linear + 6.0 * on * flicker * flame * colours[c]
-        glow = sum(g * wide_blur(linear, sigma, f) for sigma, f, g in GLOWS)
-        light = 1 - torch.exp(-EXPOSURE * (linear.clamp_min(0) ** GAMMA + glow))
-        image = background + (1 - background) * light
-        image = image * (1 - WALL_ALPHA * wall) + WALL_ALPHA * wall * wall_rgb
-        return image.clamp(0, 1) * 255.0
+            cv2.line(
+                glow,
+                (0, int(pen_y)),
+                (WIDTH - 1, int(pen_y)),
+                tuple(25.0 * fade_beads for _ in range(3)),
+                1,
+            )
 
-    render_frames(settings, render, FRAME_COUNT, parallel=False, rgb=True)
+        image += cv2.GaussianBlur(glow, (0, 0), 7) * 1.3 + glow * 0.3
+        image *= smoothstep((DURATION - t) / FADE)
+        return image
+
+    render_frames(settings, render, FRAME_COUNT, hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)
     tag = settings.audio_tag
-    track = soundtrack(rooms, tag if tag in STYLES else STYLE, settings.audio_rng)
+    track = soundtrack(
+        lam,
+        rows,
+        (ev_time, ev_lam, s),
+        tag if tag in STYLES else STYLE,
+        settings.audio_rng,
+    )
     settings.save_video(fps=FPS, crf=18, audio=track)
     gc.collect()
 
