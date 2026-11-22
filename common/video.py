@@ -107,6 +107,70 @@ def blit_mask(image, mask, x, y, colour, alpha=1.0, anchor="left"):
     region += a * np.asarray(colour, np.float32)
 
 
+# The opening hook: one short line of text over the first seconds of a Reel (see
+# docs/AGENT_INSTRUCTIONS.md, "What the account's numbers say"). Fully visible at frame 0,
+# held, then faded; placed below Instagram's top bar and clear of its bottom/right buttons.
+HOOK_HOLD = 2.5  # seconds fully visible
+HOOK_FADE = 0.5  # seconds to fade out
+HOOK_Y = 300  # top of the text block, px
+HOOK_SIZE = 62  # px per em
+HOOK_COLOUR = "#f4f0e7"
+HOOK_MAX_CHARS = 28  # per line; longer hooks wrap onto a second line
+
+
+def hook_masks(text: str, size: float = HOOK_SIZE) -> list[np.ndarray]:
+    """The hook as LaTeX line masks, wrapped at word boundaries ("\\n" forces a break)."""
+    lines = []
+    for chunk in text.split("\n"):
+        line = ""
+        for word in chunk.split():
+            if line and len(line) + 1 + len(word) > HOOK_MAX_CHARS:
+                lines.append(line)
+                line = word
+            else:
+                line = f"{line} {word}".strip()
+        lines.append(line)
+
+    def tex(line):
+        escaped = line.replace(" ", r"\ ").replace(",", "{,}").replace("'", r"\text{'}")
+        escaped = escaped.replace("%", r"\%").replace("-", r"\text{-}")  # hyphen, not minus
+        return rf"$\mathrm{{{escaped}}}$"
+
+    return [latex_mask(tex(line), size) for line in lines]
+
+
+def hook_alpha(frame: int, fps: int = FPS) -> float:
+    """Opacity of the hook at `frame`: 1 while held, then a smoothstep fade to 0."""
+    t = frame / fps
+    if t <= HOOK_HOLD:
+        return 1.0
+    return float(1 - smoothstep(np.clip((t - HOOK_HOLD) / HOOK_FADE, 0, 1)))
+
+
+def hook_frames(fps: int = FPS) -> int:
+    return int(np.ceil((HOOK_HOLD + HOOK_FADE) * fps))
+
+
+def draw_hook(image: np.ndarray, masks, alpha: float, y: int = HOOK_Y, colour=HOOK_COLOUR):
+    """
+    Composite the hook onto a uint8 BGR frame and return it. A soft halo of the opposite
+    tone under the letters (dark under light ink, light under dark ink) keeps them legible.
+    """
+    if alpha <= 0:
+        return image
+    out = image.astype(np.float32)
+    bgr = hex_to_bgr(colour) if isinstance(colour, str) else colour
+    halo_bgr = (0, 0, 0) if sum(bgr) > 3 * 128 else (255, 255, 255)
+    top = y
+    for mask in masks:
+        halo = cv2.GaussianBlur(np.pad(mask, 14), (0, 0), 7)
+        halo = np.clip(halo * 2.2, 0, 1)
+        blit_mask(out, halo, image.shape[1] // 2, top - 14, halo_bgr, 0.6 * alpha, "centre")
+        blit_mask(out, mask, image.shape[1] // 2, top, bgr, alpha, "centre")
+        top += int(mask.shape[0] * 1.25)
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def _to_bgr_uint8(image, rgb: bool) -> np.ndarray:
     """A frame as a uint8 BGR numpy array; tensors are moved off the GPU."""
     if not isinstance(image, np.ndarray):  # a torch tensor
@@ -133,6 +197,9 @@ def render_frames(
     parallel: bool = True,
     rgb: bool = False,
     workers: int = WORKERS,
+    hook: str | None = None,
+    hook_y: int = HOOK_Y,
+    hook_colour: str = HOOK_COLOUR,
 ):
     """
     Call `render(frame)` for frame = 0 .. count - 1 and write each result to
@@ -150,8 +217,25 @@ def render_frames(
     renderer that carries state from frame to frame) while a small pool writes
     the PNGs. Do any warm-up before calling.
 
+    `hook` is the opening line (the script's HOOK constant): drawn over the first
+    HOOK_HOLD + HOOK_FADE seconds at `hook_y` in `hook_colour`, after `render`, so the
+    maths never sees it. `tools.add_hook --place` picks y and colour from the frames.
+
     In an `--audio-only` run nothing is rendered; the frames on disk are kept.
     """
+    if os.environ.get("RP_NO_HOOK"):  # clean frames for tools.add_hook --place
+        hook = None
+    masks = hook_masks(hook) if hook else None
+    n_hook = hook_frames() if hook else 0
+    render_raw, rgb_raw = render, rgb
+
+    def render(frame):  # noqa: F811 -- the scene, then the hook on top
+        image = _to_bgr_uint8(render_raw(frame), rgb_raw)
+        if frame < n_hook:
+            image = draw_hook(image, masks, hook_alpha(frame), hook_y, hook_colour)
+        return image
+
+    rgb = False  # already converted above
     frames_path = settings.frames_path
     if getattr(settings, "audio_only", False):
         found = len(list(frames_path.glob("frame*.png")))

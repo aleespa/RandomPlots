@@ -26,12 +26,19 @@ Read the module docstring titles (the first lines) of the recent scripts in `lab
 (about the last 30), plus every earlier row of the same category in `SCHEDULE.md`. Don't
 pitch an idea that is already there or very close to one.
 
+Then check what has worked: `uv run python -m tools.reel_stats --last 30` and
+`--category "<slot category>"`. Note which recent Reels broke out (`*`) and their titles, watch
+times, shares and saves. Apply the doc's "What the account's numbers say" when you pitch. If
+the latest numbers contradict that section (e.g. the December Reels with on-screen LaTeX text
+behave differently), say so in the pitch and propose updating the section.
+
 ## 3. Pitch one concept (Phase 1 of the doc)
 
 Pitch **a single concept: the strongest you can find inside the slot's category**. No menu,
 no runners-up. Do the comparing yourself, using the category's examples in the Categories
 table as a starting point (not a limit), and keep only the candidate that best meets Phase 1's
-criteria: a hook in the first second, one clear idea with a surprise, a render that fits the
+criteria: a hook in the first second, the payoff by ~5 s, a title that is a claim, question or
+familiar name, a clear reason to share it, one clear idea with a surprise, a render that fits the
 ~1 min budget as planned, and nothing close to what step 2 found. Against the recent Reels,
 vary the sub-topic, the aesthetic and palette (dark backgrounds read well in the feed), and
 loop vs one-shot.

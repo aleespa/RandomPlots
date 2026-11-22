@@ -41,9 +41,46 @@ one decision, not into reading five pitches. Judge candidates on:
 - **Freshness**: not a repeat of a recent Reel or of an earlier one in the same category.
 
 Vary the aesthetic, the palette and loop vs one-shot from one Reel to the next rather than
-within a set of pitches. Pitch it with:
+within a set of pitches.
 
-- **Title & 1-line Hook**: Catchy name and brief visual summary.
+### What the account's numbers say
+
+Before pitching, run `uv run python -m tools.reel_stats --last 30` (add `--category <name>` for
+the slot's category) and let it inform the pitch. As of Nov 2026 (286 followers, ~1 new
+follower a day):
+
+- **Reach is all-or-nothing.** A Reel either breaks out to 1,000–2,400 accounts or stays at
+  ~120–450 (about a third break out). Breakouts get roughly 10× the **shares and saves**, so
+  design for those. A viewer shares something they want to show someone ("look, the circle
+  becomes a wing"). They save something they learned and want to keep.
+- **Viewers leave halfway.** Average watch time is 4–10 s of 15 s; breakouts sit at 7–10 s.
+  The idea must be visible in the **first second**, and the payoff (the surprise, the
+  reveal) must arrive by **~5 s**. Spend the rest of the video developing it and showing it
+  again. Don't save it for the end.
+- **Titles that broke out are claims or familiar names:** *You Can't Comb a Hairy Ball*,
+  *Exactly One Half*, *Prime Spirals*, *Harmony, Drawn*. Titles that stayed small more often
+  name something a general viewer doesn't know (*Buffon's Needles*, *Two Mirrors*). Prefer a
+  surprising claim, a question, or a name people recognise.
+- **Viewers don't reach the profile.** About 0.5% of reached accounts open the profile, but
+  ~40% of those follow. The profile works; the Reel has to send people there. `post_reel`
+  adds a "Tomorrow: <next title>" line to every caption for this. Don't write one yourself.
+- **Category doesn't predict reach yet** (2–3 Reels per category is noise), so don't
+  avoid a category. Judge the concept.
+
+These are observations from a small sample, not laws. Re-check them against `reel_stats` as
+data accumulates, and update this section when they stop holding.
+
+Pitch it with:
+
+- **Title & 1-line Hook**: a title written as a claim, a question or a name people know (see
+  above), and a brief visual summary.
+- **First second & payoff**: what is on screen at frame 0, and at what second the surprise
+  lands (≤ ~5 s).
+- **Share line**: the one sentence a viewer would say when sending it to a friend. If you can't
+  write one, the concept is weaker than it looks.
+- **On-screen hook**: the opening line (≤ ~8 words, a question or a claim) shown over the first
+  3 s, for viewers who scroll muted and never open the caption. Skip it only when the video
+  already opens with equivalent text. See "Opening hook" under House Style.
 - **Mathematical / Algorithmic Core**: The underlying math/physics (e.g., Strange Attractors, Reaction-Diffusion, Brownian Bridges, Hyperbolic Tilings, Vector Fields, Fourier Epicycles, Wave Interference, Phyllotaxis, Implicit Surfaces).
 - **Visual Aesthetic & Mood**: Dark (`'k'`) vs Warm Minimalist (`'#f4f0e7'`), line weight, density, texture (glow, stippling, contours, flow).
 - **Palette**: Suggested palette from `colors.palettes` (e.g. `ECOSPL`, `TWLAGN`, `NEAURA`, `GYRYG`) or custom hex harmonies.
@@ -102,6 +139,8 @@ When implementing the selected concept, follow the repository's strict architect
     the subject in plain searchable words ("fractal", "prime numbers", "a quantum particle in a
     box", "air flowing past a wing"), not just a poetic title. Use the main keyword two or three
     times in the caption, naturally, and keep it consistent with what the video shows.
+  - **No "follow" or "tomorrow" line in the docstring.** `post_reel` adds one, naming the next
+    scheduled Reel, at post time.
 - Code skeletons are in [Templates](#6-templates).
 
 ### 3. Video Spec
@@ -178,7 +217,8 @@ Both are fine. Pick what serves the idea and say which in the pitch.
 **One-shot:** a beginning, a development, an end.
 - `t = frame / (FRAME_COUNT - 1)` lies in `[0, 1]`, both ends included. Frames are still pure functions of `t` and still render in parallel.
 - Pace it with easing (`common.video.smoothstep`, i.e. `3t² − 2t³`, or ease-in-out per stage) so motion starts and stops gently. At 60 fps, abrupt starts and linear ramps look mechanical.
-- The first second must already be worth watching (it's what people see while scrolling). No long empty opening.
+- The first second must already be worth watching (it's what people see while scrolling). No long empty opening: easing applies to motion, not to an empty screen. Frame 0 should already show the subject.
+- Land the payoff by ~5 s. Viewers average 4–10 s of a 15 s Reel, so a reveal at 12 s is seen by few of them. Structure it as reveal → develop → show it again or push it further, or open on the finished state and rewind to build it.
 - Give the ending about a second to rest on the finished image, optionally fading to the background over the last 0.3–0.5 s, so Instagram's replay reads as a deliberate cut rather than a glitch.
 
 ### 6. Templates
@@ -318,6 +358,16 @@ if __name__ == "__main__":
   composited with `blit_mask`, built once outside the frame function. Formulas in real
   maths notation (`\frac`, `\sin`, `\cdots`), words in `\mathrm{...}`. Never PIL/DejaVu or
   `cv2.putText`. Example: `lab/2026/1201.py`.
+- **Opening hook**: every Reel defines `HOOK` (the line), `HOOK_Y` and `HOOK_COLOUR` at the
+  top and calls `render_frames(..., hook=HOOK, hook_y=HOOK_Y, hook_colour=HOOK_COLOUR)`.
+  The hook is drawn after `render`, fully visible from frame 0, held 2.5 s, faded over 0.5 s,
+  with a halo for legibility. Don't draw your own title in the same band during those
+  seconds. To place it, do one full render with `RP_NO_HOOK=1` (clean frames), run
+  `uv run python -m tools.add_hook <date> --place` to pick the emptiest band and the ink,
+  then `uv run python -m tools.add_hook <date>` to draw it (or render again normally).
+  Check the contact sheet
+  (`outputs/hook_preview.png`) and override `HOOK_Y` by hand if the hook covers the subject.
+  Keep it inside y ≈ 230–1250 (Instagram's top bar and bottom caption area cover the rest).
 - **Formatting**: `uv run black <file>` on new files.
 
 ### 8. HDR Video Guidance

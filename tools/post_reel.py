@@ -5,9 +5,15 @@ Publish a scheduled Reel to Instagram through the Instagram Graph API.
     uv run python -m tools.post_reel 2026-10-14 --dry-run # show caption + video checks only
     uv run python -m tools.post_reel 2026-10-14           # upload, publish, mark row `posted`
     uv run python -m tools.post_reel --refresh-token      # extend the 60-day token in .env
+    uv run python -m tools.post_reel 2026-11-21 --cover-seconds 12 --collab some_account
+
+Cover and collaborators: `--cover-seconds S` picks the frame shown on the grid (Graph API
+`thumb_offset`), `--collab a,b` invites up to three accounts as co-authors (a Collab post shows
+on their profiles too once they accept). Without the flags, a script's module-level
+`COVER_SECONDS = 12.0` and `COLLABORATORS = ["name"]` constants are used if present.
 
 The row's date picks everything: the script `lab/<YYYY>/<MMDD>.py` (its module docstring is
-the caption), the video `outputs/<YYYYMMDD>/<YYYYMMDD>.mp4`, and the `SCHEDULE.md` row whose
+the caption, plus a "Tomorrow: <next title>" line added here), the video `outputs/<YYYYMMDD>/<YYYYMMDD>.mp4`, and the `SCHEDULE.md` row whose
 status becomes `posted`.
 
 The Instagram-login API only takes a `video_url`, so while a post is processing the MP4 is
@@ -140,25 +146,25 @@ class Instagram:
             self._user_id = self.me()["user_id"]
         return self._user_id
 
-    def publish_reel(self, video: Path, caption: str):
+    def publish_reel(self, video: Path, caption: str, extra: dict | None = None):
         """Upload the master as is (best quality). Only if Instagram rejects it and it is
         over the 25 Mbps spec, retry once with a compliant copy encoded from the frames.
         """
         try:
-            cid = self.create_container(video, caption)
+            cid = self.create_container(video, caption, extra)
         except ProcessingError:
             if video_bitrate(video) <= MAX_VIDEO_BPS:
                 raise
             logger.warning(
                 "Instagram rejected the master; retrying with a 24 Mbps copy"
             )
-            cid = self.create_container(compliant_copy(video), caption)
+            cid = self.create_container(compliant_copy(video), caption, extra)
 
         media_id = self.post(f"{self.user_id}/media_publish", creation_id=cid)["id"]
         permalink = self.get(media_id, fields="permalink").get("permalink")
         return media_id, permalink
 
-    def create_container(self, video: Path, caption: str):
+    def create_container(self, video: Path, caption: str, extra: dict | None = None):
         with tunnel(video) as video_url:
             container = self.post(
                 f"{self.user_id}/media",
@@ -166,6 +172,7 @@ class Instagram:
                 video_url=video_url,
                 caption=caption,
                 share_to_feed="true",
+                **(extra or {}),
             )
             cid = container["id"]
             logger.info(f"Container {cid} created, Instagram is fetching the video")
@@ -365,6 +372,27 @@ def set_status(date: dt.date, status: str):
     SCHEDULE_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def with_teaser(caption: str, date: dt.date) -> str:
+    """Add a 'tomorrow' line, naming the next scheduled Reel, above the "Made with" block.
+
+    Reels are mostly seen by non-followers, and few of them ever reach the profile; naming the
+    next post gives them a reason to follow. Built at post time so it tracks schedule changes.
+    """
+    rows = []
+    for line in SCHEDULE_PATH.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 6 and re.fullmatch(r"\d{4}-\d\d-\d\d", cells[0]):
+            rows.append((dt.date.fromisoformat(cells[0]), cells[-2]))
+    later = [(d, title) for d, title in sorted(rows) if d > date and title]
+    if not later:
+        return caption
+    when, title = later[0]
+    day = "Tomorrow" if when == date + dt.timedelta(days=1) else f"Next, on {when:%A}"
+    teaser = f"A new piece of maths every day. {day}: {title}."
+    *body, tail = caption.split("\n\n")
+    return "\n\n".join([*body, teaser, tail])
+
+
 def caption_for(script: Path) -> str:
     """The module docstring with hard line wraps joined, paragraph breaks kept."""
     doc = ast.get_docstring(ast.parse(script.read_text(encoding="utf-8")))
@@ -377,6 +405,28 @@ def caption_for(script: Path) -> str:
     tail = re.sub(r"(\.)\s+(#)", r"\1\n\2", tail, count=1)
     paragraphs[-1] = tail
     return "\n\n".join(paragraphs)
+
+
+def script_constant(script: Path, name: str):
+    """A module-level literal constant of the figure script (e.g. COVER_SECONDS), or None."""
+    for node in ast.parse(script.read_text(encoding="utf-8")).body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in node.targets
+        ):
+            try:
+                return ast.literal_eval(node.value)
+            except ValueError:
+                return None
+    return None
+
+
+def video_duration(video: Path) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", str(video)],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    return float(out.stdout.strip() or 0)
 
 
 def check_caption(caption: str):
@@ -495,6 +545,12 @@ def main():
         "--check", action="store_true", help="verify the token and exit"
     )
     parser.add_argument("--refresh-token", action="store_true", help="extend the token")
+    parser.add_argument(
+        "--cover-seconds", type=float, help="frame for the grid cover (thumb_offset)"
+    )
+    parser.add_argument(
+        "--collab", help="comma-separated usernames to invite as co-authors (max 3)"
+    )
     args = parser.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     env = read_env()
@@ -527,18 +583,38 @@ def main():
     if not video.exists():
         raise SystemExit(f"Missing {video}: run the full render first")
 
-    caption = caption_for(script)
+    caption = with_teaser(caption_for(script), date)
     summary, problems = probe(video)
     problems += check_caption(caption)
+    extra = {}
+    cover = args.cover_seconds
+    if cover is None:
+        cover = script_constant(script, "COVER_SECONDS")
+    if cover is not None:
+        if not 0 <= cover < video_duration(video):
+            problems.append(f"cover at {cover}s is outside the video")
+        extra["thumb_offset"] = str(int(round(cover * 1000)))
+    collab = args.collab.split(",") if args.collab else None
+    if collab is None:
+        collab = script_constant(script, "COLLABORATORS")
+    collab = [c.strip().lstrip("@") for c in collab or [] if c.strip()]
+    if len(collab) > 3:
+        problems.append(f"{len(collab)} collaborators (max 3)")
+    if collab:
+        extra["collaborators"] = json.dumps(collab)
     print(f"\n----- caption ({len(caption)} chars) -----\n{caption}\n{'-' * 30}")
     logger.info(f"Video: {video.relative_to(ROOT)} | {summary}")
+    logger.info(
+        f"Cover: {f'{cover:g} s' if cover is not None else 'Instagram default'} | "
+        f"collaborators: {', '.join('@' + c for c in collab) or 'none'}"
+    )
     if problems:
         raise SystemExit("Not postable: " + "; ".join(problems))
     if args.dry_run:
         logger.success("Dry run OK, nothing uploaded")
         return
 
-    media_id, permalink = client(env).publish_reel(video, caption)
+    media_id, permalink = client(env).publish_reel(video, caption, extra)
     set_status(date, "posted")
     logger.success(
         f"Published {media_id}: {permalink}  (SCHEDULE.md row set to posted)"

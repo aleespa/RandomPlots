@@ -65,6 +65,10 @@ uv run python -m lab.2026.0314                   # standalone run via the __main
 uv run black <path>                              # formatter (defaults, no config)
 uv run python -m tools.post_reel 2026-10-14 --dry-run  # caption + video checks for a scheduled Reel
 uv run python -m tools.post_reel 2026-10-14            # publish it to Instagram, row -> posted
+uv run python -m tools.post_reel 2026-11-21 --cover-seconds 12 --collab name  # grid cover + Collab invite (or COVER_SECONDS / COLLABORATORS in the script)
+uv run python -m tools.reel_stats --last 30      # reach/watch/shares/saves per posted Reel + follows
+uv run python -m tools.add_hook 2026-12-24 --place     # place a Reel's HOOK line, contact sheet
+uv run python -m tools.add_hook 2026-12-24             # draw HOOK onto finished frames, keep the audio
 uv run python -m tools.instrument_sampler        # hear every soundtrack voice -> outputs/instrument_sampler.wav
 ```
 
